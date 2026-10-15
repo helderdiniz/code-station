@@ -1,6 +1,6 @@
 # Site configuration
 
-Site configuration keeps the parts of Code Station that belong to one organisation outside the app's source code. A configuration can provide environments, API access, starter requests, MCP presets, a skills marketplace, and shortcuts.
+Site configuration keeps the parts of Code Station that belong to one organisation outside the app's source code. A configuration can provide environments, API access, starter requests, MCP presets, a skills marketplace, shortcuts, and service log context.
 
 Every section is optional, and so is the file itself. Without one, the app uses its built-in staging and production environments, with no saved requests, MCP presets, marketplace, or shortcuts. Everything else works as normal.
 
@@ -62,6 +62,7 @@ A `swift run` development build has no bundle in which to include the file, so u
 | `mcp.presets` | Defines reusable servers shown when adding an MCP server. Presets with the same optional `serverType` are offered together through an action such as `Add Grafana MCP server`. A preset without a server type stays under `Add from preset` for compatibility. Each preset also has a unique `name`, optional display `title` and `environment`, and exactly one connection: a stdio `command` with optional `args` and `env`, or a remote `url` with optional transport `type` and `headers`. An empty environment variable or header value is requested when the preset is added, so the shared file can define required credentials without storing them. |
 | `skills` | Defines the marketplace shown by the Skills screen. It contains the display `name`, the `marketplace` name used by the agent CLIs, and the source `repository`. |
 | `shortcuts` | Defines shell commands available on a fresh install. Each entry has a `name`, a `command`, and an optional `icon` naming an SF Symbol drawn beside the name. An icon the app cannot draw is ignored. Shortcuts run with zsh from the user's home folder, because the configuration does not belong to a specific project. Users can add their own global or project shortcuts, which are stored locally and are not overwritten by this file. |
+| `services` | Describes each service's logs for troubleshooting, tracing and the Grafana results view. Each entry has a `name`, a Loki stream `lokiSelector` such as `{app="orders"}`, and a `logFormat` of `logfmt` or `json`, plus optional `levelField`, `levelValues`, `traceField`, `fields` (field name to meaning), `prometheusSelector`, `notes`, `scope` and `traceServiceName`. `scope` names the Grafana that holds the service's logs, the `<scope>` in a `grafana-<scope>-<env>` server such as `edge`, `platform`, `cde` or `non-platform`. `traceServiceName` is the service's `service.name` in traces when it differs from `name`. Picking a service in Troubleshoot hands all of it to the agent. A Grafana result whose query uses a service's selector takes its level field from it. The Trace tab uses `scope` to read a span's logs from the right Grafana. An entry missing a required field, or repeating an earlier name, is left out; the rest of the file still loads. |
 
 ## Secrets
 
