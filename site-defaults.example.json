@@ -96,19 +96,5 @@
       "command": "./gradlew :orders-service:bootRun",
       "icon": "play"
     }
-  ],
-  "services": [
-    {
-      "name": "ecom-transactions-service",
-      "lokiSelector": "{app=\"ecom-transactions-service\"}",
-      "logFormat": "logfmt",
-      "levelField": "level",
-      "levelValues": ["INFO", "WARN", "ERROR"],
-      "traceField": "traceId",
-      "fields": { "logger": "class name" },
-      "prometheusSelector": "namespace=\"ecom-transactions-service\"",
-      "notes": "Card numbers are masked before logging.",
-      "scope": "cde"
-    }
   ]
 }
