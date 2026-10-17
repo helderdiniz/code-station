@@ -41,7 +41,7 @@ struct SentPromptText: View {
                 } else {
                     SelectableText(prose: SentPrompt.inline(segment.text,
                                                            commandNames: segment.id == 0 ? commandNames : []),
-                                   lineSpacing: 3, width: .hugs)
+                                   lineSpacing: 3, width: .hugs, linksLocalServers: false)
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }

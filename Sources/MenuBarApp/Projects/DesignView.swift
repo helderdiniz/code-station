@@ -162,7 +162,9 @@ struct DesignView: View {
                                        conversationMinimized: $conversationMinimized,
                                        composerFocused: $composerFocused,
                                        designEmpty: designEmpty, selectionEnabled: selectionEnabled,
-                                       placeholder: composerPlaceholder(session))
+                                       placeholder: composerPlaceholder(session),
+                                       attachMessage: "Choose references for this design.",
+                                       showsDesignAmbition: true)
                         .padding(DesignConversationLayout.inset(in: workspace))
                         .padding(.bottom, toolbarHeight)
                 }
@@ -548,12 +550,20 @@ struct DesignCanvasBar<Leading: View, Tools: View>: View {
                 .appTooltip("Reload canvas")
             }
         }
-        .padding(.horizontal, 14)
-        .frame(height: DesignSplitLayout.barHeight)
-        .background(Theme.card)
-        .overlay(alignment: .bottom) {
-            Rectangle().fill(Theme.hairline).frame(height: 1)
-        }
+        .canvasBar()
+    }
+}
+
+extension View {
+    // The strip of tools over a page in the pane. A design's canvas and a running app both
+    // sit under one, so they read as the same kind of page.
+    func canvasBar() -> some View {
+        padding(.horizontal, 14)
+            .frame(height: DesignSplitLayout.barHeight)
+            .background(Theme.card)
+            .overlay(alignment: .bottom) {
+                Rectangle().fill(Theme.hairline).frame(height: 1)
+            }
     }
 }
 

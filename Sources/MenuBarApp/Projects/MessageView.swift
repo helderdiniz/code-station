@@ -12,6 +12,9 @@ struct MessageView: View, Equatable {
     // Answers whether the link was taken into the app's explorer. Anything it turns down
     // goes to Finder.
     var showInExplorer: (URL) -> Bool = { _ in false }
+    // Answers whether a link to a server on this machine was opened in the session's
+    // preview. Anything it turns down goes to the browser.
+    var openPreview: (URL) -> Bool = { _ in false }
     var availableWidth: CGFloat?
     // The right-click menu on the user's own prompt. Its entries are built when the
     // menu opens, so what it offers reflects the session as it is then.
@@ -189,6 +192,7 @@ struct MessageView: View, Equatable {
 
     private var transcriptOpenURL: OpenURLAction {
         OpenURLAction { url in
+            if TranscriptLink.isLocalServer(url), openPreview(url) { return .handled }
             guard let file = TranscriptLink.finderTarget(for: url) else { return .systemAction }
             if showInExplorer(url) { return .handled }
             if FileManager.default.fileExists(atPath: file.path) {

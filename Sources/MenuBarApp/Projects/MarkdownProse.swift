@@ -462,17 +462,41 @@ extension AttributedString {
     var hasLocalFileLink: Bool {
         runs.contains { $0.link?.isFileURL == true }
     }
+
+    // Markdown leaves an address in backticks unlinked. A code span is linked only when
+    // it holds the address alone, so a command that mentions one still reads as code.
+    func linkingLocalServers() -> AttributedString {
+        let rendered = String(characters)
+        let addresses = TranscriptLink.localServers(in: rendered)
+        guard !addresses.isEmpty else { return self }
+
+        let code = runs[\.inlinePresentationIntent].compactMap { intent, range in
+            intent?.contains(.code) == true ? Range(range, in: rendered) : nil
+        }
+        var linked = self
+        for (span, url) in addresses {
+            guard code.allSatisfy({ !$0.overlaps(span) || $0 == span }),
+                  let start = AttributedString.Index(span.lowerBound, within: linked),
+                  let end = AttributedString.Index(span.upperBound, within: linked),
+                  linked[start..<end].runs.allSatisfy({ $0.link == nil }) else { continue }
+            linked[start..<end].link = url
+        }
+        return linked
+    }
 }
 
 extension EnvironmentValues {
     // The folders whose files a transcript link opens in the explorer. Empty wherever
     // there is no explorer to send them to, so those links keep going to Finder.
     @Entry var explorerRoots: [String] = []
+    // Off where there is no preview, so text and its links stay as they were.
+    @Entry var previewsLocalServers = false
 }
 
 enum TranscriptLink {
     static let finderToolTip = "Open in Finder"
     static let explorerToolTip = "Show in Explorer"
+    static let previewToolTip = "Open in preview"
 
     struct ExplorerTarget: Equatable {
         let root: String
@@ -519,6 +543,70 @@ enum TranscriptLink {
             ? nil
             : Int(url.path.dropFirst(file.path.count + 1).prefix(while: \.isNumber))
         return ExplorerTarget(root: root, path: file.path, line: line)
+    }
+
+    // The hosts the sign-in callback trusts. A name such as app.localhost is left out,
+    // as it goes through the resolver like any other host.
+    static let localServerHosts: Set<String> = ["127.0.0.1", "localhost", "::1", "[::1]"]
+
+    static func isLocalServer(_ url: URL) -> Bool {
+        guard ["http", "https"].contains(url.scheme?.lowercased() ?? ""),
+              let host = URLComponents(url: url, resolvingAgainstBaseURL: false)?.host
+        else { return false }
+        return localServerHosts.contains(host.lowercased())
+    }
+
+    static func localServers(in text: String) -> [(span: Range<String.Index>, url: URL)] {
+        guard mentionsLocalServer(text) else { return [] }
+        return text.matches(of: localServerAddress).compactMap { match in
+            let address = trimmingSentence(from: match.output)
+            guard let url = URL(string: String(address)), isLocalServer(url) else { return nil }
+            return (address.startIndex..<address.endIndex, url)
+        }
+    }
+
+    static func latestLocalServer(in messages: [ChatMessage]) -> URL? {
+        messages.reversed().lazy.compactMap { lastLocalServer(in: $0) }.first
+    }
+
+    // Read as the transcript draws it, so only an address shown as a link counts.
+    private static func lastLocalServer(in message: ChatMessage) -> URL? {
+        guard mentionsLocalServer(message.text) else { return nil }
+        let prose: [AttributedString]
+        switch message.role {
+        case .assistant:
+            prose = MessageSegment.split(message.text).filter { !$0.isCode }
+                .map { AttributedString.inlineMarkdown($0.text).linkingLocalServers() }
+        case .user:
+            prose = SentPrompt.segments(message.text).filter { !$0.isCode }
+                .map { SentPrompt.inline($0.text, commandNames: []) }
+        case .system, .instructions:
+            return nil
+        }
+        return prose.flatMap { $0.runs[\.link].compactMap { link, _ in link } }
+            .last(where: isLocalServer)
+    }
+
+    private static func mentionsLocalServer(_ text: String) -> Bool {
+        ["://localhost", "://127.0.0.1", "://[::1]"].contains(where: {
+            text.range(of: $0, options: .caseInsensitive) != nil
+        })
+    }
+
+    private static var localServerAddress: Regex<Substring> {
+        #/https?://[A-Za-z0-9\-._~:\/?#\[\]@!$&()*+,;=%]+/#
+    }
+
+    private static func trimmingSentence(from match: Substring) -> Substring {
+        var address = match
+        func count(_ character: Character) -> Int { address.filter { $0 == character }.count }
+        while let last = address.last,
+              ".,:;!?".contains(last)
+                || (last == ")" && count(")") > count("("))
+                || (last == "]" && count("]") > count("[")) {
+            address = address.dropLast()
+        }
+        return address
     }
 
     // NSTextView fills the available row even when its link is only a few words. Use
@@ -649,6 +737,7 @@ struct SelectableText: View {
     @Environment(\.transcriptFind) private var transcriptFind
     @Environment(\.transcriptMessageID) private var transcriptMessageID
     @Environment(\.explorerRoots) private var explorerRoots
+    @Environment(\.previewsLocalServers) private var previewsLocalServers
     // Optional because a text view can sit in a sheet that has no menu layer of its own.
     @Environment(MenuPresenter.self) private var menus: MenuPresenter?
 
@@ -662,6 +751,8 @@ struct SelectableText: View {
     private let width: TextWidth
     private let italic: Bool
     private let role: TranscriptTextRole
+    // Off for a sent prompt, since SentPrompt already decides its links.
+    private let linksLocalServers: Bool
 
     @State private var tooltipOwner = UUID()
     @State private var tooltipURL: URL?
@@ -684,7 +775,8 @@ struct SelectableText: View {
                   alignment: alignment,
                   width: .fills,
                   italic: false,
-                  role: role)
+                  role: role,
+                  linksLocalServers: true)
     }
 
     // Code arrives already coloured by token, and its own line breaks are the only ones
@@ -699,13 +791,15 @@ struct SelectableText: View {
                   alignment: .leading,
                   width: .fixed,
                   italic: false,
-                  role: .block)
+                  role: .block,
+                  linksLocalServers: false)
     }
 
     // Several blocks drawn as one text view. Each block's type and the gap above it
     // travel in the string, so the size and weight here are only what a run that carries
     // none of its own falls back to.
-    init(prose: AttributedString, lineSpacing: CGFloat = 0, width: TextWidth = .fills) {
+    init(prose: AttributedString, lineSpacing: CGFloat = 0, width: TextWidth = .fills,
+         linksLocalServers: Bool = true) {
         self.init(attributed: prose,
                   size: 13.5,
                   weight: .regular,
@@ -715,7 +809,8 @@ struct SelectableText: View {
                   alignment: .leading,
                   width: width,
                   italic: false,
-                  role: .block)
+                  role: .block,
+                  linksLocalServers: linksLocalServers)
     }
 
     // Text that is shown exactly as it arrived. A model's reasoning is not markdown, so
@@ -736,7 +831,8 @@ struct SelectableText: View {
                   alignment: .leading,
                   width: width,
                   italic: italic,
-                  role: .block)
+                  role: .block,
+                  linksLocalServers: false)
     }
 
     private init(attributed: AttributedString,
@@ -748,7 +844,8 @@ struct SelectableText: View {
                  alignment: TextAlignment,
                  width: TextWidth,
                  italic: Bool,
-                 role: TranscriptTextRole) {
+                 role: TranscriptTextRole,
+                 linksLocalServers: Bool) {
         self.attributed = attributed
         self.size = size
         self.weight = weight
@@ -759,6 +856,7 @@ struct SelectableText: View {
         self.width = width
         self.italic = italic
         self.role = role
+        self.linksLocalServers = linksLocalServers
     }
 
     var body: some View {
@@ -766,6 +864,7 @@ struct SelectableText: View {
         let firstBaseline = font.ascender.rounded()
         LinkAwareText(
             attributed: attributed,
+            linksLocalServers: linksLocalServers && previewsLocalServers,
             font: font,
             textScale: textScale,
             color: secondary ? .secondaryLabelColor : .labelColor,
@@ -790,7 +889,8 @@ struct SelectableText: View {
 
     private func linkHoverChanged(_ hovered: TranscriptLink.Hovered?) {
         pendingTooltip?.cancel()
-        guard let hovered, hovered.url.isFileURL else {
+        guard let hovered, hovered.url.isFileURL
+                || (previewsLocalServers && TranscriptLink.isLocalServer(hovered.url)) else {
             tooltipPresenter.hide(owner: tooltipOwner)
             return
         }
@@ -814,7 +914,8 @@ struct SelectableText: View {
     }
 
     private func linkToolTip(for url: URL) -> String {
-        TranscriptLink.explorerTarget(for: url, roots: explorerRoots) == nil
+        guard url.isFileURL else { return TranscriptLink.previewToolTip }
+        return TranscriptLink.explorerTarget(for: url, roots: explorerRoots) == nil
             ? TranscriptLink.finderToolTip
             : TranscriptLink.explorerToolTip
     }
@@ -1146,6 +1247,7 @@ private final class LinkTextView: NSTextView {
 
 private struct LinkAwareText: NSViewRepresentable {
     let attributed: AttributedString
+    let linksLocalServers: Bool
     let font: NSFont
     // Only for the block styles inside the string: the fallback font arrives scaled.
     let textScale: CGFloat
@@ -1222,6 +1324,7 @@ private struct LinkAwareText: NSViewRepresentable {
         // whenever anything in the pane changes. Only the blocks whose text really moved
         // pay for it.
         let content = Coordinator.Content(attributed: attributed,
+                                          linksLocalServers: linksLocalServers,
                                           font: font,
                                           textScale: textScale,
                                           color: color,
@@ -1267,6 +1370,7 @@ private struct LinkAwareText: NSViewRepresentable {
     }
 
     private func makeNSAttributedString() -> NSAttributedString {
+        let attributed = linksLocalServers ? self.attributed.linkingLocalServers() : self.attributed
         let paragraph = NSMutableParagraphStyle()
         paragraph.lineSpacing = lineSpacing
         paragraph.alignment = switch alignment {
@@ -1339,6 +1443,7 @@ private struct LinkAwareText: NSViewRepresentable {
         // string through the font and the colour, which are resolved before they arrive.
         struct Content: Equatable {
             let attributed: AttributedString
+            let linksLocalServers: Bool
             let font: NSFont
             let textScale: CGFloat
             let color: NSColor

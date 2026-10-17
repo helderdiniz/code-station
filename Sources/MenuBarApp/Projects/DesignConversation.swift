@@ -146,7 +146,7 @@ struct DesignConversationDismissal: NSViewRepresentable {
     }
 }
 
-// History and the composer share one floating surface over the canvas.
+// History and the composer share one floating surface over a design or a running app.
 struct DesignConversation: View {
     @Environment(AppSettings.self) private var appSettings
     @Environment(ProjectStore.self) private var store
@@ -164,6 +164,16 @@ struct DesignConversation: View {
     let designEmpty: Bool
     let selectionEnabled: Bool
     let placeholder: String
+    let attachMessage: String
+    let showsDesignAmbition: Bool
+    var openPreview: ((URL) -> Bool)? = nil
+    // Nil for a design, as openPreview is: SwiftUI cannot compare closures, so it would
+    // draw a design's panel again on every update.
+    var openChange: ((String) -> Void)? = nil
+    var runInShell: ((String) -> Void)? = nil
+    var showInExplorer: ((URL) -> Bool)? = nil
+    // Every row here is built at once, so a long chat is paged as the chat itself is.
+    var pagesTranscript = false
 
     @FocusState private var conversationToggleFocused: Bool
     @State private var conversationHovered = false
@@ -172,6 +182,7 @@ struct DesignConversation: View {
     @State private var hasOpenedConversation = false
     @State private var transcriptAtBottom = true
     @State private var transcriptPosition = ScrollPosition(edge: .bottom)
+    @State private var transcriptWindow = TranscriptWindow()
     @State private var transcriptOffset: CGFloat = 0
     @State private var expandedTranscriptOffset: CGFloat?
     @State private var composerHeight: CGFloat = 167
@@ -215,7 +226,7 @@ struct DesignConversation: View {
                     turnNotices(session)
                     designComposer(session)
                     SessionRunSettingsControls(sessionID: sessionID, wraps: true,
-                                               showsDesignAmbition: true)
+                                               showsDesignAmbition: showsDesignAmbition)
                         .padding(.horizontal, 14)
                         .padding(.bottom, 12)
                 }
@@ -361,10 +372,13 @@ struct DesignConversation: View {
     private func transcript(_ session: ChatSession, width: CGFloat) -> some View {
         let projectPath = store.workingDirectory(for: session) ?? ""
         let bubble = appSettings.userMessageStyle(for: session, in: store)
+        let messages = pagesTranscript
+            ? transcriptWindow.visibleMessages(in: session.messages) : session.messages[...]
+        let hiddenCount = session.messages.count - messages.count
         return ScrollViewReader { proxy in
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
-                    if session.messages.isEmpty {
+                    if session.messages.isEmpty, showsDesignAmbition {
                         VStack(alignment: .leading, spacing: 6) {
                             Text("What would you like to design?")
                                 .font(.system(size: 13, weight: .medium))
@@ -374,15 +388,31 @@ struct DesignConversation: View {
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
                     }
-                    ForEach(session.messages) { message in
+                    if hiddenCount > 0 {
+                        LoadEarlierMessages(hiddenCount: hiddenCount) {
+                            transcriptWindow.loadEarlier(totalCount: session.messages.count)
+                            guard let earliestID = transcriptWindow
+                                .visibleMessages(in: session.messages).first?.id else { return }
+                            Task {
+                                await Task.yield()
+                                proxy.scrollTo(earliestID, anchor: .top)
+                            }
+                        }
+                    }
+                    ForEach(messages) { message in
                         MessageView(message: message,
                                     projectPath: projectPath,
                                     textScale: textScale,
+                                    openChange: openChange ?? { _ in },
+                                    runInShell: runInShell ?? { _ in },
+                                    showInExplorer: showInExplorer ?? { _ in false },
+                                    openPreview: openPreview ?? { _ in false },
                                     availableWidth: width - 28,
                                     arriving: message.isArriving(sentAt: promptSentAt),
                                     bubble: bubble)
                             .equatable()
                             .environment(\.runningAgents, runner.runningAgents(sessionID))
+                            .environment(\.previewsLocalServers, openPreview != nil)
                             .environment(\.activeTranscriptTools, runner.runningTools(sessionID))
                     }
 
@@ -527,7 +557,7 @@ struct DesignConversation: View {
                                                  sessionID: sessionID,
                                                  size: 22)
                                 Button {
-                                    let urls = FilePicker.chooseFiles(prompt: "Attach", message: "Choose references for this design.")
+                                    let urls = FilePicker.chooseFiles(prompt: "Attach", message: attachMessage)
                                     runner.composer.attach(Attachments.fromDrop(urls), to: sessionID)
                                     composerFocused = true
                                 } label: {

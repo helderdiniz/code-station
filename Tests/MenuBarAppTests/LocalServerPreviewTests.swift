@@ -1,0 +1,227 @@
+import AppKit
+import SwiftUI
+import Testing
+import WebKit
+@testable import MenuBarApp
+
+private func url(_ text: String) -> URL { URL(string: text)! }
+
+// Where a test clicks on a page: a box with its top left corner at x and y.
+private func box(_ x: Int, _ y: Int) -> String {
+    "style=\"position:absolute; left:\(x)px; top:\(y)px; width:200px; height:80px\""
+}
+
+// The bar, the message and Reload all go by what the preview holds, so after each load it
+// has to hold the page a person expects: the one still on screen, or the one that did not
+// load.
+@MainActor
+struct LocalServerPreviewTests {
+    @Test func holdsThePageAPersonExpectsAfterEachLoad() {
+        let preview = LocalServerPreview(opening: url("http://localhost:3000/#/billing"))
+        #expect(preview.phase == .opening)
+        preview.finishLoading(hasPage: true)
+        #expect(preview.phase == .showing)
+        preview.follow(url("http://localhost:3000/settings"))
+        #expect(preview.address == url("http://localhost:3000/settings"))
+        preview.reload()
+        #expect(preview.phase == .showing)
+
+        preview.open(url("http://localhost:5173/"))
+        preview.phase = .unreachable
+        preview.finishLoading(hasPage: true)
+        preview.follow(url("http://localhost:3000/settings"))
+        #expect(preview.phase == .unreachable)
+        #expect(preview.address == url("http://localhost:5173/"))
+        preview.reload()
+        #expect(preview.phase == .opening)
+        #expect(preview.reloadGeneration == 4)
+        preview.finishLoading(hasPage: false)
+        #expect(preview.phase == .noPage)
+    }
+
+    @Test func namesOnlyTheServerAndItsPage() {
+        let addresses = ["http://localhost:3000/", "http://[::1]:5173/settings?token=abc",
+                         "http://localhost:3000/#/billing?token=abc", "http://localhost:3000/docs#intro",
+                         "http://ada:secret@localhost:8000/settings"]
+
+        #expect(addresses.map { LocalServerPreview.label(for: url($0)) } == [
+            "localhost:3000", "[::1]:5173/settings", "localhost:3000/#/billing", "localhost:3000/docs",
+            "localhost:8000/settings",
+        ])
+    }
+}
+
+// The app in the pane is someone's work in progress, so the pane keeps it as it was left.
+@MainActor
+@Suite(.serialized)
+struct LocalServerPreviewPageTests {
+    // A session's pane with a running app on its Chat tab. The app is handed to the page
+    // directly, so no server has to be running for it.
+    @MainActor
+    private final class Pane {
+        // The bar runs along the top 42 points of the window, with its controls this far across.
+        enum Control: CGFloat {
+            case openInBrowser = 896
+        }
+
+        let preview: LocalServerPreview
+        // Borderless, as in the other web tests: a window that can become key takes the
+        // first click on the page for itself, and the app never sees it.
+        let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 1000, height: 800),
+                              styleMask: [.borderless], backing: .buffered, defer: false)
+        private(set) var pageFocused = false
+        private(set) var closed = false
+        private let hosting = NSHostingController(rootView: AnyView(EmptyView()))
+        private let store: ProjectStore
+        private let scratch: ScratchDirectory
+        private let session: ChatSession
+        private let runner = SessionRunner(paths: [.codex: "/usr/bin/true"])
+        private let settings: AppSettings
+        private let shortcuts: ShortcutStore
+        private let palette = GlobalCommandPaletteController()
+
+        init(app: String = "<p>Start</p>",
+             at address: URL = URL(string: "http://localhost:3000/settings")!) async throws {
+            (store, scratch) = TestStore.make()
+            let project = try TestStore.project(in: store)
+            session = store.newSession(in: project.id, seed: .init(agent: .codex))
+            let preferences = try #require(UserDefaults(suiteName: "preview-page-\(UUID().uuidString)"))
+            settings = AppSettings(agentAvatarURL: scratch.path("avatar.png"), preferences: preferences)
+            shortcuts = ShortcutStore(storageURL: scratch.path("shortcuts.json"), siteDefaults: SiteDefaults())
+            preview = LocalServerPreview(opening: address)
+            preview.coordinator.loadedGeneration = preview.reloadGeneration
+            preview.webView.loadHTMLString(app, baseURL: address)
+            show(app: true)
+            hosting.sizingOptions = []
+            window.contentViewController = hosting
+            window.setContentSize(NSSize(width: 1000, height: 800))
+            window.center()
+            window.orderFront(nil)
+            #expect(await waitUntil { preview.phase == .showing && !preview.webView.isLoading })
+            try await settle()
+        }
+
+        // The Chat tab with the app on it, or another tab with the app out of sight.
+        func show(app: Bool) {
+            hosting.rootView = AnyView(Group {
+                if app {
+                    LocalServerPreviewPage(preview: preview, session: session,
+                                           placeholder: "Ask for a change",
+                                           openPreview: { _ in false },
+                                           pageFocused: focus,
+                                           onClose: { [weak self] in self?.closed = true })
+                }
+            }
+            .environment(store)
+            .environment(runner)
+            .environment(settings)
+            .environment(shortcuts)
+            .environment(palette)
+            .background(Theme.background)
+            .appOverlays())
+        }
+
+        // Held weakly, since the page it goes to is held by this pane.
+        private var focus: Binding<Bool> {
+            Binding(get: { [weak self] in self?.pageFocused == true },
+                    set: { [weak self] in self?.pageFocused = $0 })
+        }
+
+        var conversation: DesignConversationDismissal.ObserverView? {
+            func find(_ view: NSView) -> DesignConversationDismissal.ObserverView? {
+                view as? DesignConversationDismissal.ObserverView ?? view.subviews.lazy.compactMap(find).first
+            }
+            return find(hosting.view)
+        }
+
+        func click(_ point: CGPoint) throws {
+            for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
+                window.sendEvent(try #require(NSEvent.mouseEvent(with: type, location: point,
+                    modifierFlags: [], timestamp: 0, windowNumber: window.windowNumber,
+                    context: nil, eventNumber: 0, clickCount: 1, pressure: 1)))
+            }
+        }
+
+        func click(_ control: Control) throws { try click(CGPoint(x: control.rawValue, y: 779)) }
+
+        func click(page point: CGPoint) throws { try click(preview.webView.convert(point, to: nil)) }
+
+        func settle() async throws {
+            for _ in 0..<20 {
+                try await Task.sleep(for: .milliseconds(20))
+                hosting.view.layoutSubtreeIfNeeded()
+            }
+        }
+
+        func close() {
+            window.orderOut(nil)
+            window.contentViewController = nil
+            preview.close()
+            runner.stopAll()
+        }
+    }
+
+    @Test func keepsTheAppUntilItIsClosed() async throws {
+        weak var released: WKWebView?
+        do {
+            let pane = try await Pane(app: "<input id='name'>")
+            let page = pane.preview.webView
+            released = page
+            let name = "document.getElementById('name').value"
+            _ = try await page.evaluateJavaScript("\(name) = 'Ada'")
+            #expect(pane.conversation?.minimized == true)
+            pane.window.makeFirstResponder(page)
+            #expect(pane.pageFocused)
+
+            pane.show(app: false)
+            try await pane.settle()
+            #expect(page.window == nil)
+            #expect(!pane.pageFocused)
+            pane.show(app: true)
+            try await pane.settle()
+            #expect(page.window === pane.window)
+            #expect(try await page.evaluateJavaScript(name) as? String == "Ada")
+            #expect(pane.preview.phase == .showing)
+            _ = try await page.evaluateJavaScript("history.pushState(null, '', '/billing')")
+            #expect(await waitUntil { pane.preview.address.path == "/billing" })
+            pane.window.makeFirstResponder(page)
+            #expect(pane.pageFocused)
+            pane.preview.phase = .unreachable
+            try await pane.settle()
+            #expect(pane.window.firstResponder !== page)
+            #expect(!pane.pageFocused)
+
+            pane.close()
+            // A closed page keeps its policy until it is gone, or WebKit hands a link it
+            // cannot load to the system.
+            #expect(page.navigationDelegate === pane.preview.coordinator)
+        }
+        #expect(await waitUntil { released == nil })
+    }
+
+    @Test func onlyAPersonsClickOpensTheBrowser() async throws {
+        let pane = try await Pane(app: """
+            <a id="docs" href="https://example.com/docs" \(box(0, 0))>Docs</a>
+            <a id="help" href="https://example.com/help" target="_blank" \(box(0, 100))>Help</a>
+            """)
+        defer { pane.close() }
+        var opened: [URL] = []
+        pane.preview.coordinator.openInBrowser = { opened.append($0) }
+        let docs = url("https://example.com/docs"), help = url("https://example.com/help")
+
+        try pane.click(page: CGPoint(x: 100, y: 40))
+        try pane.click(page: CGPoint(x: 100, y: 140))
+        #expect(await waitUntil { opened == [docs, help] })
+        #expect(pane.preview.phase == .showing)
+        _ = try await pane.preview.webView.evaluateJavaScript("""
+            Object.assign(document.createElement("a"), {href: "mailto:someone@example.com"}).click();
+            document.getElementById("help").click();
+            document.getElementById("docs").click();
+            """)
+        #expect(await waitUntil { pane.preview.phase == .left(docs) })
+        #expect(opened == [docs, help])
+        try pane.click(.openInBrowser)
+        #expect(await waitUntil { pane.closed })
+        #expect(opened == [docs, help, url("http://localhost:3000/settings")])
+    }
+}
