@@ -550,9 +550,23 @@ struct CodexTests {
         #expect(usage?.windows.map(\.title) == [
             "Current limit", "Current limit - secondary", "GPT-5.3-Codex-Spark",
         ])
+        #expect(usage?.windows.map(\.shortTitle) == ["Limit", "Second limit", "GPT-5.3-Codex-Spark"])
         #expect(usage?.windows.map(\.usedPercent) == [6, 40, 0])
         #expect(usage?.windows.first?.resetsAt == Date(timeIntervalSince1970: 1_786_736_546))
         #expect(usage?.checkedAt == checkedAt)
+    }
+
+    @Test func codexWindowsAreNamedByHowLongTheyRun() {
+        let usage = CodexUsage(response: [
+            "rateLimits": [
+                "primary": ["usedPercent": 1, "windowDurationMins": 300],
+                "secondary": ["usedPercent": 1, "windowDurationMins": 10_080],
+            ],
+        ])
+        #expect(usage?.windows.map(\.shortTitle) == ["5h", "Week"])
+        #expect(CodexUsage.span(minutes: 1_440) == "1d")
+        #expect(CodexUsage.span(minutes: 90) == "90m")
+        #expect(CodexUsage.span(minutes: 0) == nil)
     }
 
     @Test func aFailedTurnCarriesItsMessage() {
