@@ -212,9 +212,8 @@ struct DesignView: View {
     }
 
     private func selectElement(_ selection: DesignElementSelection) {
-        let label = selection.text.isEmpty ? selection.tag.uppercased() : "\"\(selection.text)\""
         runner.composer.editDraft(sessionID) { draft in
-            let reference = "Refine \(label) at `\(selection.selector)`. "
+            let reference = selection.reference(at: "`\(selection.selector)`")
             if draft.text.isEmpty { draft.text = reference }
             else if !draft.text.contains(selection.selector) { draft.text += "\n\n" + reference }
         }

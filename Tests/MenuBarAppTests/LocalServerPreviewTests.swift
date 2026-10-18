@@ -52,6 +52,133 @@ struct LocalServerPreviewTests {
     }
 }
 
+// An agent reads a pick, so it names the element and its page once, as a pick on Design does.
+@MainActor
+struct LocalServerPreviewDraftTests {
+    @Test func writesAPickAsAReferenceToItsPageOncePerPage() {
+        let save = DesignElementSelection(selector: "#save", tag: "button", text: "Save", rect: .zero)
+        let image = DesignElementSelection(selector: "main > img", tag: "img", text: "", rect: .zero)
+        let settings = url("http://localhost:5173/settings?token=abc#top")
+        let first = LocalServerPreview.draft("Make these match.", adding: save, on: settings)
+
+        #expect(LocalServerPreview.draft("", adding: save, on: settings)
+                == "Refine \"Save\" at `#save` on `/settings`. ")
+        #expect(LocalServerPreview.draft("", adding: image, on: url("http://localhost:5173"))
+                == "Refine IMG at `main > img` on `/`. ")
+        #expect(first == "Make these match.\n\nRefine \"Save\" at `#save` on `/settings`. ")
+        #expect(LocalServerPreview.draft(first, adding: save, on: settings) == first)
+        #expect(LocalServerPreview.draft(first, adding: save, on: url("http://localhost:5173/#/billing"))
+                == first + "\n\nRefine \"Save\" at `#save` on `/#/billing`. ")
+    }
+}
+
+// A running app is someone's real work, so the picker stays out of its way: the page cannot
+// see or drive it, its crosshair lasts through the app's own documents and sheets without
+// touching the page's styles, and with it off every gesture is the app's own.
+@MainActor
+@Suite(.serialized)
+struct LocalServerPreviewWebTests {
+    private let app = """
+        <button id="save" \(box(100, 100))>Save</button>
+        <button id="cancel" \(box(400, 100))>Cancel</button>
+        <input id="agree" type="checkbox">
+        <script>
+        var presses = 0, clicks = 0, save = document.getElementById("save");
+        var types = ["pointerdown", "mousedown", "pointerup", "mouseup", "dblclick", "contextmenu", "auxclick"];
+        for (const type of types) save.addEventListener(type, () => presses++);
+        document.addEventListener("click", () => clicks++, true);
+        // Every press the picker stops, then a click, all made by the page's own script.
+        var gestures = () => {
+          for (const type of types) {
+            const Event = type.startsWith("pointer") ? PointerEvent : MouseEvent;
+            save.dispatchEvent(new Event(type, {bubbles: true, cancelable: true}));
+          }
+          save.click();
+        };
+        window.ready = true;
+        </script>
+        """
+
+    @Test func picksWithoutGettingInTheAppsWay() async throws {
+        let coordinator = LocalServerPreviewWebContent.Coordinator()
+        let webView = LocalServerPreviewWebContent.makeWebView(coordinator: coordinator)
+        let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 700, height: 400),
+                              styleMask: [.borderless], backing: .buffered, defer: false)
+        window.contentView = webView
+        window.orderFront(nil)
+        defer {
+            window.orderOut(nil)
+            LocalServerPreviewWebContent.close(webView, coordinator: coordinator)
+            window.contentView = nil
+        }
+        webView.loadHTMLString(app, baseURL: url("http://localhost:3000/settings"))
+        #expect(try await answer(to: "String(window.ready)", in: webView, awaiting: "true") == "true")
+        var picks: [(selection: DesignElementSelection, page: URL, image: NSImage?)] = []
+        coordinator.onPick = { picks.append(($0, $1, $2)) }
+        let cursor = "getComputedStyle(document.documentElement).cursor"
+
+        _ = try await webView.evaluateJavaScript("gestures()")
+        coordinator.setSelection(true, in: webView)
+        coordinator.setSelection(false, in: webView)
+        _ = try await webView.evaluateJavaScript("gestures()")
+        #expect(try await webView.evaluateJavaScript("[presses, clicks]") as? [Int] == [14, 2])
+        coordinator.setSelection(true, in: webView)
+        #expect(try await answer(to: cursor, in: webView, awaiting: "crosshair") == "crosshair")
+        try click(CGPoint(x: 200, y: 140), in: webView)
+        #expect(await waitUntil { picks.count == 1 })
+        _ = try await webView.evaluateJavaScript("gestures()")
+        _ = try await webView.evaluateJavaScript("document.getElementById('agree').click()")
+        try click(CGPoint(x: 500, y: 140), in: webView)
+        #expect(await waitUntil { picks.count == 2 })
+
+        let pick = try #require(picks.first)
+        #expect(pick.selection == DesignElementSelection(selector: "#save", tag: "button", text: "Save",
+                                                         rect: CGRect(x: 100, y: 100, width: 200, height: 80)))
+        #expect(pick.page.path == "/settings")
+        #expect(pick.image?.size == CGSize(width: 216, height: 96))
+        #expect(picks.map(\.selection.selector) == ["#save", "#cancel"])
+        #expect(try await webView.evaluateJavaScript("[presses, clicks]") as? [Int] == [14, 2])
+        #expect(try await webView.evaluateJavaScript("document.getElementById('agree').checked") as? Bool == false)
+        #expect(try await webView.evaluateJavaScript("""
+            [typeof window.webkit?.messageHandlers?.codeStationDesignSelection,
+             typeof window.__codeStationSetSelection]
+            """) as? [String] == ["undefined", "undefined"])
+        #expect(!webView.configuration.websiteDataStore.isPersistent)
+
+        webView.loadHTMLString(app, baseURL: url("http://localhost:3000/billing"))
+        let state = "location.pathname + ' ' + \(cursor)"
+        #expect(try await answer(to: state, in: webView, awaiting: "/billing crosshair") == "/billing crosshair")
+        #expect(try await webView.evaluateJavaScript("document.documentElement.hasAttribute('style')") as? Bool == false)
+        _ = try await webView.evaluateJavaScript("""
+            document.adoptedStyleSheets = [new CSSStyleSheet()];
+            document.body.dispatchEvent(new PointerEvent("pointerover"));
+            """)
+        #expect(try await webView.evaluateJavaScript(cursor) as? String == "crosshair")
+    }
+
+    // The page answers in its own time, so it is asked again until the answer arrives.
+    private func answer(to script: String, in webView: WKWebView,
+                        awaiting expected: String) async throws -> String? {
+        let deadline = ContinuousClock.now + .seconds(15)
+        while ContinuousClock.now < deadline,
+              (try? await webView.evaluateJavaScript(script)) as? String != expected {
+            try await Task.sleep(for: .milliseconds(30))
+        }
+        return (try? await webView.evaluateJavaScript(script)) as? String
+    }
+
+    // Through the window, as a person clicks, so the page sees the click as trusted.
+    private func click(_ point: CGPoint, in webView: WKWebView) throws {
+        let window = try #require(webView.window)
+        for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
+            window.sendEvent(try #require(NSEvent.mouseEvent(
+                with: type, location: webView.convert(point, to: nil), modifierFlags: [], timestamp: 0,
+                windowNumber: window.windowNumber, context: nil, eventNumber: 0,
+                clickCount: 1, pressure: type == .leftMouseDown ? 1 : 0)))
+        }
+    }
+}
+
 // The app in the pane is someone's work in progress, so the pane keeps it as it was left.
 @MainActor
 @Suite(.serialized)
@@ -62,7 +189,7 @@ struct LocalServerPreviewPageTests {
     private final class Pane {
         // The bar runs along the top 42 points of the window, with its controls this far across.
         enum Control: CGFloat {
-            case openInBrowser = 896
+            case picker = 858, openInBrowser = 896
         }
 
         let preview: LocalServerPreview
@@ -134,6 +261,8 @@ struct LocalServerPreviewPageTests {
             }
             return find(hosting.view)
         }
+
+        var draft: SessionComposerStore.Draft { runner.composer.draft(session.id) }
 
         func click(_ point: CGPoint) throws {
             for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
@@ -284,6 +413,45 @@ struct LocalServerPreviewPageTests {
         pane.preview.coordinator.declinedAt = .now - .seconds(2)
         _ = try await page.evaluateJavaScript(export)
         #expect(await waitUntil { asked.count == 8 })
+    }
+
+    // A press while picking is a pick on its way to the composer, so it leaves the panel open.
+    // The pane's clicks skip the monitor that watches for presses, so the panel is handed one.
+    @Test func aPickOpensTheConversationWithTheElementInIt() async throws {
+        let pane = try await Pane(app: "<button id='save' \(box(100, 100))>Save</button>")
+        defer { pane.close() }
+        let conversation = try #require(pane.conversation)
+        let save = pane.preview.webView.convert(CGPoint(x: 200, y: 140), to: nil)
+        let press = try #require(NSEvent.mouseEvent(with: .leftMouseDown, location: save,
+            modifierFlags: [], timestamp: 0, windowNumber: pane.window.windowNumber,
+            context: nil, eventNumber: 0, clickCount: 1, pressure: 1))
+
+        try pane.click(.picker)
+        try await pane.settle()
+        #expect(!conversation.minimized)
+        #expect(conversation.handle(press, frontmost: pane.window) === press)
+        try await pane.settle()
+        #expect(!conversation.minimized)
+        // A message over the page rests the picker, so the same press shrinks the panel, and
+        // when the page comes back the pick has to bring the conversation back by itself.
+        pane.preview.phase = .unreachable
+        try await pane.settle()
+        _ = conversation.handle(press, frontmost: pane.window)
+        try await pane.settle()
+        #expect(conversation.minimized)
+        pane.preview.phase = .showing
+        try await pane.settle()
+        try pane.click(save)
+        #expect(await waitUntil { !pane.draft.attachments.isEmpty })
+        let crop = try #require(pane.draft.attachments.first)
+        defer { try? FileManager.default.removeItem(at: crop.url) }
+        try await pane.settle()
+
+        #expect(crop.name.hasPrefix("selection-"))
+        #expect(!conversation.minimized)
+        let composer = try #require(pane.window.firstResponder as? NSTextView)
+        #expect(composer.isEditable)
+        #expect(composer.string == "Refine \"Save\" at `#save` on `/settings`. ")
     }
 }
 

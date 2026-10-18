@@ -217,18 +217,8 @@ struct DesignWebContent: NSViewRepresentable {
                 return
             }
 
-            guard let selector = body["selector"] as? String,
-                  let tag = body["tag"] as? String,
-                  let rect = body["rect"] as? [String: Any],
-                  let x = rect["x"] as? Double,
-                  let y = rect["y"] as? Double,
-                  let width = rect["width"] as? Double,
-                  let height = rect["height"] as? Double else { return }
-            onSelection?(DesignElementSelection(
-                selector: selector,
-                tag: tag,
-                text: (body["text"] as? String ?? "").trimmed,
-                rect: CGRect(x: x, y: y, width: width, height: height)))
+            guard let selection = DesignElementSelection(message: body) else { return }
+            onSelection?(selection)
         }
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
@@ -293,8 +283,7 @@ struct DesignWebContent: NSViewRepresentable {
         }
     }
 
-    private static let selectionScript = #"""
-    (() => {
+    static let pickerHelpers = #"""
       var enabled = false;
       var highlighted = null;
       var previousOutline = "";
@@ -334,6 +323,31 @@ struct DesignWebContent: NSViewRepresentable {
         }
         return parts.join(" > ");
       }
+    """#
+
+    static let pickerEvents = #"""
+      document.addEventListener("mouseover", event => {
+        if (enabled) highlight(event.target);
+      }, true);
+
+      document.addEventListener("click", event => {
+        if (!enabled) return;
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        const element = event.target;
+        const rect = element.getBoundingClientRect();
+        window.webkit.messageHandlers.codeStationDesignSelection.postMessage({
+          selector: selectorFor(element),
+          tag: element.tagName.toLowerCase(),
+          text: (element.innerText || element.getAttribute("aria-label") || "").trim().slice(0, 160),
+          rect: {x: rect.x, y: rect.y, width: rect.width, height: rect.height}
+        });
+      }, true);
+    """#
+
+    private static let selectionScript = #"""
+    (() => {
+    \#(Self.pickerHelpers)
 
       var reportedViewport = "";
       function reportViewport() {
@@ -465,23 +479,29 @@ struct DesignWebContent: NSViewRepresentable {
         if (!enabled) clearHighlight();
       };
 
-      document.addEventListener("mouseover", event => {
-        if (enabled) highlight(event.target);
-      }, true);
-
-      document.addEventListener("click", event => {
-        if (!enabled) return;
-        event.preventDefault();
-        event.stopImmediatePropagation();
-        const element = event.target;
-        const rect = element.getBoundingClientRect();
-        window.webkit.messageHandlers.codeStationDesignSelection.postMessage({
-          selector: selectorFor(element),
-          tag: element.tagName.toLowerCase(),
-          text: (element.innerText || element.getAttribute("aria-label") || "").trim().slice(0, 160),
-          rect: {x: rect.x, y: rect.y, width: rect.width, height: rect.height}
-        });
-      }, true);
+    \#(Self.pickerEvents)
     })();
     """#
+}
+
+extension DesignElementSelection {
+    init?(message body: [String: Any]) {
+        guard let selector = body["selector"] as? String,
+              let tag = body["tag"] as? String,
+              let rect = body["rect"] as? [String: Any],
+              let x = rect["x"] as? Double,
+              let y = rect["y"] as? Double,
+              let width = rect["width"] as? Double,
+              let height = rect["height"] as? Double else { return nil }
+        self.init(
+            selector: selector,
+            tag: tag,
+            text: (body["text"] as? String ?? "").trimmed,
+            rect: CGRect(x: x, y: y, width: width, height: height))
+    }
+
+    func reference(at place: String) -> String {
+        let label = text.isEmpty ? tag.uppercased() : "\"\(text)\""
+        return "Refine \(label) at \(place). "
+    }
 }

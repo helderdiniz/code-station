@@ -69,6 +69,14 @@ final class LocalServerPreview {
         LocalServerPreviewWebContent.close(madeWebView, coordinator: coordinator)
     }
 
+    static func draft(_ text: String, adding selection: DesignElementSelection,
+                      on address: URL) -> String {
+        let place = "`\(selection.selector)` on `\(path(address))`"
+        let reference = selection.reference(at: place)
+        if text.isEmpty { return reference }
+        return text.contains(place) ? text : text + "\n\n" + reference
+    }
+
     static func label(for url: URL) -> String {
         let path = Self.path(url)
         return path == "/" ? server(url) : server(url) + path
@@ -92,6 +100,7 @@ final class LocalServerPreview {
 }
 
 struct LocalServerPreviewPage: View {
+    @Environment(SessionRunner.self) private var runner
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     let preview: LocalServerPreview
@@ -107,6 +116,9 @@ struct LocalServerPreviewPage: View {
     @State private var conversationMinimized = true
     @State private var conversationExpanded = false
     @State private var composerFocused = false
+    @State private var selectionEnabled = false
+
+    private var picking: Bool { selectionEnabled && preview.phase == .showing }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -120,7 +132,7 @@ struct LocalServerPreviewPage: View {
                                        conversationExpanded: $conversationExpanded,
                                        conversationMinimized: $conversationMinimized,
                                        composerFocused: $composerFocused,
-                                       designEmpty: false, selectionEnabled: false,
+                                       designEmpty: false, selectionEnabled: picking,
                                        placeholder: placeholder,
                                        attachMessage: "Choose references for this change.",
                                        showsDesignAmbition: false,
@@ -145,7 +157,9 @@ struct LocalServerPreviewPage: View {
             LocalServerPreviewWebContent(preview: preview, address: preview.address,
                                          reloadGeneration: preview.reloadGeneration,
                                          showing: showing,
-                                         isFocused: $pageFocused)
+                                         selectionEnabled: picking,
+                                         isFocused: $pageFocused,
+                                         onPick: pick)
                 .background(Color.white)
                 // The page stays built under a message, so it and its sign-in
                 // survive a failed reload.
@@ -179,6 +193,17 @@ struct LocalServerPreviewPage: View {
                 .truncationMode(.middle)
                 .appTooltip(preview.address.absoluteString)
             Spacer(minLength: 10)
+            if preview.phase == .showing {
+                GlyphButton(icon: selectionEnabled ? "scope" : "cursorarrow", side: 28,
+                            active: selectionEnabled, tint: Theme.accent) {
+                    selectionEnabled.toggle()
+                    if selectionEnabled { conversationMinimized = false }
+                }
+                .appTooltip(selectionEnabled
+                    ? "Stop selecting page elements"
+                    : "Select an element to refine")
+                .accessibilityLabel("Select an element to refine")
+            }
             barButton("arrow.up.right", help: "Open in browser") { openInBrowser(preview.address) }
             barButton("xmark", help: "Close preview", action: onClose)
             barButton("arrow.clockwise", help: "Reload page") { preview.reload() }
@@ -253,6 +278,19 @@ struct LocalServerPreviewPage: View {
         preview.coordinator.openInBrowser(url)
         onClose()
     }
+
+    // A pick writes into the composer and sends nothing, as one on a design does, so
+    // several elements can be picked before the change is asked for.
+    private func pick(_ selection: DesignElementSelection, page: URL, image: NSImage?) {
+        runner.composer.editDraft(session.id) {
+            $0.text = LocalServerPreview.draft($0.text, adding: selection, on: page)
+        }
+        if let image, let attachment = Attachments.fromImage(image, prefix: "selection") {
+            runner.composer.attach([attachment], to: session.id)
+        }
+        conversationMinimized = false
+        composerFocused = true
+    }
 }
 
 // The page belongs to the preview, so mounting moves it into whichever container is shown.
@@ -261,7 +299,9 @@ struct LocalServerPreviewWebContent: NSViewRepresentable {
     let address: URL
     let reloadGeneration: Int
     let showing: Bool
+    let selectionEnabled: Bool
     @Binding var isFocused: Bool
+    let onPick: (DesignElementSelection, URL, NSImage?) -> Void
 
     func makeCoordinator() -> Coordinator { preview.coordinator }
 
@@ -271,6 +311,8 @@ struct LocalServerPreviewWebContent: NSViewRepresentable {
         if preview.webView.superview !== container { install(in: container) }
         container.onFocusChange = { focused in if isFocused != focused { isFocused = focused } }
         if !showing { container.letGoOfKeyboard() }
+        context.coordinator.onPick = onPick
+        context.coordinator.setSelection(selectionEnabled, in: preview.webView)
         guard context.coordinator.loadedGeneration != reloadGeneration else { return }
         context.coordinator.loadedGeneration = reloadGeneration
         context.coordinator.declinedAt = nil
@@ -290,6 +332,13 @@ struct LocalServerPreviewWebContent: NSViewRepresentable {
         configuration.websiteDataStore = .nonPersistent()
         configuration.defaultWebpagePreferences.allowsContentJavaScript = true
         configuration.preferences.javaScriptCanOpenWindowsAutomatically = false
+        // The picker runs in a world the page's scripts cannot reach, and is added
+        // before them so its press listeners run ahead of the app's.
+        configuration.userContentController.add(coordinator, contentWorld: .defaultClient,
+                                                 name: DesignWebContent.Coordinator.messageName)
+        configuration.userContentController.addUserScript(WKUserScript(
+            source: Self.pickerScript, injectionTime: .atDocumentStart,
+            forMainFrameOnly: true, in: .defaultClient))
         let webView = WKWebView(frame: .zero, configuration: configuration)
         webView.navigationDelegate = coordinator
         webView.uiDelegate = coordinator
@@ -316,7 +365,12 @@ struct LocalServerPreviewWebContent: NSViewRepresentable {
     // any link it cannot load to the system, clicked or not.
     static func close(_ webView: WKWebView, coordinator: Coordinator) {
         webView.stopLoading()
+        webView.configuration.userContentController.removeScriptMessageHandler(
+            forName: DesignWebContent.Coordinator.messageName, contentWorld: .defaultClient)
         coordinator.observations = []
+        // A pick goes back through the page that shows the preview, and that page holds the
+        // preview, so it is let go here or the preview would outlive its pane.
+        coordinator.onPick = { _, _, _ in }
     }
 
     final class Container: NSView {
@@ -349,17 +403,20 @@ struct LocalServerPreviewWebContent: NSViewRepresentable {
         }
     }
 
-    final class Coordinator: NSObject, WKNavigationDelegate, WKUIDelegate, WKDownloadDelegate {
+    final class Coordinator: NSObject, WKNavigationDelegate, WKUIDelegate, WKDownloadDelegate,
+                             WKScriptMessageHandler {
         // This is WebKitErrorFrameLoadInterruptedByPolicyChange, which WKError lacks.
         private static let interruptedByPolicy = 102
 
         var loadedGeneration = 0
         // A new click cancels the load first, so a page leaving mid-load is a redirect.
         var provisional = false
+        var selectionEnabled = false
         var observations: [NSKeyValueObservation] = []
         var onAddress: (URL) -> Void = { _ in }
         var onPhase: (LocalServerPreview.Phase) -> Void = { _ in }
         var onLoaded: (Bool) -> Void = { _ in }
+        var onPick: (DesignElementSelection, URL, NSImage?) -> Void = { _, _, _ in }
         var openInBrowser: (URL) -> Void = { NSWorkspace.shared.open($0) }
         var saveDownload: @MainActor (String) -> URL? = { name in
             FilePicker.saveFile(suggestedName: name, prompt: "Save",
@@ -374,6 +431,38 @@ struct LocalServerPreviewWebContent: NSViewRepresentable {
 
         private var resting: Bool {
             declinedAt.map { ContinuousClock.now - $0 < .seconds(2) } ?? false
+        }
+
+        func setSelection(_ enabled: Bool, in webView: WKWebView) {
+            guard selectionEnabled != enabled else { return }
+            selectionEnabled = enabled
+            applySelection(in: webView)
+        }
+
+        private func applySelection(in webView: WKWebView) {
+            webView.evaluateJavaScript("window.__codeStationSetSelection?.(\(selectionEnabled));",
+                                       in: nil, in: .defaultClient)
+        }
+
+        // A pick during a load would carry the next page's address.
+        func userContentController(_ userContentController: WKUserContentController,
+                                   didReceive message: WKScriptMessage) {
+            guard message.name == DesignWebContent.Coordinator.messageName,
+                  message.frameInfo.isMainFrame, let webView = message.webView,
+                  let body = message.body as? [String: Any] else { return }
+            if body["kind"] as? String == "ready" {
+                applySelection(in: webView)
+                return
+            }
+            guard selectionEnabled, !provisional,
+                  let selection = DesignElementSelection(message: body),
+                  let page = webView.url else { return }
+            let configuration = WKSnapshotConfiguration()
+            let crop = selection.rect.insetBy(dx: -8, dy: -8).intersection(webView.bounds)
+            if !crop.isNull, crop.width > 1, crop.height > 1 { configuration.rect = crop }
+            webView.takeSnapshot(with: configuration) { [weak self] image, _ in
+                self?.onPick(selection, page, image)
+            }
         }
 
         // A page sent off the machine is stopped, since its session would not follow it.
@@ -520,4 +609,52 @@ struct LocalServerPreviewWebContent: NSViewRepresentable {
                     ? .unreachable : .failed(error.localizedDescription))
         }
     }
+
+    private static let pickerScript = #"""
+    (() => {
+    \#(DesignWebContent.pickerHelpers)
+
+      // The cursor goes in a sheet, not on the root element, which a server-rendered
+      // app compares while it hydrates. The picker cannot reach into frames.
+      const sheet = new CSSStyleSheet();
+      sheet.replaceSync(":root { cursor: crosshair !important } "
+        + "iframe, frame, object, embed { pointer-events: none !important }");
+      // An app can replace adopted sheets, so this one is put back on pointer moves.
+      const keepSheet = () => {
+        if (!document.adoptedStyleSheets.includes(sheet)) {
+          document.adoptedStyleSheets = [...document.adoptedStyleSheets, sheet];
+        }
+      };
+      window.addEventListener("pointerover", () => { if (enabled) keepSheet(); }, true);
+      window.__codeStationSetSelection = value => {
+        enabled = Boolean(value);
+        sheet.disabled = !enabled;
+        if (enabled) keepSheet();
+        else clearHighlight();
+      };
+
+      // Presses open menus and focus fields before the click that picks arrives.
+      for (const type of ["pointerdown", "mousedown", "pointerup", "mouseup", "dblclick",
+                          "contextmenu", "auxclick"]) {
+        window.addEventListener(type, event => {
+          if (!enabled) return;
+          event.preventDefault();
+          event.stopImmediatePropagation();
+        }, true);
+      }
+      window.addEventListener("click", event => {
+        if (!enabled || event.isTrusted) return;
+        event.preventDefault();
+        event.stopImmediatePropagation();
+      }, true);
+
+    \#(DesignWebContent.pickerEvents)
+
+      // A page from the back-forward cache keeps its old state, so it asks again.
+      const askForState = () =>
+        window.webkit.messageHandlers.codeStationDesignSelection.postMessage({kind: "ready"});
+      window.addEventListener("pageshow", event => { if (event.persisted) askForState(); });
+      askForState();
+    })();
+    """#
 }
