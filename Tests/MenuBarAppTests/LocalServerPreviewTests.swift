@@ -50,6 +50,65 @@ struct LocalServerPreviewTests {
             "localhost:8000/settings",
         ])
     }
+
+    // A port keeps the name its sign-in is kept under, and the page's own server keeps its https.
+    @Test func readsATypedAddressAsAPageOnThisMachine() {
+        let typed: [(text: String, on: String?, address: String)] = [
+            ("localhost:3000/settings", nil, "http://localhost:3000/settings"),
+            (" 127.0.0.1:8080 ", nil, "http://127.0.0.1:8080"), ("[::1]:5173/", nil, "http://[::1]:5173/"),
+            ("https://localhost:5173/a?tab=2", nil, "https://localhost:5173/a?tab=2"),
+            ("HTTP://LocalHost:3000/Settings", nil, "http://localhost:3000/Settings"),
+            ("localhost:3000/login?next=http://localhost:3000/", nil,
+             "http://localhost:3000/login?next=http://localhost:3000/"),
+            ("/settings", "http://localhost:5173/app?tab=2", "http://localhost:5173/settings"),
+            ("#/billing", "http://localhost:5173/app?tab=2", "http://localhost:5173/app?tab=2#/billing"),
+            ("3000", nil, "http://localhost:3000"), (":8080", nil, "http://localhost:8080"),
+            (":3000/settings", nil, "http://localhost:3000/settings"),
+            (":8000/admin/users", "http://127.0.0.1:8000/admin/", "http://127.0.0.1:8000/admin/users"),
+            ("3000", "http://[::1]:5173/", "http://[::1]:3000"),
+            ("localhost:5173/settings", "https://localhost:5173/", "https://localhost:5173/settings"),
+            (":5173", "https://localhost:5173/", "https://localhost:5173"),
+            ("8443", "https://127.0.0.1:8443/", "https://127.0.0.1:8443"),
+            ("localhost:3000", "https://localhost:5173/", "http://localhost:3000"),
+        ]
+
+        for (text, page, address) in typed {
+            #expect(LocalServerPreview.address(text, on: page.map(url))?.absoluteString == address)
+        }
+    }
+
+    @Test func readsTextThatIsNoAddressAsNothing() {
+        let typed = ["", "   ", "file://localhost/etc/passwd", "ftp://localhost/", "http://:3000", "/settings"]
+
+        #expect(typed.allSatisfy { LocalServerPreview.address($0, on: nil) == nil })
+    }
+
+    @Test func holdsAnAddressElsewhereBackOverThePage() {
+        let preview = LocalServerPreview(opening: url("http://localhost:3000/settings"))
+        preview.phase = .showing
+
+        #expect(preview.open(typed: "example.com"))
+        #expect(preview.open(typed: "example.org/docs"))
+        #expect(!preview.open(typed: "file://localhost/etc/passwd"))
+        #expect(preview.phase == .elsewhere(url("http://example.org/docs"), over: .showing))
+        #expect(preview.address == url("http://localhost:3000/settings"))
+        #expect(preview.reloadGeneration == 1)
+        preview.stay()
+        #expect(preview.phase == .showing)
+        #expect(preview.open(typed: "example.com"))
+        preview.reload()
+        #expect(preview.phase == .showing)
+        #expect(preview.reloadGeneration == 2)
+
+        preview.phase = .opening
+        #expect(preview.open(typed: "example.com"))
+        preview.finishLoading(hasPage: false)
+        preview.follow(url("http://localhost:3000/next"))
+        #expect(preview.phase == .elsewhere(url("http://example.com"), over: .noPage))
+        #expect(preview.address == url("http://localhost:3000/settings"))
+        preview.stay()
+        #expect(preview.phase == .noPage)
+    }
 }
 
 // An agent reads a pick, so it names the element and its page once, as a pick on Design does.
@@ -156,17 +215,6 @@ struct LocalServerPreviewWebTests {
         #expect(try await webView.evaluateJavaScript(cursor) as? String == "crosshair")
     }
 
-    // The page answers in its own time, so it is asked again until the answer arrives.
-    private func answer(to script: String, in webView: WKWebView,
-                        awaiting expected: String) async throws -> String? {
-        let deadline = ContinuousClock.now + .seconds(15)
-        while ContinuousClock.now < deadline,
-              (try? await webView.evaluateJavaScript(script)) as? String != expected {
-            try await Task.sleep(for: .milliseconds(30))
-        }
-        return (try? await webView.evaluateJavaScript(script)) as? String
-    }
-
     // Through the window, as a person clicks, so the page sees the click as trusted.
     private func click(_ point: CGPoint, in webView: WKWebView) throws {
         let window = try #require(webView.window)
@@ -189,7 +237,7 @@ struct LocalServerPreviewPageTests {
     private final class Pane {
         // The bar runs along the top 42 points of the window, with its controls this far across.
         enum Control: CGFloat {
-            case picker = 858, openInBrowser = 896
+            case address = 500, picker = 858, openInBrowser = 896
         }
 
         let preview: LocalServerPreview
@@ -198,6 +246,7 @@ struct LocalServerPreviewPageTests {
         let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 1000, height: 800),
                               styleMask: [.borderless], backing: .buffered, defer: false)
         private(set) var pageFocused = false
+        private(set) var addressFocused = false
         private(set) var closed = false
         private let hosting = NSHostingController(rootView: AnyView(EmptyView()))
         private let store: ProjectStore
@@ -237,6 +286,7 @@ struct LocalServerPreviewPageTests {
                                            placeholder: "Ask for a change",
                                            openPreview: { _ in false },
                                            pageFocused: focus,
+                                           addressFocused: addressFocus,
                                            onClose: { [weak self] in self?.closed = true })
                 }
             }
@@ -255,6 +305,11 @@ struct LocalServerPreviewPageTests {
                     set: { [weak self] in self?.pageFocused = $0 })
         }
 
+        private var addressFocus: Binding<Bool> {
+            Binding(get: { [weak self] in self?.addressFocused == true },
+                    set: { [weak self] in self?.addressFocused = $0 })
+        }
+
         var conversation: DesignConversationDismissal.ObserverView? {
             func find(_ view: NSView) -> DesignConversationDismissal.ObserverView? {
                 view as? DesignConversationDismissal.ObserverView ?? view.subviews.lazy.compactMap(find).first
@@ -270,6 +325,13 @@ struct LocalServerPreviewPageTests {
                     modifierFlags: [], timestamp: 0, windowNumber: window.windowNumber,
                     context: nil, eventNumber: 0, clickCount: 1, pressure: 1)))
             }
+        }
+
+        func press(_ characters: String, keyCode: UInt16) throws {
+            window.sendEvent(try #require(NSEvent.keyEvent(with: .keyDown, location: .zero,
+                modifierFlags: [], timestamp: 0, windowNumber: window.windowNumber,
+                context: nil, characters: characters, charactersIgnoringModifiers: characters,
+                isARepeat: false, keyCode: keyCode)))
         }
 
         func click(_ control: Control) throws { try click(CGPoint(x: control.rawValue, y: 779)) }
@@ -453,6 +515,55 @@ struct LocalServerPreviewPageTests {
         #expect(composer.isEditable)
         #expect(composer.string == "Refine \"Save\" at `#save` on `/settings`. ")
     }
+
+    @Test func typingAnAddressLoadsIt() async throws {
+        let server = FileServer(serving: "Next")
+        let port = try await server.start()
+        defer { server.stop() }
+        let pane = try await Pane()
+        defer { pane.close() }
+
+        try pane.click(.address)
+        #expect(await waitUntil { pane.window.firstResponder is NSTextView })
+        let field = try #require(pane.window.firstResponder as? NSTextView)
+        #expect(field.string == "http://localhost:3000/settings")
+        #expect(field.selectedRange() == NSRange(location: 0, length: field.string.utf16.count))
+        #expect(pane.addressFocused)
+        field.insertText("http://", replacementRange: field.selectedRange())
+        try pane.press("\r", keyCode: 36)
+        try await pane.settle()
+        #expect(pane.window.firstResponder === field)
+        #expect(field.string == "http://")
+        #expect(pane.addressFocused)
+        field.insertText("localhost:5173/elsewhere", replacementRange: field.selectedRange())
+        try pane.press("\u{1b}", keyCode: 53)
+        #expect(await waitUntil { !pane.addressFocused })
+        #expect(pane.preview.address.absoluteString == "http://localhost:3000/settings")
+        #expect(pane.preview.reloadGeneration == 1)
+        #expect(pane.pageFocused)
+
+        try pane.click(.address)
+        #expect(await waitUntil { pane.window.firstResponder is NSTextView })
+        let again = try #require(pane.window.firstResponder as? NSTextView)
+        again.insertText("localhost:\(port)/next", replacementRange: again.selectedRange())
+        try pane.press("\r", keyCode: 36)
+        #expect(try await answer(to: "document.body.innerText", in: pane.preview.webView, awaiting: "Next") == "Next")
+        #expect(pane.preview.address.absoluteString == "http://localhost:\(port)/next")
+        #expect(pane.pageFocused)
+        #expect(!pane.addressFocused)
+    }
+}
+
+// The page answers in its own time, so it is asked again until the answer arrives.
+@MainActor
+private func answer(to script: String, in webView: WKWebView,
+                    awaiting expected: String) async throws -> String? {
+    let deadline = ContinuousClock.now + .seconds(15)
+    while ContinuousClock.now < deadline,
+          (try? await webView.evaluateJavaScript(script)) as? String != expected {
+        try await Task.sleep(for: .milliseconds(30))
+    }
+    return (try? await webView.evaluateJavaScript(script)) as? String
 }
 
 // A server on this machine that answers every request the same way: with one file, sent
@@ -467,6 +578,7 @@ private final class FileServer: @unchecked Sendable {
         reply = Data(("HTTP/1.1 200 OK\r\nContent-Type: \(type ?? "text/html; charset=utf-8")\r\n"
             + "Content-Length: \(body.utf8.count)\r\nConnection: close\r\n\r\n" + body).utf8)
     }
+
 
     func start() async throws -> UInt16 {
         let parameters = NWParameters.tcp

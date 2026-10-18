@@ -10,6 +10,7 @@ import WebKit
 final class LocalServerPreview {
     enum Phase: Equatable {
         case opening, showing, unreachable, failed(String), noPage, stopped, left(URL)
+        indirect case elsewhere(URL, over: Phase)
     }
 
     private(set) var address: URL
@@ -28,7 +29,7 @@ final class LocalServerPreview {
     var webView: WKWebView {
         if let madeWebView { return madeWebView }
         coordinator.onAddress = { [weak self] in self?.follow($0) }
-        coordinator.onPhase = { [weak self] in self?.phase = $0 }
+        coordinator.onPhase = { [weak self] in self?.pagePhase = $0 }
         coordinator.onLoaded = { [weak self] in self?.finishLoading(hasPage: $0) }
         let webView = LocalServerPreviewWebContent.makeWebView(coordinator: coordinator)
         madeWebView = webView
@@ -40,17 +41,40 @@ final class LocalServerPreview {
         reload()
     }
 
+    func open(typed text: String) -> Bool {
+        guard let url = Self.address(text, on: address) else { return false }
+        if TranscriptLink.isLocalServer(url) {
+            open(url)
+        } else {
+            phase = .elsewhere(url, over: pagePhase)
+        }
+        return true
+    }
+
+    func stay() { phase = pagePhase }
+
+    private var pagePhase: Phase {
+        get { if case .elsewhere(_, let page) = phase { page } else { phase } }
+        set {
+            if case .elsewhere(let url, _) = phase {
+                phase = .elsewhere(url, over: newValue)
+            } else {
+                phase = newValue
+            }
+        }
+    }
+
     func reload() {
-        if phase != .showing { phase = .opening }
+        phase = pagePhase == .showing ? .showing : .opening
         reloadGeneration += 1
     }
 
     // A failed load sends the web view back to the page it had, but the address stays on
     // the one that failed, so Reload tries it again.
     func follow(_ url: URL) {
-        switch phase {
+        switch pagePhase {
         case .unreachable, .failed, .noPage: return
-        case .opening, .showing, .stopped, .left: break
+        case .opening, .showing, .stopped, .left, .elsewhere: break
         }
         if url != address { address = url }
     }
@@ -58,8 +82,8 @@ final class LocalServerPreview {
     // Nothing arrives when a load only moves within the page, so one that ends while
     // opening has left that page showing. No page means a download or another app's link.
     func finishLoading(hasPage: Bool) {
-        guard phase == .opening else { return }
-        phase = hasPage ? .showing : .noPage
+        guard pagePhase == .opening else { return }
+        pagePhase = hasPage ? .showing : .noPage
     }
 
     // Stopped at once, since letting a web view go can take a moment and its timers and
@@ -97,10 +121,43 @@ final class LocalServerPreview {
         guard let fragment = url.fragment, fragment.hasPrefix("/") else { return path }
         return path + "#" + fragment.prefix(while: { $0 != "?" })
     }
+
+    // A bare port keeps the page's host name, as a sign-in is kept under one name only.
+    // Http is the default, as a dev server seldom has a certificate.
+    static func address(_ typed: String, on page: URL?) -> URL? {
+        var text = typed.trimmed
+        let rest = text.hasPrefix(":") ? text.dropFirst() : Substring(text)
+        let head = rest.prefix(while: { !"/?#".contains($0) })
+        if let port = Int(head), (1...65_535).contains(port) {
+            let name = page.flatMap {
+                TranscriptLink.isLocalServer($0)
+                    ? URLComponents(url: $0, resolvingAgainstBaseURL: false)?.percentEncodedHost
+                    : nil
+            }
+            text = "\(name ?? "localhost"):\(port)" + rest.dropFirst(head.count)
+        }
+        let hasScheme = text.range(of: "://").map {
+            !text[..<$0.lowerBound].contains(where: { "/?#".contains($0) })
+        } ?? false
+        let written = text.hasPrefix("/") || text.hasPrefix("#")
+            ? page.flatMap { URL(string: text, relativeTo: $0)?.absoluteURL }
+            : URL(string: hasScheme ? text : "http://" + text)
+        guard let written, var parts = URLComponents(url: written, resolvingAgainstBaseURL: false)
+        else { return nil }
+        parts.scheme = parts.scheme?.lowercased()
+        parts.percentEncodedHost = parts.percentEncodedHost?.lowercased()
+        if !hasScheme, let page, page.scheme == "https", parts.url.map(server) == server(page) {
+            parts.scheme = "https"
+        }
+        guard let url = parts.url, ["http", "https"].contains(url.scheme ?? ""),
+              url.host?.isEmpty == false else { return nil }
+        return url
+    }
 }
 
 struct LocalServerPreviewPage: View {
     @Environment(SessionRunner.self) private var runner
+    @Environment(DialogPresenter.self) private var dialogs
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     let preview: LocalServerPreview
@@ -111,12 +168,19 @@ struct LocalServerPreviewPage: View {
     var runInShell: (String) -> Void = { _ in }
     var showInExplorer: (URL) -> Bool = { _ in false }
     @Binding var pageFocused: Bool
+    @Binding var addressFocused: Bool
     let onClose: () -> Void
 
     @State private var conversationMinimized = true
     @State private var conversationExpanded = false
     @State private var composerFocused = false
     @State private var selectionEnabled = false
+    @State private var editingAddress = false
+    @State private var typedAddress = ""
+    @FocusState private var addressFieldFocused: Bool
+    // A monitor sees Cmd+L before the page does, so an app that listens for keys itself
+    // cannot keep it from the bar.
+    @State private var addressMonitor = WindowKeyMonitor(.command, "l")
 
     private var picking: Bool { selectionEnabled && preview.phase == .showing }
 
@@ -146,8 +210,24 @@ struct LocalServerPreviewPage: View {
             }
         }
         .background(Theme.background)
+        .background(WindowAnchor(monitor: addressMonitor))
+        .onChange(of: dialogs.current == nil, initial: true) { _, free in
+            guard free else { addressMonitor.stop(); return }
+            addressMonitor.start {
+                editAddress()
+                return true
+            }
+        }
+        .onChange(of: addressFieldFocused) { _, focused in
+            addressFocused = focused
+            if !focused { editingAddress = false }
+        }
         // A stale flag would keep Escape from stopping the turn, so it is cleared here.
-        .onDisappear { pageFocused = false }
+        .onDisappear {
+            pageFocused = false
+            addressFocused = false
+            addressMonitor.stop()
+        }
     }
 
     private func page(in size: CGSize) -> some View {
@@ -178,21 +258,8 @@ struct LocalServerPreviewPage: View {
 
     private var bar: some View {
         HStack(spacing: 10) {
-            Image(systemName: "globe")
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(Theme.accent)
-            Text("PREVIEW")
-                .font(.mono(10, .semibold))
-                .kerning(1)
-                .lineLimit(1)
-            StatusDot()
-            Text(LocalServerPreview.label(for: preview.address))
-                .font(.mono(10.5))
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-                .truncationMode(.middle)
-                .appTooltip(preview.address.absoluteString)
-            Spacer(minLength: 10)
+            addressField
+                .frame(maxWidth: .infinity, alignment: .leading)
             if preview.phase == .showing {
                 GlyphButton(icon: selectionEnabled ? "scope" : "cursorarrow", side: 28,
                             active: selectionEnabled, tint: Theme.accent) {
@@ -216,6 +283,63 @@ struct LocalServerPreviewPage: View {
         GlyphButton(icon: icon, side: 28, tint: Theme.accent, action: action)
             .appTooltip(help)
             .accessibilityLabel(help)
+    }
+
+    // Typed text is kept apart from the address, so a navigation never overwrites it.
+    @ViewBuilder private var addressField: some View {
+        if editingAddress {
+            addressSurface {
+                TextField("Address or path", text: $typedAddress)
+                    .textFieldStyle(.plain)
+                    .font(.mono(11))
+                    .focused($addressFieldFocused)
+                    .onSubmit { if preview.open(typed: typedAddress) { leaveAddress() } }
+                    .onExitCommand(perform: leaveAddress)
+            }
+            .onAppear { $addressFieldFocused.request() }
+        } else {
+            Button(action: editAddress) {
+                addressSurface {
+                    Text(LocalServerPreview.label(for: preview.address))
+                        .font(.mono(11))
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .contentShape(RoundedRectangle(cornerRadius: 7))
+            }
+            .buttonStyle(.plain)
+            .appTooltip(preview.address.absoluteString)
+            .accessibilityLabel("Address")
+            .accessibilityValue(LocalServerPreview.label(for: preview.address))
+        }
+    }
+
+    private func addressSurface<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
+        HStack(spacing: 7) {
+            Image(systemName: "globe")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(.secondary)
+            content()
+        }
+        .padding(.horizontal, 10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(height: 28)
+        .fieldSurface(cornerRadius: 7)
+    }
+
+    private func editAddress() {
+        guard !editingAddress else { return }
+        // An expanded conversation would take Escape from the field.
+        conversationExpanded = false
+        typedAddress = preview.address.absoluteString
+        editingAddress = true
+    }
+
+    private func leaveAddress() {
+        editingAddress = false
+        guard preview.phase == .showing else { return }
+        preview.webView.window?.makeFirstResponder(preview.webView)
     }
 
     @ViewBuilder private var message: some View {
@@ -247,6 +371,24 @@ struct LocalServerPreviewPage: View {
                         title: "The app went to \(url.host ?? url.absoluteString)",
                         detail: "The preview only shows pages served from this machine.") {
                 browserButton(url)
+            }
+        case .elsewhere(let url, _):
+            PaneMessage(icon: "arrow.up.right.square",
+                        title: "The preview does not open \(url.host ?? url.absoluteString)",
+                        detail: "It only shows pages served from this machine.") {
+                // Only this address goes to the browser, so the app's page stays open.
+                HStack(spacing: 8) {
+                    ActionButton(title: "Back to the app", tone: .outlined,
+                                 icon: "arrow.uturn.backward") {
+                        preview.stay()
+                    }
+                    ActionButton(title: "Open in browser", tone: .outlined,
+                                 icon: "arrow.up.right") {
+                        preview.coordinator.openInBrowser(url)
+                        preview.stay()
+                    }
+                }
+                .padding(.top, 4)
             }
         }
     }

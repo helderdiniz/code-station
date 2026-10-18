@@ -258,6 +258,7 @@ struct SessionView: View {
     // conversation's place, with the conversation floating over it as it does over a design.
     @State private var preview: LocalServerPreview?
     @State private var previewFocused = false
+    @State private var previewAddressFocused = false
     // The address the preview was on when it closed, for the Preview seat to open again, or
     // else the app the conversation last linked.
     @State private var lastPreviewAddress: URL?
@@ -1439,7 +1440,7 @@ struct SessionView: View {
         let state = runner.state(target)
         if state.isBusy, state != .stopping, dialogs.current == nil, !menus.isOpen,
            !terminalFocused, !previewFocused, !recapOpen, !commandPalette.isPresented,
-           !findFocused {
+           !findFocused, !previewAddressFocused {
             Button("") { runner.stop(target) }
                 .keyboardShortcut(.escape, modifiers: [])
                 .opacity(0)
@@ -1450,7 +1451,7 @@ struct SessionView: View {
     // is being refreshed must not also stop the agent turn doing the refresh.
     @ViewBuilder private var recapShortcut: some View {
         if recapOpen, dialogs.current == nil, !menus.isOpen, !terminalFocused, !previewFocused,
-           !findFocused {
+           !findFocused, !previewAddressFocused {
             Button("") { closeRecap() }
                 .keyboardShortcut(.escape, modifiers: [])
                 .opacity(0)
@@ -2055,6 +2056,7 @@ struct SessionView: View {
                                       },
                                       showInExplorer: showInExplorer,
                                       pageFocused: $previewFocused,
+                                      addressFocused: $previewAddressFocused,
                                       onClose: closePreview)
             .environment(\.explorerRoots, explorerRoots(for: session))
     }
