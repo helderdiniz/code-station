@@ -16,6 +16,8 @@ final class LocalServerPreview {
     private(set) var address: URL
     private(set) var reloadGeneration = 0
     var phase = Phase.opening
+    private var pageBehind = false
+    private var pageAhead = false
 
     // Held here rather than in the view, so the page survives a switch to another tab.
     @ObservationIgnored let coordinator = LocalServerPreviewWebContent.Coordinator()
@@ -31,6 +33,10 @@ final class LocalServerPreview {
         coordinator.onAddress = { [weak self] in self?.follow($0) }
         coordinator.onPhase = { [weak self] in self?.pagePhase = $0 }
         coordinator.onLoaded = { [weak self] in self?.finishLoading(hasPage: $0) }
+        coordinator.onHistory = { [weak self] behind, ahead in
+            self?.pageBehind = behind
+            self?.pageAhead = ahead
+        }
         let webView = LocalServerPreviewWebContent.makeWebView(coordinator: coordinator)
         madeWebView = webView
         return webView
@@ -68,6 +74,37 @@ final class LocalServerPreview {
         phase = pagePhase == .showing ? .showing : .opening
         reloadGeneration += 1
     }
+
+    // A failed or held-back load never joined the history, so Back first returns to the
+    // page under its message.
+    var canGoBack: Bool {
+        switch phase {
+        case .elsewhere: true
+        case .unreachable, .failed, .left: shownPage != nil
+        case .opening, .showing, .noPage, .stopped: pageBehind
+        }
+    }
+
+    // The page the web view last showed, read from its history: its url can briefly hold
+    // the target of a redirect that is about to be turned away.
+    private var shownPage: URL? { madeWebView?.backForwardList.currentItem?.url }
+
+    var canGoForward: Bool { phase == .showing && pageAhead }
+
+    func goBack() {
+        switch phase {
+        case .elsewhere:
+            stay()
+        case .unreachable, .failed, .left:
+            guard let shownPage else { return }
+            phase = .showing
+            follow(shownPage)
+        case .opening, .showing, .noPage, .stopped:
+            madeWebView?.goBack()
+        }
+    }
+
+    func goForward() { madeWebView?.goForward() }
 
     // A failed load sends the web view back to the page it had, but the address stays on
     // the one that failed, so Reload tries it again.
@@ -178,9 +215,10 @@ struct LocalServerPreviewPage: View {
     @State private var editingAddress = false
     @State private var typedAddress = ""
     @FocusState private var addressFieldFocused: Bool
-    // A monitor sees Cmd+L before the page does, so an app that listens for keys itself
-    // cannot keep it from the bar.
+    // A monitor sees these keys before the page and before the window's Back and Forward.
     @State private var addressMonitor = WindowKeyMonitor(.command, "l")
+    @State private var backMonitor = WindowKeyMonitor(.command, "[")
+    @State private var forwardMonitor = WindowKeyMonitor(.command, "]")
 
     private var picking: Bool { selectionEnabled && preview.phase == .showing }
 
@@ -211,12 +249,10 @@ struct LocalServerPreviewPage: View {
         }
         .background(Theme.background)
         .background(WindowAnchor(monitor: addressMonitor))
+        .background(WindowAnchor(monitor: backMonitor))
+        .background(WindowAnchor(monitor: forwardMonitor))
         .onChange(of: dialogs.current == nil, initial: true) { _, free in
-            guard free else { addressMonitor.stop(); return }
-            addressMonitor.start {
-                editAddress()
-                return true
-            }
+            if free { startMonitors() } else { stopMonitors() }
         }
         .onChange(of: addressFieldFocused) { _, focused in
             addressFocused = focused
@@ -226,8 +262,31 @@ struct LocalServerPreviewPage: View {
         .onDisappear {
             pageFocused = false
             addressFocused = false
-            addressMonitor.stop()
+            stopMonitors()
         }
+    }
+
+    // Consumed even with nowhere to go, as the window's own Back would switch sessions.
+    private func startMonitors() {
+        addressMonitor.start {
+            editAddress()
+            return true
+        }
+        backMonitor.start { navigate(preview.canGoBack) { preview.goBack() } }
+        forwardMonitor.start { navigate(preview.canGoForward) { preview.goForward() } }
+    }
+
+    private func navigate(_ possible: Bool, _ go: () -> Void) -> Bool {
+        guard pageFocused || addressFocused else { return false }
+        if possible {
+            go()
+            if editingAddress { leaveAddress() }
+        }
+        return true
+    }
+
+    private func stopMonitors() {
+        for monitor in [addressMonitor, backMonitor, forwardMonitor] { monitor.stop() }
     }
 
     private func page(in size: CGSize) -> some View {
@@ -258,6 +317,12 @@ struct LocalServerPreviewPage: View {
 
     private var bar: some View {
         HStack(spacing: 10) {
+            barButton("chevron.left", help: "Go back", disabled: !preview.canGoBack) {
+                preview.goBack()
+            }
+            barButton("chevron.right", help: "Go forward", disabled: !preview.canGoForward) {
+                preview.goForward()
+            }
             addressField
                 .frame(maxWidth: .infinity, alignment: .leading)
             if preview.phase == .showing {
@@ -278,9 +343,11 @@ struct LocalServerPreviewPage: View {
         .canvasBar()
     }
 
-    private func barButton(_ icon: String, help: String,
+    private func barButton(_ icon: String, help: String, disabled: Bool = false,
                            action: @escaping () -> Void) -> some View {
-        GlyphButton(icon: icon, side: 28, tint: Theme.accent, action: action)
+        GlyphButton(icon: icon, side: 28, tint: Theme.accent.opacity(disabled ? 0.3 : 1),
+                    action: action)
+            .disabled(disabled)
             .appTooltip(help)
             .accessibilityLabel(help)
     }
@@ -485,6 +552,7 @@ struct LocalServerPreviewWebContent: NSViewRepresentable {
         webView.navigationDelegate = coordinator
         webView.uiDelegate = coordinator
         webView.isInspectable = true
+        webView.allowsBackForwardNavigationGestures = true
         coordinator.observations = [
             // The address can change during a SwiftUI update, so it is passed on later.
             webView.observe(\.url) { [weak coordinator] webView, _ in
@@ -497,6 +565,17 @@ struct LocalServerPreviewWebContent: NSViewRepresentable {
             webView.observe(\.isLoading) { [weak coordinator] webView, _ in
                 Task { @MainActor in
                     if !webView.isLoading { coordinator?.onLoaded(webView.url != nil) }
+                }
+            },
+            // Routing by script loads nothing, so history is watched rather than read.
+            webView.observe(\.canGoBack) { [weak coordinator] webView, _ in
+                Task { @MainActor in
+                    coordinator?.onHistory(webView.canGoBack, webView.canGoForward)
+                }
+            },
+            webView.observe(\.canGoForward) { [weak coordinator] webView, _ in
+                Task { @MainActor in
+                    coordinator?.onHistory(webView.canGoBack, webView.canGoForward)
                 }
             },
         ]
@@ -558,6 +637,7 @@ struct LocalServerPreviewWebContent: NSViewRepresentable {
         var onAddress: (URL) -> Void = { _ in }
         var onPhase: (LocalServerPreview.Phase) -> Void = { _ in }
         var onLoaded: (Bool) -> Void = { _ in }
+        var onHistory: (Bool, Bool) -> Void = { _, _ in }
         var onPick: (DesignElementSelection, URL, NSImage?) -> Void = { _, _, _ in }
         var openInBrowser: (URL) -> Void = { NSWorkspace.shared.open($0) }
         var saveDownload: @MainActor (String) -> URL? = { name in

@@ -109,6 +109,24 @@ struct LocalServerPreviewTests {
         preview.stay()
         #expect(preview.phase == .noPage)
     }
+
+    // Back leads out from under a message only to a page that was shown, whatever the history.
+    @Test func backAndForwardFollowThePagesHistory() {
+        let preview = LocalServerPreview(opening: url("http://localhost:3000/"))
+        _ = preview.webView
+        preview.coordinator.onHistory(true, true)
+        preview.phase = .showing
+        #expect(preview.canGoBack && preview.canGoForward)
+        preview.phase = .unreachable
+        #expect(!preview.canGoBack && !preview.canGoForward)
+
+        preview.coordinator.onHistory(false, false)
+        preview.phase = .showing
+        #expect(preview.open(typed: "example.com"))
+        #expect(preview.canGoBack && !preview.canGoForward)
+        preview.goBack()
+        #expect(preview.phase == .showing)
+    }
 }
 
 // An agent reads a pick, so it names the element and its page once, as a pick on Design does.
@@ -237,7 +255,7 @@ struct LocalServerPreviewPageTests {
     private final class Pane {
         // The bar runs along the top 42 points of the window, with its controls this far across.
         enum Control: CGFloat {
-            case address = 500, picker = 858, openInBrowser = 896
+            case back = 28, forward = 66, address = 500, picker = 858, openInBrowser = 896
         }
 
         let preview: LocalServerPreview
@@ -551,6 +569,41 @@ struct LocalServerPreviewPageTests {
         #expect(pane.preview.address.absoluteString == "http://localhost:\(port)/next")
         #expect(pane.pageFocused)
         #expect(!pane.addressFocused)
+    }
+
+    @Test func goesBackAndForwardThroughThePagesVisited() async throws {
+        let server = FileServer(serving: """
+            <button onclick="history.pushState({}, '', '/settings')" \(box(0, 0))>Settings</button>
+            """)
+        let port = try await server.start()
+        defer { server.stop() }
+        let pane = try await Pane()
+        defer { pane.close() }
+        let page = pane.preview.webView
+        let app = url("http://localhost:\(port)/")
+        pane.preview.open(app)
+        #expect(try await answer(to: "document.body.innerText", in: page, awaiting: "Settings") == "Settings")
+
+        try pane.click(page: CGPoint(x: 100, y: 40))
+        #expect(await waitUntil { pane.preview.address.path == "/settings" && pane.preview.canGoBack })
+        try pane.click(.back)
+        #expect(await waitUntil { pane.preview.address == app && pane.preview.canGoForward })
+        try pane.click(.forward)
+        #expect(await waitUntil { pane.preview.address.path == "/settings" && !pane.preview.canGoForward })
+        // As after a load to a server that is not running: the address names it, and the page
+        // that was there stays under the message.
+        pane.preview.open(url("http://localhost:5173/"))
+        pane.preview.coordinator.loadedGeneration = pane.preview.reloadGeneration
+        pane.preview.phase = .unreachable
+        try await pane.settle()
+        #expect(pane.preview.canGoBack)
+        try pane.click(.back)
+        try await pane.settle()
+
+        #expect(pane.preview.phase == .showing)
+        #expect(pane.preview.address == url("http://localhost:\(port)/settings"))
+        #expect(!pane.preview.canGoForward)
+        #expect(try await page.evaluateJavaScript("document.body.innerText") as? String == "Settings")
     }
 }
 

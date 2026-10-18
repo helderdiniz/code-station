@@ -1234,6 +1234,7 @@ struct GlyphButton: View {
     var tint: Color? = nil
     var action: (() -> Void)? = nil
 
+    @Environment(\.isEnabled) private var isEnabled
     @State private var hovering = false
 
     var body: some View {
@@ -1259,8 +1260,9 @@ struct GlyphButton: View {
     }
 
     private var fill: Color {
-        if active { return hovering ? Theme.accentFill.opacity(0.86) : Theme.accentFill }
-        return hovering ? Theme.field : .clear
+        let lit = hovering && isEnabled
+        if active { return lit ? Theme.accentFill.opacity(0.86) : Theme.accentFill }
+        return lit ? Theme.field : .clear
     }
 }
 
