@@ -215,6 +215,7 @@ final class LocalServerPreviewTabs {
             selectedID = page.id
         } else {
             let page = LocalServerPreview(opening: url, dataStore: dataStore)
+            page.coordinator.onNewPage = { [weak self] in self?.open($0, inNewPage: true) }
             pages.append(page)
             selectedID = page.id
         }
@@ -250,6 +251,7 @@ final class LocalServerPreviewTabs {
         selectedID = nil
         isOpen = false
     }
+
 }
 
 struct LocalServerPreviewPage: View {
@@ -582,8 +584,6 @@ struct LocalServerPreviewPage: View {
                 .padding(.horizontal, 14)
                 .padding(.vertical, 7)
             }
-            // A page opened from + or a Command-click joins the end of the strip, so the strip
-            // follows the page on screen.
             .scrollPosition(id: $scrolledPageID, anchor: .center)
             .onChange(of: previews.selectedID, initial: true) { _, selected in
                 scrolledPageID = selected
@@ -791,6 +791,7 @@ struct LocalServerPreviewWebContent: NSViewRepresentable {
         var onPhase: (LocalServerPreview.Phase) -> Void = { _ in }
         var onLoaded: (Bool) -> Void = { _ in }
         var onHistory: (Bool, Bool) -> Void = { _, _ in }
+        var onNewPage: (URL) -> Void = { _ in }
         var onPick: (DesignElementSelection, URL, NSImage?) -> Void = { _, _, _ in }
         var openInBrowser: (URL) -> Void = { NSWorkspace.shared.open($0) }
         var saveDownload: @MainActor (String) -> URL? = { name in
@@ -854,6 +855,14 @@ struct LocalServerPreviewWebContent: NSViewRepresentable {
                TranscriptLink.isLocalServer(url) || ["blob", "data"].contains(scheme) {
                 decisionHandler(holdsBackFiles(webView) && action.buttonNumber == 0
                                 ? .cancel : .download)
+                return
+            }
+            // WebKit blocks a new-window link the page clicks by itself, but not a
+            // Command-click the page makes, so that counts only with a mouse button.
+            if TranscriptLink.isLocalServer(url), action.navigationType == .linkActivated,
+               action.targetFrame == nil || (mainFrame && action.modifierFlags.contains(.command)) {
+                if action.targetFrame == nil || action.buttonNumber > 0 { onNewPage(url) }
+                decisionHandler(.cancel)
                 return
             }
             if action.targetFrame != nil, !mainFrame {
@@ -962,6 +971,19 @@ struct LocalServerPreviewWebContent: NSViewRepresentable {
             // fails when its destination exists.
             try? FileManager.default.removeItem(at: destination)
             completionHandler(destination)
+        }
+
+        // WebKit's configuration is not used, since it would share this page's handlers.
+        func webView(_ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration,
+                     for action: WKNavigationAction,
+                     windowFeatures: WKWindowFeatures) -> WKWebView? {
+            guard let url = action.request.url else { return nil }
+            if TranscriptLink.isLocalServer(url) {
+                onNewPage(url)
+            } else if ["http", "https", "mailto"].contains(url.scheme?.lowercased() ?? "") {
+                openInBrowser(url)
+            }
+            return nil
         }
 
         // Alerts are left to WebKit, since Code Station's dialog may already be in use.

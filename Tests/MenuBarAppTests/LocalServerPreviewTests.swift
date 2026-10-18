@@ -424,10 +424,10 @@ struct LocalServerPreviewPageTests {
 
         var draft: SessionComposerStore.Draft { runner.composer.draft(session.id) }
 
-        func click(_ point: CGPoint) throws {
+        func click(_ point: CGPoint, holding modifiers: NSEvent.ModifierFlags = []) throws {
             for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
                 window.sendEvent(try #require(NSEvent.mouseEvent(with: type, location: point,
-                    modifierFlags: [], timestamp: 0, windowNumber: window.windowNumber,
+                    modifierFlags: modifiers, timestamp: 0, windowNumber: window.windowNumber,
                     context: nil, eventNumber: 0, clickCount: 1, pressure: 1)))
             }
         }
@@ -784,6 +784,46 @@ struct LocalServerPreviewPageTests {
         #expect(opened.map(\.absoluteString) == ["http://localhost:\(port)/"])
         #expect(pane.previews.selected === pane.preview)
         #expect(!pane.closed)
+    }
+
+    // A page the app opens beside itself at a person's press is another page, or goes to the
+    // browser when it is elsewhere, and the page it came from stays. WebKit stops the rest.
+    @Test func aPageTheAppOpensBesideItselfOpensAsAnotherPage() async throws {
+        let server = FileServer(serving: "<p>Page</p>")
+        let port = try await server.start()
+        defer { server.stop() }
+        let pane = try await Pane(app: """
+            <a id="docs" href="/docs" target="_blank" \(box(0, 0))>Docs</a>
+            <button onclick="document.getElementById('docs').click()" \(box(0, 100))>Docs</button>
+            <button onclick="window.open('/report')" \(box(0, 200))>Report</button>
+            <a href="/billing" \(box(0, 300))>Billing</a>
+            <button onclick="window.open('https://example.com/docs')" \(box(0, 400))>Elsewhere</button>
+            <a id="later" href="/later" target="_blank"></a>
+            <script>setTimeout(() => document.getElementById("later").click()); window.open("/popup");</script>
+            """, at: url("http://localhost:\(port)/settings"))
+        defer { pane.close() }
+        var opened: [URL] = []
+        pane.preview.coordinator.openInBrowser = { opened.append($0) }
+        let page = pane.preview.webView
+        try await pane.settle()
+        #expect(pane.previews.pages.count == 1)
+
+        let links: [(y: CGFloat, path: String, holding: NSEvent.ModifierFlags)] = [
+            (40, "/docs", []), (140, "/docs", []), (240, "/report", []), (340, "/billing", .command),
+        ]
+        for link in links {
+            let pages = pane.previews.pages.count
+            try pane.click(page.convert(CGPoint(x: 100, y: link.y), to: nil), holding: link.holding)
+            #expect(await waitUntil { pane.previews.pages.count == pages + 1 })
+            #expect(pane.previews.selected?.address.path == link.path)
+            pane.previews.select(pane.preview)
+            try await pane.settle()
+        }
+        try pane.click(page: CGPoint(x: 100, y: 440))
+
+        #expect(await waitUntil { opened == [url("https://example.com/docs")] })
+        #expect(pane.previews.pages.count == 5)
+        #expect(pane.preview.address.path == "/settings")
     }
 }
 
