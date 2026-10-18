@@ -490,6 +490,68 @@
       color: var(--primary-text);
       font-size: 19px;
     }
+    #attach {
+      display: flex;
+      width: 40px;
+      height: 47px;
+      flex: none;
+      align-items: center;
+      justify-content: center;
+      padding: 0;
+      border: 0;
+      background: none;
+      color: var(--muted);
+    }
+    #attach svg { width: 22px; height: 22px; }
+    /* Files waiting to go with the next prompt. They sit on the composer's own surface so
+       they read as part of what is being written, not as part of the transcript. */
+    #pending {
+      display: flex;
+      flex: none;
+      gap: 8px;
+      overflow-x: auto;
+      padding: 12px 16px 0;
+      border-top: 1px solid var(--hairline);
+      background: var(--card);
+    }
+    #pending + #composer { border-top: 0; }
+    .pending-file {
+      display: flex;
+      max-width: 220px;
+      flex: none;
+      align-items: center;
+      gap: 7px;
+      padding: 4px 4px 4px 5px;
+      border: 1px solid var(--hairline-strong);
+      border-radius: 10px;
+      background: var(--field);
+      font: 12px var(--mono);
+    }
+    .pending-file img, .pending-file .file-mark {
+      width: 30px;
+      height: 30px;
+      flex: none;
+      border-radius: 6px;
+      object-fit: cover;
+    }
+    .pending-file .file-mark {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: var(--sunken);
+      color: var(--muted);
+      font-size: 10px;
+    }
+    .pending-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .pending-file button {
+      width: 30px;
+      height: 30px;
+      flex: none;
+      border: 0;
+      background: none;
+      color: var(--muted);
+      font-size: 15px;
+    }
     button:disabled { opacity: .4; cursor: default; }
 
     /* What catches the tap on the dimmed screen behind a sheet. Whatever is under here is
@@ -729,7 +791,7 @@
     #design-canvas.wide { justify-content: flex-start; }
     .design-footer { display: flex; gap: 12px; justify-content: space-between; align-items: center; padding: 12px 16px max(12px, env(safe-area-inset-bottom)); font-size: 13px; }
     .design-footer p { color: var(--muted); }
-    body.design-open #transcript, body.design-open #strip, body.design-open #queued, body.design-open #composer, body.design-open #bar, body.design-open #conversation-target { display: none; }
+    body.design-open #transcript, body.design-open #strip, body.design-open #queued, body.design-open #pending, body.design-open #composer, body.design-open #bar, body.design-open #conversation-target { display: none; }
     body.design-expanded #session > header, body.design-expanded #session-tabs, body.design-expanded .design-footer { display: none; }
     #conversation-target { padding: 8px 20px; color: var(--green); font-size: 12px; }
     @media (prefers-reduced-motion: reduce) {
@@ -737,7 +799,7 @@
     }
     @media (min-width: 621px) {
       .sheet { width: 480px; left: 50%; top: 50%; bottom: auto; transform: translate(-50%, -50%); border: 1px solid var(--hairline-strong); border-radius: 18px; max-height: 88dvh; animation: none; padding: 26px; }
-      #transcript, #composer, #queued { padding-left: max(24px, calc((100% - 712px) / 2)); padding-right: max(24px, calc((100% - 712px) / 2)); }
+      #transcript, #pending, #composer, #queued { padding-left: max(24px, calc((100% - 712px) / 2)); padding-right: max(24px, calc((100% - 712px) / 2)); }
     }
     @media (max-width: 620px) {
       #directory-scroll { padding: 27px 18px max(24px, env(safe-area-inset-bottom)); }
@@ -822,7 +884,15 @@
       <div id="queued-list" class="queued-list"></div>
     </section>
     <button id="bar" type="button" hidden></button>
+    <div id="pending" aria-label="Files to send" hidden></div>
     <form id="composer">
+      <button id="attach" type="button" aria-label="Attach files">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
+             stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M21 11.5l-8.5 8.5a5.5 5.5 0 0 1-7.8-7.8l9-9a3.7 3.7 0 0 1 5.2 5.2l-9 9a1.8 1.8 0 0 1-2.6-2.6l8.3-8.3"/>
+        </svg>
+      </button>
+      <input id="file-input" type="file" multiple hidden>
       <textarea id="prompt" maxlength="100000" placeholder="Nudge the session…"
                 aria-label="Nudge the session"></textarea>
       <button id="send" type="submit" aria-label="Send prompt">↑</button>
@@ -864,6 +934,9 @@
       const composer = find('composer');
       const prompt = find('prompt');
       const sendButton = find('send');
+      const attachButton = find('attach');
+      const fileInput = find('file-input');
+      const pendingRow = find('pending');
       const toast = find('toast');
       let socket;
       let authenticated = false;
@@ -938,6 +1011,96 @@
         toastTimer = setTimeout(() => toast.classList.remove('visible'), 4500);
       };
 
+      // Every file rides inside one WebSocket message as base64, and the Mac refuses a
+      // message over 25 MB. Photos are shrunk first, since a full-size phone photo is
+      // several megabytes and the agent reads it no better than a 2000-pixel copy.
+      const draftFiles = new Map();
+      const maximumUploadBytes = 18 * 1024 * 1024;
+      const largestImageSide = 2000;
+      let files = [];
+      let preparing = 0;
+
+      const shrinkImage = async file => {
+        if (!/^image\/(jpeg|png|webp|heic|heif)$/.test(file.type)) return file;
+        try {
+          const bitmap = await createImageBitmap(file);
+          const scale = Math.min(1, largestImageSide / Math.max(bitmap.width, bitmap.height));
+          // HEIC is always converted, since the agents cannot read it.
+          if (scale === 1 && file.size < 1.5 * 1024 * 1024 && !/hei[cf]$/.test(file.type)) {
+            bitmap.close();
+            return file;
+          }
+          const canvas = document.createElement('canvas');
+          canvas.width = Math.round(bitmap.width * scale);
+          canvas.height = Math.round(bitmap.height * scale);
+          canvas.getContext('2d').drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+          bitmap.close();
+          const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', .85));
+          if (!blob) return file;
+          const name = `${file.name.replace(/\.[^.]+$/, '') || 'photo'}.jpg`;
+          return new File([blob], name, { type: 'image/jpeg' });
+        } catch {
+          return file;
+        }
+      };
+
+      const base64 = blob => new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result).split(',')[1] || '');
+        reader.onerror = () => reject(reader.error);
+        reader.readAsDataURL(blob);
+      });
+
+      const addFiles = async picked => {
+        if (!picked.length) return;
+        preparing += 1;
+        try {
+          for (const original of picked) {
+            const file = await shrinkImage(original);
+            const total = files.reduce((sum, item) => sum + item.size, 0) + file.size;
+            if (total > maximumUploadBytes) {
+              showError(`${original.name || 'That file'} is too large to send. Files can add up to 18 MB.`);
+              continue;
+            }
+            files.push({
+              name: file.name || 'pasted-file',
+              size: file.size,
+              data: await base64(file),
+              preview: file.type.startsWith('image/') ? URL.createObjectURL(file) : undefined,
+            });
+            renderFiles();
+          }
+        } catch {
+          showError('That file could not be read.');
+        } finally {
+          preparing -= 1;
+        }
+      };
+
+      const renderFiles = () => {
+        pendingRow.replaceChildren(...files.map(file => {
+          const chip = element('div', 'pending-file');
+          if (file.preview) {
+            const image = element('img');
+            image.src = file.preview;
+            image.alt = '';
+            chip.append(image);
+          } else {
+            chip.append(element('span', 'file-mark', (file.name.split('.').pop() || 'file').slice(0, 4).toUpperCase()));
+          }
+          chip.append(element('span', 'pending-name', file.name));
+          const remove = button('', '×', () => {
+            if (file.preview) URL.revokeObjectURL(file.preview);
+            files = files.filter(item => item !== file);
+            renderFiles();
+          });
+          remove.setAttribute('aria-label', `Remove ${file.name}`);
+          chip.append(remove);
+          return chip;
+        }));
+        pendingRow.hidden = !files.length;
+      };
+
       const send = command => {
         if (!authenticated || !socket || socket.readyState !== WebSocket.OPEN) {
           showError('The Mac is not connected.');
@@ -972,6 +1135,7 @@
             : 'Your sessions and draft are still here. Keep your Mac awake and both devices on the same Wi-Fi.';
         find('retry').hidden = pairingEnded;
         sendButton.disabled = !live;
+        attachButton.disabled = !live;
         stop.disabled = !live;
         back.disabled = !live;
         find('discuss-design').disabled = !live;
@@ -1555,10 +1719,15 @@
           renderDesign();
           showDesign(false);
         }
-        if (activeSessionID) drafts.set(`${activeSessionID}:${conversation}`, prompt.value);
+        if (activeSessionID) {
+          drafts.set(`${activeSessionID}:${conversation}`, prompt.value);
+          draftFiles.set(`${activeSessionID}:${conversation}`, files);
+        }
         activeSessionID = snapshot.sessionID;
         conversation = snapshot.conversation || 'main';
         prompt.value = drafts.get(`${activeSessionID}:${conversation}`) || '';
+        files = draftFiles.get(`${activeSessionID}:${conversation}`) || [];
+        renderFiles();
         prompt.style.height = '';
         find('conversation-tab').textContent = conversation === 'design' ? 'Conversation (back to main)' : 'Conversation';
         find('conversation-target').hidden = conversation !== 'design';
@@ -2028,11 +2197,28 @@
       composer.addEventListener('submit', event => {
         event.preventDefault();
         const text = prompt.value.trim();
-        if (!text) return;
-        if (send({ type: 'sendPrompt', prompt: text })) {
+        if (preparing) { showError('Still reading the attached files.'); return; }
+        if (!text && !files.length) return;
+        const attachments = files.map(({ name, data }) => ({ name, data }));
+        if (send({ type: 'sendPrompt', prompt: text, attachments })) {
           prompt.value = '';
           prompt.style.height = '';
+          files.forEach(file => file.preview && URL.revokeObjectURL(file.preview));
+          files = [];
+          renderFiles();
         }
+      });
+      attachButton.addEventListener('click', () => fileInput.click());
+      fileInput.addEventListener('change', () => {
+        addFiles([...fileInput.files]);
+        fileInput.value = '';
+      });
+      // A screenshot copied on the phone arrives as a file on the paste, with no text.
+      prompt.addEventListener('paste', event => {
+        const pasted = [...(event.clipboardData?.files || [])];
+        if (!pasted.length) return;
+        event.preventDefault();
+        addFiles(pasted);
       });
       prompt.addEventListener('input', () => {
         prompt.style.height = 'auto';

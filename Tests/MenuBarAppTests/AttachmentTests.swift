@@ -165,6 +165,31 @@ struct AttachmentTests {
         #expect(try String(contentsOf: attachment.url, encoding: .utf8) == "one\ntwo 💡")
     }
 
+    @Test func keepsTheNameOfAFileSentFromThePhone() throws {
+        let attachment = try #require(Attachments.fromUpload(name: "screen shot.jpg", data: Data([1, 2, 3])))
+        defer { try? FileManager.default.removeItem(at: attachment.url.deletingLastPathComponent()) }
+
+        #expect(attachment.name == "screen shot.jpg")
+        #expect(attachment.url.deletingLastPathComponent().deletingLastPathComponent() == Attachments.folder)
+        #expect(try Data(contentsOf: attachment.url) == Data([1, 2, 3]))
+    }
+
+    // The name comes from the phone, so it must not be able to pick where the file lands.
+    @Test func keepsAFileFromThePhoneInsideItsOwnFolder() throws {
+        let climbing = try #require(Attachments.fromUpload(name: "../../evil.sh", data: Data()))
+        let hidden = try #require(Attachments.fromUpload(name: "..", data: Data()))
+        defer {
+            for attachment in [climbing, hidden] {
+                try? FileManager.default.removeItem(at: attachment.url.deletingLastPathComponent())
+            }
+        }
+
+        #expect(climbing.name == "evil.sh")
+        #expect(climbing.url.deletingLastPathComponent().deletingLastPathComponent() == Attachments.folder)
+        #expect(!hidden.name.hasPrefix("."))
+        #expect(hidden.url.deletingLastPathComponent().deletingLastPathComponent() == Attachments.folder)
+    }
+
     @Test func onlyTreatsPastesAboveTheCharacterLimitAsTooLong() {
         let allowed = String(repeating: "💡", count: ComposerPaste.characterLimit)
 

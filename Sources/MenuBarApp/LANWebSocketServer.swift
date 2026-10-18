@@ -31,7 +31,9 @@ struct WebSocketFrameDecoder {
     private var buffer: [UInt8] = []
     private let maximumMessageSize: Int
 
-    init(maximumMessageSize: Int = 1024 * 1024) {
+    // Files from the phone travel inside a prompt as base64, so a message has to fit a few
+    // photos. The phone keeps its uploads under 18 MB, which is 24 MB once encoded.
+    init(maximumMessageSize: Int = 25 * 1024 * 1024) {
         self.maximumMessageSize = maximumMessageSize
     }
 

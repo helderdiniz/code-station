@@ -19,11 +19,19 @@ struct RemoteCommand: Decodable, Equatable {
 
     enum Conversation: String, Codable { case main, design }
 
+    // A file picked or pasted on the phone. The browser cannot hand over a path, so the
+    // bytes travel inside the command as base64 and are written to disk on the Mac.
+    struct Upload: Decodable, Equatable {
+        let name: String
+        let data: String
+    }
+
     var conversation: Conversation?
     let type: Kind
     var version: Int?
     var secret: String?
     var prompt: String?
+    var attachments: [Upload]?
     var requestID: String?
     var answer: Answer?
     var answers: [String: String]?

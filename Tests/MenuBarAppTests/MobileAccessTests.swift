@@ -188,6 +188,15 @@ struct MobileAccessTests {
         #expect(prompt == RemoteCommand(type: .sendPrompt, prompt: "Run the tests"))
     }
 
+    @Test func decodesFilesSentWithAPrompt() throws {
+        let prompt = try JSONDecoder().decode(
+            RemoteCommand.self,
+            from: Data(#"{"type":"sendPrompt","prompt":"","attachments":[{"name":"a.jpg","data":"AQID"}]}"#.utf8))
+
+        #expect(prompt.attachments == [RemoteCommand.Upload(name: "a.jpg", data: "AQID")])
+        #expect(Data(base64Encoded: prompt.attachments?.first?.data ?? "") == Data([1, 2, 3]))
+    }
+
     @Test func decodesTheCommandsThatMoveAroundTheApp() throws {
         let sessionID = UUID()
         let projectID = UUID()

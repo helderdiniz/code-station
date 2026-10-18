@@ -360,13 +360,24 @@ final class MobileAccessController {
         case .sendPrompt:
             guard let sessionID = openSession(of: connectionID, command: command) else { return }
             let prompt = command.prompt?.trimmed ?? ""
-            guard !prompt.isEmpty, prompt.count <= 100_000 else {
-                server?.send(Self.error(prompt.isEmpty ? "Write a prompt first."
-                                                       : "That prompt is too long."),
+            let uploads = command.attachments ?? []
+            guard !prompt.isEmpty || !uploads.isEmpty, prompt.count <= 100_000 else {
+                server?.send(Self.error(prompt.count > 100_000 ? "That prompt is too long."
+                                                               : "Write a prompt first."),
                              to: connectionID)
                 return
             }
-            runner.send(prompt, sessionID: sessionID, store: store)
+            var attachments: [Attachment] = []
+            for upload in uploads {
+                guard let data = Data(base64Encoded: upload.data),
+                      let attachment = Attachments.fromUpload(name: upload.name, data: data) else {
+                    server?.send(Self.error("\(upload.name) could not be saved on the Mac."),
+                                 to: connectionID)
+                    return
+                }
+                attachments.append(attachment)
+            }
+            runner.send(prompt, attachments: attachments, sessionID: sessionID, store: store)
         case .stopTurn:
             guard let sessionID = openSession(of: connectionID, command: command) else { return }
             runner.stop(sessionID)

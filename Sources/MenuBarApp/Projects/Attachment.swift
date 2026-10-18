@@ -52,6 +52,26 @@ enum Attachments {
         return Attachment(url: url)
     }
 
+    // A file sent from the paired phone. It keeps the name it had there, since that is what
+    // the agent and the transcript show, so each one gets a folder of its own rather than a
+    // name that could clash with another upload. Only the last part of the name is kept, so
+    // a crafted name cannot write outside that folder.
+    static func fromUpload(name: String, data: Data) -> Attachment? {
+        let cleaned = (name as NSString).lastPathComponent
+            .replacingOccurrences(of: ":", with: "-")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let safeName = cleaned.isEmpty || cleaned.hasPrefix(".") ? "phone-upload\(cleaned)" : cleaned
+        let directory = folder.appendingPathComponent("phone-\(UUID().uuidString.prefix(8))")
+        let url = directory.appendingPathComponent(safeName)
+        do {
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            try data.write(to: url, options: .atomic)
+        } catch {
+            return nil
+        }
+        return Attachment(url: url)
+    }
+
     // An image arrives as whatever format the app that copied it used, so it is re-encoded
     // as PNG under a name of our own.
     static func fromImage(_ image: NSImage, prefix: String = "pasted") -> Attachment? {
