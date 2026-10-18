@@ -321,6 +321,7 @@ private nonisolated func cliVersion(at path: String, searchPath: String) async -
 struct AgentSettingsView: View {
     @Environment(SessionRunner.self) private var runner
     @Environment(AppSettings.self) private var appSettings
+    @Environment(AccountUsageMonitor.self) private var usageMonitor: AccountUsageMonitor?
     @State private var selectedAgent: AgentKind
     @State private var claude = ClaudeAgentInfo()
     @State private var codex = CodexAgentInfo()
@@ -447,14 +448,21 @@ struct AgentSettingsView: View {
                 account: AgentAccount.claudeCode(claude).summary,
                 signedIn: claude.account != nil,
                 plan: claude.account?.plan,
-                usage: claudeUsage,
-                usageCheckedAt: runner.rateLimitsUpdatedAt[.claudeCode],
-                usageLoading: false,
-                usageEmptyMessage: "Run a Claude Code turn to receive its account usage here.",
-                usageNote: "Claude Code sends account limits while a turn is running. This is the latest report from this app.",
+                usage: usageMonitor?.usage[.claudeCode]?.windows
+                    ?? AccountUsageMonitor.liveWindows(runner.rateLimits[.claudeCode] ?? [:]),
+                usageCheckedAt: usageMonitor?.usage[.claudeCode]?.checkedAt
+                    ?? runner.rateLimitsUpdatedAt[.claudeCode],
+                usageLoading: usageMonitor?.usage[.claudeCode] == nil
+                    && usageMonitor?.refreshing.contains(.claudeCode) == true,
+                usageEmptyMessage: usageMonitor?.problems[.claudeCode]
+                    ?? "Sign in to Claude Code to view account usage.",
+                usageNote: "The same limits Claude Code's /usage shows, read from your Claude account and moved on by each turn.",
                 fileTitle: "Claude Code settings",
                 configFile: ".claude/settings.json",
-                refresh: { claude.refresh() })
+                refresh: {
+                    claude.refresh()
+                    Task { await usageMonitor?.refresh(.claudeCode) }
+                })
         case .codex:
             AgentProfile(
                 heading: "CODEX",
@@ -463,8 +471,8 @@ struct AgentSettingsView: View {
                 account: AgentAccount.codex(codex).summary,
                 signedIn: codex.account != nil,
                 plan: codex.account?.plan,
-                usage: codex.usage?.windows ?? [],
-                usageCheckedAt: codex.usage?.checkedAt,
+                usage: codex.usage?.windows ?? usageMonitor?.usage[.codex]?.windows ?? [],
+                usageCheckedAt: codex.usage?.checkedAt ?? usageMonitor?.usage[.codex]?.checkedAt,
                 usageLoading: codex.isRefreshingUsage,
                 usageEmptyMessage: codex.account == nil
                     ? "Sign in to Codex to view account usage."
@@ -485,15 +493,18 @@ struct AgentSettingsView: View {
                     ?? (copilot.isCheckingAccount ? "Checking…" : nil),
                 signedIn: copilot.account != nil,
                 plan: nil,
-                usage: [],
-                usageCheckedAt: nil,
-                usageLoading: false,
-                usageEmptyMessage: "Premium request use is shown on github.com under your Copilot settings.",
-                usageNote: "Copilot does not report account usage to the app.",
+                usage: usageMonitor?.usage[.copilot]?.windows ?? [],
+                usageCheckedAt: usageMonitor?.usage[.copilot]?.checkedAt,
+                usageLoading: usageMonitor?.usage[.copilot] == nil
+                    && usageMonitor?.refreshing.contains(.copilot) == true,
+                usageEmptyMessage: usageMonitor?.problems[.copilot]
+                    ?? "Sign in with the GitHub CLI (gh auth login) to view Copilot's allowances.",
+                usageNote: "Copilot's monthly allowances, read from GitHub with the gh CLI's login.",
                 fileTitle: "Copilot config",
                 configFile: ".copilot/config.json",
                 refresh: {
                     copilot.refresh()
+                    Task { await usageMonitor?.refresh(.copilot) }
                     Task { await runner.refreshDiscoveredModels() }
                 })
         }
@@ -683,17 +694,6 @@ struct AgentSettingsView: View {
 
     // MARK: - Shared pieces
 
-    private var claudeUsage: [AccountUsageWindow] {
-        (runner.rateLimits[.claudeCode] ?? [:]).values.compactMap { limit in
-            guard let utilization = limit.utilization else { return nil }
-            return AccountUsageWindow(id: limit.kind,
-                                      title: limit.title,
-                                      usedPercent: Int((utilization * 100).rounded()),
-                                      resetsAt: limit.resetsAt)
-        }
-        .sorted { $0.title < $1.title }
-    }
-
     private func accountUsage(_ profile: AgentProfile) -> some View {
         ChoiceBlock("CURRENT USAGE", note: profile.usageNote) {
             SettingsCard {
@@ -741,7 +741,7 @@ struct AgentSettingsView: View {
                     .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(.secondary)
             }
-            Meter(fraction: window.usedFraction, colour: usageColor(for: window), height: 5)
+            Meter(fraction: window.usedFraction, colour: window.colour, height: 5)
             if let resetsAt = window.resetsAt {
                 Text("Resets \(resetsAt.formatted(date: .abbreviated, time: .shortened))")
                     .font(.system(size: 11))
@@ -751,12 +751,6 @@ struct AgentSettingsView: View {
         .padding(.horizontal, 14)
         .padding(.vertical, 12)
         .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    private func usageColor(for window: AccountUsageWindow) -> Color {
-        if window.usedPercent >= 90 { return Theme.deletion }
-        if window.usedPercent >= 75 { return Theme.attention }
-        return Theme.dotOn
     }
 
     private func statusRow(installed: Bool, signedIn: Bool, refresh: @escaping () -> Void) -> some View {
