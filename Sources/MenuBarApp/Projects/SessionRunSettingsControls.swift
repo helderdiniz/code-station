@@ -32,6 +32,7 @@ struct SessionRunSettingsControls: View {
                 case .codex: codexAccessControl(agent: agent)
                 case .copilot: copilotAccessControl(agent: agent)
                 }
+                AccountUsagePill(agent: agent)
                 if showsDesignAmbition { ambitionControl }
             }
             .task(id: agent) { await runner.discoverModels(for: agent) }
@@ -325,6 +326,85 @@ private struct ModelPill: View {
                 MenuChevron(size: 8)
             }
         }
+    }
+}
+
+// MARK: - Account usage
+
+// How much of the account's limits has gone, beside the settings it is spent by. The
+// pill carries the window closest to stopping work; the hint carries every window and
+// when each one resets. A click reads them again.
+struct AccountUsagePill: View {
+    let agent: AgentKind
+
+    @Environment(AccountUsageMonitor.self) private var monitor: AccountUsageMonitor?
+
+    var body: some View {
+        if let monitor, monitor.supports(agent) {
+            let usage = monitor.usage[agent]
+            let headline = usage?.headline
+            Button {
+                Task { await monitor.refresh(agent) }
+            } label: {
+                BarPill {
+                    HStack(spacing: 6) {
+                        Image(systemName: "gauge.with.dots.needle.33percent")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(headline?.colour ?? .secondary)
+                        if let headline {
+                            Text("\(headline.usedPercent)%")
+                                .font(.system(size: 12, weight: .semibold))
+                                .monospacedDigit()
+                            Meter(fraction: headline.usedFraction, colour: headline.colour, height: 4)
+                                .frame(width: 28)
+                        } else {
+                            Text("—")
+                                .font(.system(size: 12, weight: .semibold))
+                                .foregroundStyle(.tertiary)
+                        }
+                    }
+                    .opacity(monitor.refreshing.contains(agent) ? 0.6 : 1)
+                }
+                .contentShape(Capsule())
+            }
+            .buttonStyle(.plain)
+            .appTooltip { tooltip(usage: usage, problem: monitor.problems[agent]) }
+            .accessibilityLabel(headline.map { "\(agent.title) usage: \($0.title), \($0.usedPercent)% used" }
+                                ?? "\(agent.title) usage")
+        }
+    }
+
+    private func tooltip(usage: AccountUsage?, problem: String?) -> Tooltip {
+        // A hint is narrow and its labels are set in capitals, so each row is cut down to
+        // the window's short name, the share used and the time it resets.
+        let rows = (usage?.windows ?? []).map { window in
+            Tooltip.Row(label: window.shortTitle ?? window.title, value: Self.describe(window))
+        }
+        var notes: [String] = []
+        if let problem { notes.append(problem) }
+        if let checkedAt = usage?.checkedAt {
+            if !rows.isEmpty { notes.append("Each window resets at the time shown.") }
+            notes.append("Updated \(checkedAt.formatted(.relative(presentation: .named))). Click to check now.")
+        } else if problem == nil {
+            notes.append("Checking…")
+        }
+        return Tooltip(title: "\(agent.title) usage",
+                       note: notes.isEmpty ? nil : notes.joined(separator: "\n"),
+                       rows: rows)
+    }
+
+    private static func describe(_ window: AccountUsageWindow) -> String {
+        guard let resetsAt = window.resetsAt else { return "\(window.usedPercent)%" }
+        // Within the week a weekday says which day; past it, the date does.
+        let time = resetsAt.formatted(date: .omitted, time: .shortened)
+        let when = if Calendar.current.isDateInToday(resetsAt) {
+            time
+        } else if resetsAt.timeIntervalSinceNow < 6 * 86_400 {
+            "\(resetsAt.formatted(.dateTime.weekday(.abbreviated))) \(time)"
+        } else {
+            resetsAt.formatted(.dateTime.day().month(.abbreviated))
+        }
+        return "\(window.usedPercent)% · \(when)"
     }
 }
 
