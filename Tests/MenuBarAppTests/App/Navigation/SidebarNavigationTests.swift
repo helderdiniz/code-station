@@ -34,17 +34,17 @@ struct SidebarNavigationTests {
         #expect(!Preferences.collapsedSidebarGroups().contains(.projects))
         try harness.snapshot("expanded-light")
 
-        try harness.click(x: 289, yFromTop: 179)
+        try harness.click(x: 25, yFromTop: 179)
         await harness.settle()
         #expect(harness.store.selection == .session(session.id))
         #expect(Preferences.sidebarExpansion()[project.id] == false)
         try harness.snapshot("collapsed-light")
 
-        try harness.click(x: 289, yFromTop: 179)
+        try harness.click(x: 25, yFromTop: 179)
         await harness.settle()
         #expect(harness.store.selection == .session(session.id))
         #expect(Preferences.sidebarExpansion()[project.id] == true)
-        try harness.click(x: 289, yFromTop: 179)
+        try harness.click(x: 25, yFromTop: 179)
         await harness.settle()
 
         harness.store.append(ChatMessage(role: .assistant, text: "Streaming continues"), to: session.id)

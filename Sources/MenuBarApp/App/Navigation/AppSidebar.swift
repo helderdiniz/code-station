@@ -1295,6 +1295,8 @@ private struct SidebarRenderedSessionsKey: PreferenceKey {
 }
 
 private struct SidebarDisclosure: View {
+    static let width: CGFloat = 14
+
     let name: String
     let expanded: Bool
     let action: () -> Void
@@ -1305,7 +1307,7 @@ private struct SidebarDisclosure: View {
                 .font(.system(size: 9, weight: .semibold))
                 .foregroundStyle(.secondary)
                 .rotationEffect(.degrees(expanded ? 90 : 0))
-                .frame(width: 22, height: 28)
+                .frame(width: SidebarDisclosure.width, height: 28)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -1432,9 +1434,19 @@ private struct WorkspaceHeaderRow: View {
     @State private var draft = ""
     @State private var hovering = false
     @FocusState private var focused: Bool
+    @FocusState private var rowFocused: Bool
+    @FocusState private var actionFocused: Bool
+
+    private var showsNewSession: Bool { !isRenaming && (hovering || rowFocused || actionFocused) }
 
     var body: some View {
         TreeRow(selected: selected, isExpanded: isExpanded, hovering: hovering) {
+            if sessionCount > 0 {
+                SidebarDisclosure(name: workspace.name, expanded: isExpanded, action: onToggle)
+            } else {
+                Color.clear.frame(width: SidebarDisclosure.width)
+            }
+        } content: {
             if isRenaming {
                 SidebarIdentityTile(
                     avatar: workspace.sidebarAvatar,
@@ -1469,7 +1481,7 @@ private struct WorkspaceHeaderRow: View {
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .sidebarFocusRing()
+                .sidebarFocusRing($rowFocused)
                 .accessibilityLabel("Open \(workspace.name)")
                 .accessibilityValue(SidebarRowValue.text(
                     current: selected ? "Current workspace" : nil,
@@ -1479,33 +1491,26 @@ private struct WorkspaceHeaderRow: View {
 
                 // The count belongs to the row whether or not it is the current one:
                 // the sidebar is read at a glance, and a row that drops its number
-                // reads as a row with nothing in it. The slot keeps its width so the
-                // chevrons stay in one column down the list.
-                if sessionCount > 0 || runningCount > 0 || hovering {
-                    ZStack(alignment: .trailing) {
-                        HStack(spacing: 6) {
-                            if !isExpanded, needsYouCount > 0 { NeedsYouChip(count: needsYouCount) }
-                            if runningCount > 0 { RunningDot() }
-                            if sessionCount > 0 {
-                                Text(counted(sessionCount, "session"))
-                                    .font(.mono(10))
-                                    .foregroundStyle(.secondary)
-                            }
-                        }
-                        .opacity(hovering ? 0 : 1)
-
-                        if hovering {
-                            RowAction(icon: "plus", title: "New", action: onNewSession)
-                                .fixedSize()
-                                .appTooltip("New multi-project session")
+                // reads as a row with nothing in it.
+                if sessionCount > 0 || runningCount > 0 {
+                    HStack(spacing: 6) {
+                        if !isExpanded, needsYouCount > 0 { NeedsYouChip(count: needsYouCount) }
+                        if runningCount > 0 { RunningDot() }
+                        if sessionCount > 0 {
+                            Text(counted(sessionCount, "session"))
+                                .font(.mono(10))
+                                .foregroundStyle(.secondary)
                         }
                     }
-                    .frame(minWidth: 62, alignment: .trailing)
-                }
-                if sessionCount > 0 {
-                    SidebarDisclosure(name: workspace.name, expanded: isExpanded, action: onToggle)
                 }
             }
+        } trailing: { fill in
+            TrailingRowAction(
+                visible: showsNewSession, icon: "plus", title: "New", tone: .create,
+                width: TrailingRowAction.newWidth, base: fill,
+                accessibilityLabel: "New multi-project session in \(workspace.name)",
+                tooltip: "New multi-project session",
+                focus: $actionFocused, action: onNewSession)
         }
         .appTooltip {
             Tooltip(
@@ -1529,17 +1534,25 @@ private struct WorkspaceHeaderRow: View {
 // The current container keeps its navigation marker even when its sessions are folded.
 // Open means a block is drawn below, not that the flag is set: a row with nothing under
 // it wears the plain fill, or the tint reads as a state the row does not have.
-private struct TreeRow<Content: View>: View {
+// The disclosure leads the row, so nothing sits beside the action that takes over its end.
+private struct TreeRow<Leading: View, Content: View, Trailing: View>: View {
     let selected: Bool
     let isExpanded: Bool
     let hovering: Bool
+    @ViewBuilder let leading: Leading
     @ViewBuilder let content: Content
+    // Handed the row's fill, so what it lays over the row's end can cover what is there.
+    @ViewBuilder let trailing: (Color) -> Trailing
 
     var body: some View {
-        HStack(spacing: 9) { content }
+        HStack(spacing: 4) {
+            leading
+            HStack(spacing: 9) { content }
+        }
             .padding(.horizontal, 8)
             .padding(.vertical, 6)
             .background(RoundedRectangle(cornerRadius: 9).fill(fill))
+            .overlay(alignment: .trailing) { trailing(fill) }
             .overlay(RoundedRectangle(cornerRadius: 9)
                 .stroke(selected ? Theme.accent.opacity(0.14) : .clear, lineWidth: 1))
             .overlay(alignment: .leading) {
@@ -1586,12 +1599,23 @@ private struct ProjectHeaderRow: View {
     @State private var draft = ""
     @State private var hovering = false
     @FocusState private var focused: Bool
+    @FocusState private var rowFocused: Bool
+    @FocusState private var actionFocused: Bool
 
     private var isTask: Bool { project.kind == .adHoc }
     private var showsNeedsYou: Bool { !isExpanded && needsYouCount > 0 }
+    private var showsNewSession: Bool {
+        !isTask && !isRenaming && (hovering || rowFocused || actionFocused)
+    }
 
     var body: some View {
         TreeRow(selected: selected, isExpanded: isExpanded, hovering: hovering) {
+            if sessionCount > 0 {
+                SidebarDisclosure(name: project.name, expanded: isExpanded, action: onToggle)
+            } else {
+                Color.clear.frame(width: SidebarDisclosure.width)
+            }
+        } content: {
             if isRenaming {
                 SidebarIdentityTile(
                     avatar: project.sidebarAvatar,
@@ -1650,7 +1674,7 @@ private struct ProjectHeaderRow: View {
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .sidebarFocusRing()
+                .sidebarFocusRing($rowFocused)
                 .accessibilityLabel("Open \(project.name)")
                 .accessibilityValue(SidebarRowValue.text(
                     current: selected ? "Current project" : nil,
@@ -1658,41 +1682,37 @@ private struct ProjectHeaderRow: View {
                     pinned: project.isPinned))
                 .accessibilityAddTraits(selected && activeSessionTitle == nil ? [.isSelected] : [])
 
-                // The running light gives way under the pointer to the things you come to
-                // a project row to do. The name gives way while the pointer is here for
-                // those actions, so the wider labels do not make the row grow.
-                if !selected || hovering || runningCount > 0 || showsNeedsYou {
-                    ZStack(alignment: .trailing) {
-                        HStack(spacing: 6) {
-                            if showsNeedsYou { NeedsYouChip(count: needsYouCount) }
-                            if runningCount > 0 { RunningDot() }
-                        }
-                        .opacity(hovering ? 0 : 1)
+                // On a task the running light gives way under the pointer to Run. The
+                // name gives way while the pointer is here, so the wider label does not
+                // make the row grow. A project's New covers its end instead.
+                if isTask {
+                    if !selected || hovering || runningCount > 0 || showsNeedsYou {
+                        ZStack(alignment: .trailing) {
+                            status
+                                .opacity(hovering ? 0 : 1)
 
-                        if hovering {
                             // A task is run with its saved prompt rather than opened
                             // empty. The button waits while a run is still working in
                             // the task's folder.
-                            Group {
-                                if isTask {
-                                    if canRunTask {
-                                        RowAction(icon: "play.fill", title: "Run", compact: selected, action: onRunTask)
-                                            .appTooltip("Run the task's saved prompt in a fresh session")
-                                    }
-                                } else {
-                                    RowAction(icon: "plus", title: "New", action: onNewSession)
-                                        .appTooltip("New session")
-                                }
+                            if hovering, canRunTask {
+                                RowAction(icon: "play.fill", title: "Run", compact: selected, action: onRunTask)
+                                    .appTooltip("Run the task's saved prompt in a fresh session")
+                                    .fixedSize()
                             }
-                            .fixedSize()
                         }
+                        .frame(minWidth: selected ? 0 : 30, alignment: .trailing)
                     }
-                    .frame(minWidth: selected ? 0 : 30, alignment: .trailing)
-                }
-                if sessionCount > 0 {
-                    SidebarDisclosure(name: project.name, expanded: isExpanded, action: onToggle)
+                } else if runningCount > 0 || showsNeedsYou {
+                    status
                 }
             }
+        } trailing: { fill in
+            TrailingRowAction(
+                visible: showsNewSession, icon: "plus", title: "New", tone: .create,
+                width: TrailingRowAction.newWidth, base: fill,
+                accessibilityLabel: "New session in \(project.name)",
+                tooltip: "New session ⌘N",
+                focus: $actionFocused, action: onNewSession)
         }
         .appTooltip { tooltip }
         .onPointerHover {
@@ -1703,6 +1723,13 @@ private struct ProjectHeaderRow: View {
             guard renaming else { return }
             draft = project.name
             focused = true
+        }
+    }
+
+    private var status: some View {
+        HStack(spacing: 6) {
+            if showsNeedsYou { NeedsYouChip(count: needsYouCount) }
+            if runningCount > 0 { RunningDot() }
         }
     }
 
@@ -1746,8 +1773,8 @@ private struct ProjectHeaderRow: View {
     }
 }
 
-// A hover action on the project row: the glyph with its word beside it, so what the
-// button does is read rather than guessed.
+// A hover action on a task row: the glyph with its word beside it, so what the button
+// does is read rather than guessed.
 private struct RowAction: View {
     let icon: String
     let title: String
@@ -1777,6 +1804,113 @@ private struct RowAction: View {
         .sidebarFocusRing()
         .hoverLift(hovering)
         .onHover { hovering = $0 }
+    }
+}
+
+// The end of a row given over to its main action while the row is pointed at or focused.
+// It runs the full height of the row so it is easy to hit, and its word keeps its own
+// colour in every state, so New always reads green and Delete always reads red. It lays
+// the row's own fill over the sidebar to cover the status under it, which comes back when
+// the pointer leaves, and a short fade lets the text it cuts off run out softly.
+private struct TrailingRowAction: View {
+    enum Tone {
+        case create, delete
+
+        var colour: Color { self == .create ? Theme.accent : Theme.deletion }
+
+        func tint(pressed: Bool, dark: Bool) -> Double {
+            switch (self, pressed) {
+            case (.create, false): dark ? 0.13 : 0.10
+            case (.create, true): dark ? 0.21 : 0.17
+            case (.delete, false): dark ? 0.13 : 0.09
+            case (.delete, true): dark ? 0.21 : 0.16
+            }
+        }
+    }
+
+    static let newWidth: CGFloat = 84
+    static let deleteWidth: CGFloat = 82
+    private static let fadeWidth: CGFloat = 18
+
+    let visible: Bool
+    let icon: String
+    let title: String
+    let tone: Tone
+    let width: CGFloat
+    let base: Color
+    var cornerRadius: CGFloat = 9
+    let accessibilityLabel: String
+    let tooltip: String
+    let focus: FocusState<Bool>.Binding
+    let action: () -> Void
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.colorScheme) private var colorScheme
+    @State private var hovering = false
+
+    var body: some View {
+        ZStack {
+            if visible {
+                zone
+                    .transition(reduceMotion ? .identity : .opacity.combined(with: .offset(x: 10)))
+            }
+        }
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.16), value: visible)
+    }
+
+    private var zone: some View {
+        let cover = ZStack { Theme.sidebar; base }
+        return HStack(spacing: 0) {
+            cover
+                .mask(LinearGradient(colors: [.clear, .black], startPoint: .leading, endPoint: .trailing))
+                .frame(width: Self.fadeWidth)
+                .accessibilityHidden(true)
+            Button(action: action) {
+                HStack(spacing: 4) {
+                    Image(systemName: icon)
+                        .font(.system(size: 10.5, weight: .semibold))
+                    Text(title)
+                        .font(.system(size: 12, weight: .semibold))
+                }
+                .foregroundStyle(tone.colour)
+            }
+            .buttonStyle(TrailingActionStyle(tone: tone, hovering: hovering, dark: colorScheme == .dark))
+            .frame(width: width)
+            .frame(maxHeight: .infinity)
+            .background(cover)
+            .overlay(alignment: .leading) {
+                Rectangle()
+                    .fill(Theme.border)
+                    .frame(width: 1)
+                    .padding(.vertical, 9)
+                    .opacity(hovering ? 0 : 1)
+                    .accessibilityHidden(true)
+            }
+            .sidebarFocusRing(focus)
+            .accessibilityLabel(accessibilityLabel)
+            .appTooltip(tooltip)
+            .onHover { hovering = $0 }
+        }
+        .clipShape(UnevenRoundedRectangle(bottomTrailingRadius: cornerRadius,
+                                          topTrailingRadius: cornerRadius))
+    }
+}
+
+// The tint answers the pointer and deepens under a press. The press scales the label only,
+// never the button, since the button carries AppKit-backed tooltip views.
+private struct TrailingActionStyle: ButtonStyle {
+    let tone: TrailingRowAction.Tone
+    let hovering: Bool
+    let dark: Bool
+
+    func makeBody(configuration: Configuration) -> some View {
+        let tinted = hovering || configuration.isPressed
+        configuration.label
+            .scaleEffect(configuration.isPressed ? 0.96 : 1)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(tone.colour.opacity(tinted ? tone.tint(pressed: configuration.isPressed, dark: dark) : 0))
+            .contentShape(Rectangle())
+            .motion(Motion.hover, value: configuration.isPressed)
     }
 }
 
@@ -1859,6 +1993,8 @@ private struct SessionCard: View {
     @State private var hovering = false
     @State private var draft = ""
     @FocusState private var focused: Bool
+    @FocusState private var cardFocused: Bool
+    @FocusState private var deleteFocused: Bool
 
     private var tone: SessionTone {
         SessionTone(busy: busy, needsInput: needsInput, finished: finished,
@@ -1872,32 +2008,23 @@ private struct SessionCard: View {
             } else {
                 Button(action: onOpen) { cardContent }
                     .buttonStyle(.plain)
-                    .sidebarFocusRing()
+                    .sidebarFocusRing($cardFocused)
                     .accessibilityLabel(session.title)
                     .accessibilityValue(accessibilityStatus)
                     .accessibilityAddTraits(selected ? [.isSelected] : [])
             }
         }
-        .overlay(alignment: .topTrailing) {
-            if hovering, !isRenaming {
-                Button(action: onDelete) {
-                    HStack(spacing: 3) {
-                        Image(systemName: "trash")
-                            .font(.system(size: 11))
-                        Text("Delete")
-                            .font(.system(size: 11, weight: .medium))
-                    }
-                    .foregroundStyle(.secondary)
-                    .padding(3)
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .sidebarFocusRing()
-                .accessibilityLabel("Delete session")
-                .appTooltip("Delete session")
-                .padding(.top, selected ? 6 : 5)
-                .padding(.trailing, 7)
-            }
+        // Inset by the card's ring, so a running or selected card keeps its outline
+        // all the way round under the zone.
+        .overlay(alignment: .trailing) {
+            TrailingRowAction(
+                visible: !isRenaming && (hovering || cardFocused || deleteFocused),
+                icon: "trash", title: "Delete", tone: .delete,
+                width: TrailingRowAction.deleteWidth, base: cardFill, cornerRadius: 8,
+                accessibilityLabel: "Delete session \(session.title)",
+                tooltip: "Delete session",
+                focus: $deleteFocused, action: onDelete)
+                .padding(1.4)
         }
         .appTooltip { tooltip }
         .onPointerHover { hovering = $0 }
@@ -1963,7 +2090,6 @@ private struct SessionCard: View {
                                                 : session.lastActivity))
                     .font(.mono(9.5))
                     .foregroundStyle(.tertiary)
-                    .opacity(hovering ? 0 : 1)
             }
             .padding(.horizontal, 10)
             .padding(.top, band == nil ? edge : 6)
