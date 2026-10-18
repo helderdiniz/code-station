@@ -215,8 +215,8 @@ struct DesignWebContent: NSViewRepresentable {
                 }
             }
             // Pins belong to the review, not the design, so no picture of the design has them.
-            webView.evaluateJavaScript("window.__codeStationHidePins?.(true);") { _, _ in
-                webView.takeSnapshot(with: configuration) { [weak self] image, _ in
+            webView.evaluateJavaScript("window.__codeStationHidePins?.(true);") { [weak self] _, _ in
+                webView.takeSnapshot(with: configuration) { image, _ in
                     webView.evaluateJavaScript("window.__codeStationHidePins?.(false);")
                     self?.onSnapshot?(image, request)
                 }

@@ -21,7 +21,7 @@ struct MessageView: View, Equatable {
     var bubble = UserMessageStyle.leaf
     // Opens the second opinion ask dialog on this answer, from its hover actions. Nil where
     // the answer is not one to judge, such as one still being written.
-    var secondOpinion: (() -> Void)?
+    var secondOpinion: (@MainActor () -> Void)?
 
     @Environment(\.colorScheme) private var colorScheme
 
@@ -350,7 +350,7 @@ private struct TranscriptCopyButton: ViewModifier {
     let text: String
     let tooltip: String
     let inset: CGFloat
-    var secondOpinion: (() -> Void)?
+    var secondOpinion: (@MainActor () -> Void)?
 
     func body(content: Content) -> some View {
         content
@@ -385,7 +385,7 @@ extension View {
     func transcriptCopyButton(for text: String,
                               tooltip: String = "Copy text",
                               inset: CGFloat = 4,
-                              secondOpinion: (() -> Void)? = nil) -> some View {
+                              secondOpinion: (@MainActor () -> Void)? = nil) -> some View {
         modifier(TranscriptCopyButton(text: text, tooltip: tooltip, inset: inset, secondOpinion: secondOpinion))
     }
 }

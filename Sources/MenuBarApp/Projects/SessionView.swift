@@ -1754,7 +1754,7 @@ struct SessionView: View {
                             promptMenu: promptMenu(for: message),
                             arriving: message.isArriving(sentAt: promptSentAt),
                             bubble: bubble,
-                            secondOpinion: canJudge(message, in: session, state: state) ? {
+                            secondOpinion: canJudge(message, in: session, state: state) ? { @MainActor in
                                 askForSecondOpinion(on: answerSubject(message, in: session),
                                                     anchor: message.id, session: session)
                             } : nil)

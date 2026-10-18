@@ -597,13 +597,13 @@ struct QuestionThreadView: View {
                         Label("Change for \(agent.title) · in your review", systemImage: "pencil")
                             .font(.system(size: 11.5, weight: .semibold)).foregroundStyle(Theme.accent)
                         TextField("What should \(agent.title) change?",
-                                  text: Binding(get: { change.body }, set: editChange), axis: .vertical)
+                                  text: Binding(get: { change.body }, set: { editChange($0) }), axis: .vertical)
                             .lineLimit(1...6)
                             .appTextField()
                             .accessibilityLabel("Change for \(agent.title)")
                         HStack(spacing: 12) {
                             Toggle("Also send the question and answer",
-                                   isOn: Binding(get: { change.why != nil }, set: sendsQuestion))
+                                   isOn: Binding(get: { change.why != nil }, set: { sendsQuestion($0) }))
                                 .toggleStyle(.appCheckbox)
                                 .font(.system(size: 11.5))
                             Spacer(minLength: 0)
