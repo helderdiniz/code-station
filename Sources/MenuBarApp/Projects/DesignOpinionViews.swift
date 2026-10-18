@@ -77,12 +77,14 @@ struct DesignOpinionAsk: View {
 
 // The side panel beside the canvas: the seats while they look, then the notes they
 // pinned, each with Keep and Dismiss. Hovering a note lights its pin, and a pin that is
-// clicked brings its note into view.
+// clicked brings its note into view. Hovering never scrolls the list, so moving the
+// mouse across the cards or the canvas leaves the list where the user put it.
 struct DesignOpinionPanel: View {
     let opinion: DesignOpinion
     let screens: [DesignScreen]
     let currentScreen: String?
     @Binding var hotNote: UUID?
+    @Binding var revealedNote: UUID?
     let showScreen: (String) -> Void
     let keep: (UUID) -> Void
     let edit: (UUID, String) -> Void
@@ -118,9 +120,10 @@ struct DesignOpinionPanel: View {
                     }
                     .padding(14)
                 }
-                .onChange(of: hotNote) { _, id in
+                .onChange(of: revealedNote) { _, id in
                     guard let id else { return }
                     withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo(id, anchor: .center) }
+                    revealedNote = nil
                 }
             }
             if !opinion.notes.isEmpty { footer }

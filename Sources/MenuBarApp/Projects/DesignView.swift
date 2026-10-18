@@ -39,6 +39,8 @@ struct DesignView: View {
     @State private var designWindow = DesignWindow()
     // The note whose pin and card are lit, from hovering either.
     @State private var hotNote: UUID?
+    // The note whose pin was just clicked, so the panel scrolls to its card.
+    @State private var revealedNote: UUID?
 
     var body: some View {
         if let session = store.session(sessionID),
@@ -627,7 +629,10 @@ struct DesignView: View {
                           onViewport: { runner.recordCanvasWidth($0, for: sessionID) },
                           pins: pins,
                           hotPin: hotNote?.uuidString,
-                          onPin: { hotNote = UUID(uuidString: $0) },
+                          onPin: { id in
+                              hotNote = UUID(uuidString: id)
+                              revealedNote = hotNote
+                          },
                           onPinHover: { id in hotNote = id.flatMap(UUID.init(uuidString:)) })
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .background(Color.white)
@@ -735,6 +740,7 @@ struct DesignView: View {
         return DesignOpinionPanel(
             opinion: opinion, screens: canvas.manifest.screens, currentScreen: canvas.selectedScreen?.id,
             hotNote: $hotNote,
+            revealedNote: $revealedNote,
             showScreen: { canvas.select($0) },
             keep: { opinions.keep($0, in: sessionID) },
             edit: { opinions.edit($0, text: $1, in: sessionID) },

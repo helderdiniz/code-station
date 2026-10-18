@@ -712,24 +712,32 @@ struct SessionView: View {
                            showsWords: Bool) -> some View {
         let directory = session.worktreePath ?? project.path
         let terminalOpen = terminals.isOpen(terminalScope)
+        // The terminal and the working set sit beside the chat, so the other tabs leave
+        // them out of the dock. They fade rather than vanish, so the dock reads as
+        // shrinking instead of jumping.
         return HeaderRailDock {
-            // The glyph toggles the drawer; the other ways to reach a shell sit behind the
-            // chevron, so the most common one is a single click.
-            HeaderDockSeat(
-                icon: "terminal",
-                word: "Terminal",
-                isOpen: terminalOpen,
-                showsWord: showsWords,
-                keys: ["⌃", "`"],
-                detail: "A shell under the chat, in this session's folder",
-                options: .init(label: "Other ways to open a shell") {
-                    terminalOptions(isOpen: terminalOpen, directory: directory)
-                }) {
-                    toggleTerminal(directory: directory)
-                }
-            workingSetSeat(session, showsWord: showsWords)
+            if tab == .conversation {
+                // The glyph toggles the drawer; the other ways to reach a shell sit behind
+                // the chevron, so the most common one is a single click.
+                HeaderDockSeat(
+                    icon: "terminal",
+                    word: "Terminal",
+                    isOpen: terminalOpen,
+                    showsWord: showsWords,
+                    keys: ["⌃", "`"],
+                    detail: "A shell under the chat, in this session's folder",
+                    options: .init(label: "Other ways to open a shell") {
+                        terminalOptions(isOpen: terminalOpen, directory: directory)
+                    }) {
+                        toggleTerminal(directory: directory)
+                    }
+                    .transition(.opacity)
+                workingSetSeat(session, showsWord: showsWords)
+                    .transition(.opacity)
+            }
             findSeat(session, showsWord: showsWords)
         }
+        .motion(Motion.reveal, value: tab)
     }
 
     private func terminalOptions(isOpen: Bool, directory: String) -> [MenuEntry] {
