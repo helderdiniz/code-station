@@ -81,6 +81,9 @@ struct WorkingSetTimelineEntry: Identifiable, Equatable {
     }
 
     let content: Content
+    // The message the work sits in, which is what ties it to the prompt that started it.
+    // Nil for a task the CLI reported on its own.
+    var messageID: UUID? = nil
 
     var id: String {
         switch content {
@@ -111,7 +114,17 @@ struct WorkingSetTimelineEntry: Identifiable, Equatable {
     }
 }
 
-// A row of the NOW panel: one thing running this instant, and what it is doing.
+// One prompt and everything that happened because of it. The prompt is what the person
+// remembers sending, so it is the handle they look back through the work by.
+struct WorkingSetTurn: Identifiable, Equatable {
+    let id: String
+    let prompt: String
+    // Nil for work that ran before any prompt, which only an imported conversation has.
+    let sentAt: Date?
+    let entries: [WorkingSetTimelineEntry]
+}
+
+// One thing running this instant, and what it is doing.
 struct WorkingSetRunningItem: Identifiable, Equatable {
     enum Origin: Equatable {
         case agent
@@ -137,15 +150,6 @@ struct WorkingSetRunningItem: Identifiable, Equatable {
     let startedAt: Date?
 }
 
-// Who last wrote a file. Only agents are named; everything the main loop did reads as one
-// worker, which is what lets the agent names stand out against it.
-struct WorkingSetAttribution: Equatable {
-    static let mainThread = WorkingSetAttribution(name: "main thread", isAgent: false)
-
-    let name: String
-    let isAgent: Bool
-}
-
 struct WorkingSetToolCallVisibility {
     static let limit = 5
 
@@ -168,16 +172,17 @@ struct WorkingSetToolCallVisibility {
     }
 }
 
-// Which spans are open. A span nobody has touched follows its agent - open while it works,
-// closed once it is done - so a finished fan-out folds itself away without ever hiding
-// what is still moving. Opening or closing one by hand pins it that way for the session.
-struct WorkingSetSpanExpansion {
+// Which spans and prompts are open. One nobody has touched follows its default: a span is
+// open while its agent works and a prompt while it is the newest, so finished work folds
+// itself away without ever hiding what is still moving. Opening or closing one by hand
+// pins it that way for the session.
+struct WorkingSetExpansion {
     private var pinned: [String: Bool] = [:]
 
-    func isExpanded(_ id: String, running: Bool) -> Bool { pinned[id] ?? running }
+    func isExpanded(_ id: String, byDefault: Bool) -> Bool { pinned[id] ?? byDefault }
 
-    mutating func toggle(_ id: String, running: Bool) {
-        pinned[id] = !isExpanded(id, running: running)
+    mutating func toggle(_ id: String, byDefault: Bool) {
+        pinned[id] = !isExpanded(id, byDefault: byDefault)
     }
 
     mutating func reset() {
@@ -216,7 +221,8 @@ enum WorkingSetSummary {
                 for id in spanIDs(startedBy: occurrence.call) where !placed.contains(id) {
                     guard let span = spansByID[id] else { continue }
                     placed.insert(id)
-                    entries.append(WorkingSetTimelineEntry(content: .agent(span)))
+                    entries.append(WorkingSetTimelineEntry(content: .agent(span),
+                                                           messageID: occurrence.messageID))
                 }
                 continue
             }
@@ -226,7 +232,8 @@ enum WorkingSetSummary {
                 false
             }
             guard !belongsToAgent else { continue }
-            entries.append(WorkingSetTimelineEntry(content: .call(occurrence.call)))
+            entries.append(WorkingSetTimelineEntry(content: .call(occurrence.call),
+                                                   messageID: occurrence.messageID))
         }
         // A task the CLI reported on its own has no call in the transcript to sit beside,
         // so it lands at the end, which is where the newest work belongs.
@@ -244,6 +251,58 @@ enum WorkingSetSummary {
             case .call: count + 1
             }
         }
+    }
+
+    // The calls that failed, counted the way events are: inside an agent it is the agent's
+    // own calls that count, and an agent with none counts once for itself.
+    static func failureCount(in entries: [WorkingSetTimelineEntry]) -> Int {
+        entries.reduce(0) { count, entry in
+            switch entry.content {
+            case .agent(let activity) where activity.actions.isEmpty:
+                count + (activity.state == .failed ? 1 : 0)
+            case .agent(let activity):
+                count + activity.actions.filter { $0.state == .failed }.count
+            case .call(let call):
+                count + (call.state == .failed ? 1 : 0)
+            }
+        }
+    }
+
+    // The timeline cut at each prompt, oldest first. A prompt with nothing to show still
+    // gets its turn, since a question that only got an answer is part of the story too.
+    static func turns(in messages: [ChatMessage],
+                      entries: [WorkingSetTimelineEntry]) -> [WorkingSetTurn] {
+        var prompts: [(id: String, prompt: String, sentAt: Date?)] = []
+        var turnOfMessage: [UUID: Int] = [:]
+        for message in messages {
+            if message.role == .user {
+                prompts.append((message.id.uuidString, promptText(of: message), message.date))
+            } else if prompts.isEmpty {
+                prompts.append(("start", "Before the first prompt", nil))
+            }
+            turnOfMessage[message.id] = prompts.count - 1
+        }
+        if prompts.isEmpty, !entries.isEmpty {
+            prompts.append(("start", "Before the first prompt", nil))
+        }
+
+        var grouped = Array(repeating: [WorkingSetTimelineEntry](), count: prompts.count)
+        for entry in entries {
+            // Work with no message of its own is happening now, so it joins the newest turn.
+            let turn = entry.messageID.flatMap { turnOfMessage[$0] } ?? prompts.count - 1
+            grouped[turn].append(entry)
+        }
+        return prompts.indices.map { index in
+            WorkingSetTurn(id: prompts[index].id, prompt: prompts[index].prompt,
+                           sentAt: prompts[index].sentAt, entries: grouped[index])
+        }
+    }
+
+    private static func promptText(of message: ChatMessage) -> String {
+        let text = message.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !text.isEmpty { return text }
+        let files = (message.attachments ?? []).map { ($0 as NSString).lastPathComponent }
+        return files.isEmpty ? "Empty prompt" : files.joined(separator: ", ")
     }
 
     static func running(in entries: [WorkingSetTimelineEntry]) -> [WorkingSetRunningItem] {
@@ -266,43 +325,6 @@ enum WorkingSetSummary {
                     symbol: symbol(for: call.tool), startedAt: call.startedAt)
             }
         }
-    }
-
-    // Which agent last wrote each file, keyed by the path the call named. Only an edit
-    // says which file it changed in its own input; what a command changed was measured
-    // off the working tree afterwards and cannot be traced back to a path, so a file no
-    // edit names reads as the main loop's own work.
-    static func attribution(in entries: [WorkingSetTimelineEntry],
-                            projectPath: String) -> [String: WorkingSetAttribution] {
-        var written: [String: WorkingSetAttribution] = [:]
-        for entry in entries {
-            switch entry.content {
-            case .agent(let activity):
-                let author = WorkingSetAttribution(name: activity.title,
-                                                   isAgent: activity.kind == .agent)
-                for action in activity.actions {
-                    guard let path = editedPath(action.tool, projectPath: projectPath)
-                    else { continue }
-                    written[path] = author
-                }
-            case .call(let call):
-                guard let path = editedPath(call.tool, projectPath: projectPath) else { continue }
-                written[path] = .mainThread
-            }
-        }
-        return written
-    }
-
-    // A change git reports names a path inside its own repository, while a call names the
-    // file wherever it sits on disk. Matching the tail of the two is what joins them,
-    // since a worktree puts the same repository path under a different root.
-    static func attributor(of path: String, in root: String,
-                           from written: [String: WorkingSetAttribution])
-        -> WorkingSetAttribution {
-        if let exact = written[(root as NSString).appendingPathComponent(path)] { return exact }
-        let tail = "/" + path
-        let match = written.keys.sorted().first { $0.hasSuffix(tail) }
-        return match.flatMap { written[$0] } ?? .mainThread
     }
 
     static func activities(in messages: [ChatMessage], activeTools: [ToolUse],
@@ -451,16 +473,6 @@ enum WorkingSetSummary {
         case "WebFetch", "WebSearch": "globe"
         default: "terminal"
         }
-    }
-
-    private static func editedPath(_ tool: ToolUse, projectPath: String) -> String? {
-        guard ToolUse.editTools.contains(tool.name) || tool.name == "NotebookEdit",
-              let path = ToolPresentationCache
-                  .presentation(for: tool, projectPath: projectPath).filePath
-        else { return nil }
-        return (path as NSString).isAbsolutePath
-            ? path
-            : (projectPath as NSString).appendingPathComponent(path)
     }
 
     private static func agentState(_ agent: WorkingSetToolCall,

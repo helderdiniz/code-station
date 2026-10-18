@@ -402,88 +402,99 @@ struct SessionWorkingSetTests {
         #expect(WorkingSetSummary.running(in: timeline(in: [message])).isEmpty)
     }
 
-    @Test func changedFilesAreAttributedToTheAgentThatLastWroteThem() {
-        let agent = ToolUse(id: "fixer", name: "Task",
-                            input: #"{"subagent_type":"fixer","description":"fix"}"#,
+    @Test func workIsGroupedUnderThePromptThatStartedIt() {
+        let first = ChatMessage(role: .user, text: "Run the tests")
+        let firstReply = ChatMessage(role: .assistant, tools: [
+            ToolUse(id: "test", name: "Bash", input: #"{"command":"swift test"}"#,
+                    result: "failed", isError: true),
+            ToolUse(id: "fix", name: "Edit",
+                    input: #"{"file_path":"/project/App.swift"}"#, result: "done"),
+        ])
+        let second = ChatMessage(role: .user, text: "  Commit it \n")
+        let agent = ToolUse(id: "reviewer", name: "Task",
+                            input: #"{"subagent_type":"reviewer","description":"review"}"#,
                             result: "done")
-        let agentEdit = ToolUse(id: "edit-a", name: "Edit",
-                                input: #"{"file_path":"/project/Sources/App.swift"}"#,
-                                result: "done", parentID: agent.id)
-        let mainEdit = ToolUse(id: "edit-b", name: "Write",
-                               input: #"{"file_path":"/project/Sources/Theme.swift"}"#,
-                               result: "done")
-        let read = ToolUse(id: "read", name: "Read",
-                           input: #"{"file_path":"/project/Sources/Read.swift"}"#,
-                           result: "done")
-        let message = ChatMessage(role: .assistant,
-                                  tools: [agent, agentEdit, mainEdit, read])
+        let action = ToolUse(id: "read", name: "Read",
+                             input: #"{"file_path":"/project/App.swift"}"#,
+                             result: "done", parentID: agent.id)
+        let secondReply = ChatMessage(role: .assistant, tools: [agent, action])
+        let messages = [first, firstReply, second, secondReply]
 
-        let written = WorkingSetSummary.attribution(in: timeline(in: [message]),
-                                                    projectPath: "/project")
+        let turns = WorkingSetSummary.turns(in: messages, entries: timeline(in: messages))
 
-        #expect(written.count == 2)
-        #expect(WorkingSetSummary.attributor(of: "Sources/App.swift", in: "/project",
-                                             from: written)
-                == WorkingSetAttribution(name: "fixer · fix", isAgent: true))
-        #expect(WorkingSetSummary.attributor(of: "Sources/Theme.swift", in: "/project",
-                                             from: written) == .mainThread)
-        // A file nothing wrote is the main loop's, since only edits name a path.
-        #expect(WorkingSetSummary.attributor(of: "Sources/Read.swift", in: "/project",
-                                             from: written) == .mainThread)
+        #expect(turns.map(\.prompt) == ["Run the tests", "Commit it"])
+        #expect(turns.map(\.sentAt) == [first.date, second.date])
+        #expect(turns[0].entries.map(\.title) == ["Bash · swift test", "Edit · App.swift"])
+        #expect(turns[1].entries.map(\.title) == ["reviewer · review"])
+        #expect(WorkingSetSummary.failureCount(in: turns[0].entries) == 1)
+        #expect(WorkingSetSummary.eventCount(in: turns[1].entries) == 1)
     }
 
-    @Test func aFileEditedTwiceNamesWhoeverWroteItLast() {
-        let agent = ToolUse(id: "fixer", name: "Task", input: "fixer", result: "done")
-        let agentEdit = ToolUse(id: "edit-a", name: "Edit",
-                                input: #"{"file_path":"/project/App.swift"}"#,
-                                result: "done", parentID: agent.id)
-        let mainEdit = ToolUse(id: "edit-b", name: "Edit",
-                               input: #"{"file_path":"/project/App.swift"}"#,
-                               result: "done")
-        let message = ChatMessage(role: .assistant,
-                                  tools: [agent, agentEdit, mainEdit])
+    @Test func aPromptThatRanNothingStillHasItsTurn() {
+        let question = ChatMessage(role: .user, text: "What does this do?")
+        let answer = ChatMessage(role: .assistant, text: "It builds the app.")
 
-        let written = WorkingSetSummary.attribution(in: timeline(in: [message]),
-                                                    projectPath: "/project")
+        let turns = WorkingSetSummary.turns(in: [question, answer], entries: [])
 
-        #expect(WorkingSetSummary.attributor(of: "App.swift", in: "/project",
-                                             from: written) == .mainThread)
+        #expect(turns.map(\.prompt) == ["What does this do?"])
+        #expect(turns[0].entries.isEmpty)
     }
 
-    @Test func aWorktreeCopyIsAttributedThroughTheTailOfItsPath() {
-        let edit = ToolUse(id: "edit", name: "Edit",
-                           input: #"{"file_path":"/project/Sources/App.swift"}"#,
-                           result: "done")
+    @Test func workBeforeAnyPromptAndTasksOfItsOwnFindATurn() {
+        let imported = ChatMessage(role: .assistant, tools: [
+            ToolUse(id: "read", name: "Read",
+                    input: #"{"file_path":"/project/README.md"}"#, result: "done"),
+        ])
+        let prompt = ChatMessage(role: .user, text: "Start the server")
+        let task = BackgroundTask(id: "server", kind: "local_bash",
+                                  description: "npm run dev")
+        let messages = [imported, prompt]
+
+        let turns = WorkingSetSummary.turns(
+            in: messages, entries: timeline(in: messages, backgroundTasks: [task]))
+
+        #expect(turns.map(\.prompt) == ["Before the first prompt", "Start the server"])
+        #expect(turns[0].entries.map(\.title) == ["Read · README.md"])
+        // A task with no message of its own is current work, so it joins the newest prompt.
+        #expect(turns[1].entries.map(\.title) == ["npm run dev"])
+    }
+
+    @Test func aPromptWithOnlyFilesIsNamedByThem() {
+        var prompt = ChatMessage(role: .user)
+        prompt.attachments = ["/tmp/screenshot.png", "/tmp/log.txt"]
+
+        let turns = WorkingSetSummary.turns(in: [prompt], entries: [])
+
+        #expect(turns.map(\.prompt) == ["screenshot.png, log.txt"])
+    }
+
+    @Test func failuresInsideAnAgentCountOnceEach() {
         let agent = ToolUse(id: "fixer", name: "Task",
                             input: #"{"subagent_type":"fixer"}"#, result: "done")
-        var owned = edit
-        owned.id = "owned"
-        owned.parentID = agent.id
-        let message = ChatMessage(role: .assistant, tools: [agent, owned])
+        let failed = (1...2).map { number in
+            ToolUse(id: "fail-\(number)", name: "Bash", input: "make",
+                    result: "error", isError: true, parentID: agent.id)
+        }
+        let message = ChatMessage(role: .assistant, tools: [agent] + failed)
 
-        let written = WorkingSetSummary.attribution(in: timeline(in: [message]),
-                                                    projectPath: "/project")
-
-        #expect(WorkingSetSummary.attributor(of: "Sources/App.swift",
-                                             in: "/worktrees/copy", from: written).name
-                == "fixer")
+        #expect(WorkingSetSummary.failureCount(in: timeline(in: [message])) == 2)
     }
 
     @Test func spansFollowTheirAgentUntilOpenedByHand() {
-        var spans = WorkingSetSpanExpansion()
+        var spans = WorkingSetExpansion()
 
-        #expect(spans.isExpanded("agent", running: true))
-        #expect(!spans.isExpanded("agent", running: false))
+        #expect(spans.isExpanded("agent", byDefault: true))
+        #expect(!spans.isExpanded("agent", byDefault: false))
 
-        spans.toggle("agent", running: true)
+        spans.toggle("agent", byDefault: true)
 
         // Closed while it ran, it stays closed once the agent has finished.
-        #expect(!spans.isExpanded("agent", running: true))
-        #expect(!spans.isExpanded("agent", running: false))
+        #expect(!spans.isExpanded("agent", byDefault: true))
+        #expect(!spans.isExpanded("agent", byDefault: false))
 
         spans.reset()
 
-        #expect(spans.isExpanded("agent", running: true))
+        #expect(spans.isExpanded("agent", byDefault: true))
     }
 
     @Test func theTimelineShowsOnlyItsNewestFiveEntriesUntilOpened() {

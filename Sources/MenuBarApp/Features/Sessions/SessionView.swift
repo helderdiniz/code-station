@@ -622,16 +622,12 @@ struct SessionView: View {
 
     private func workingSetSeat(_ session: ChatSession, showsWord: Bool) -> some View {
         let isOpen = tab == .conversation && workingSetVisible
-        let files = workingTreeChanges(session)?.files ?? 0
         return HeaderDockSeat(icon: "sidebar.right",
                               word: "Working set",
                               isOpen: isOpen,
-                              count: files > 0 ? files : nil,
                               showsWord: showsWord,
                               keys: ["⌘", "\\"],
-                              detail: files > 0
-                                  ? "The \(files) \(files == 1 ? "file" : "files") this session touched"
-                                  : "What the agent did and the files it touched",
+                              detail: "What the agent did, prompt by prompt",
                               action: toggleWorkingSet)
     }
 
@@ -1352,14 +1348,7 @@ struct SessionView: View {
     }
 
     private func workingSet(_ session: ChatSession) -> some View {
-        SessionWorkingSet(
-            session: session,
-            close: { setWorkingSetVisible(false) },
-            openChange: { projectID, root, path in
-                selectedProjectID = projectID
-                requestedChange = RequestedChange(root: root, path: path)
-                tab = .changes
-            })
+        SessionWorkingSet(session: session, close: { setWorkingSetVisible(false) })
     }
 
     private func setWorkingSetVisible(_ visible: Bool) {

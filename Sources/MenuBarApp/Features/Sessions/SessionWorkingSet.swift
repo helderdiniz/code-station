@@ -1,34 +1,28 @@
 import Foundation
 import SwiftUI
 
-// The sidebar that says what a session is doing and what it has done: what is running
-// this instant, the stream of everything that happened, and the files it left changed.
+// The sidebar that says what a session is doing and what it has done. The header carries
+// the state and the one thing running now; below it, the work is grouped under the prompt
+// that started it, so looking back means finding the request rather than counting rows.
+// Changed files are left to the Changes tab, which already lists them.
 struct SessionWorkingSet: View {
     static let width: CGFloat = 304
 
-    // The timeline is one list, so one name is enough to remember how far it is opened.
-    private static let timelineList = "timeline"
+    // Rows sit under the prompt text rather than under the chevron, so a turn reads as one
+    // block. An agent's actions step in once more, past the rail and the avatar.
+    fileprivate static let rowIndent: CGFloat = 32
+    fileprivate static let childIndent: CGFloat = 52
+    fileprivate static let railInset: CGFloat = 18
 
     @Environment(ProjectStore.self) private var store
     @Environment(SessionRunner.self) private var runner
-    @Environment(GitStatsCache.self) private var gitStats
 
     @State private var visibility = WorkingSetToolCallVisibility()
-    @State private var spans = WorkingSetSpanExpansion()
+    @State private var spans = WorkingSetExpansion()
+    @State private var turns = WorkingSetExpansion()
 
     let session: ChatSession
     let close: () -> Void
-    let openChange: (_ projectID: UUID, _ root: String, _ path: String) -> Void
-
-    private struct TouchedFile: Identifiable {
-        let projectID: UUID
-        let projectName: String
-        let root: String
-        let change: GitChange
-        let author: WorkingSetAttribution
-
-        var id: String { root + "\u{0}" + change.path }
-    }
 
     private var tone: SessionTone { SessionTone(session.id, store: store, runner: runner) }
     private var projectPath: String { store.workingDirectory(for: session) ?? "" }
@@ -43,15 +37,33 @@ struct SessionWorkingSet: View {
     var body: some View {
         let entries = timeline
         let running = WorkingSetSummary.running(in: entries)
+        // The call the header names. A main-thread call is what the session itself is
+        // waiting on, so it wins over an agent working beside it.
+        let headline = running.last { $0.origin == .mainThread } ?? running.last
+        let groups = WorkingSetSummary.turns(in: session.messages, entries: entries)
         VStack(spacing: 0) {
-            header
+            header(headline: headline, runningCount: running.count)
             ScrollView {
-                VStack(spacing: 11) {
-                    if !running.isEmpty { nowPanel(running) }
-                    timelinePanel(entries)
-                    filesPanel(entries)
+                if groups.isEmpty {
+                    emptyState
+                } else {
+                    LazyVStack(spacing: 0) {
+                        ForEach(Array(groups.enumerated().reversed()), id: \.element.id) { index, turn in
+                            // An agent stays in the list: its span holds the live call,
+                            // and the header only names the agent.
+                            turnView(turn, isLatest: index == groups.count - 1,
+                                     hiding: headline?.origin == .mainThread
+                                         ? headline?.id : nil)
+                        }
+                        if let started = session.messages.first?.date {
+                            Text("Session started at \(started.formatted(date: .omitted, time: .shortened))")
+                                .font(.system(size: 11))
+                                .foregroundStyle(.tertiary)
+                                .padding(14)
+                                .frame(maxWidth: .infinity)
+                        }
+                    }
                 }
-                .padding(11)
             }
         }
         .frame(width: Self.width)
@@ -59,15 +71,49 @@ struct SessionWorkingSet: View {
         .onChange(of: session.id) { _, _ in
             visibility.reset()
             spans.reset()
+            turns.reset()
         }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Working set")
     }
 
-    private var header: some View {
-        HStack(spacing: 8) {
-            StateLight(tone: tone)
-            Spacer(minLength: 8)
+    // MARK: - Header
+
+    private func header(headline: WorkingSetRunningItem?, runningCount: Int) -> some View {
+        let status = headerStatus(headline: headline)
+        return HStack(spacing: 10) {
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 7) {
+                    if tone == .running {
+                        PulsingDot(size: 7)
+                    } else {
+                        StateLight(tone: status.isNew ? .idle : tone, size: 7)
+                    }
+                    Text(status.word)
+                        .font(.system(size: 12.5, weight: .semibold))
+                        .foregroundStyle(status.isNew ? Color.primary : tone.wordColour)
+                    if let since = status.elapsedSince {
+                        ElapsedTime(since: since, size: 10.5)
+                    }
+                }
+                HStack(spacing: 6) {
+                    lineText(status)
+                        .font(.mono(10.5))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                    if runningCount > 1 {
+                        Text("+\(runningCount - 1)")
+                            .font(.mono(10.5, .semibold))
+                            .foregroundStyle(.secondary)
+                            .fixedSize()
+                    }
+                }
+                .padding(.leading, 14)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .appTooltip(status.line ?? "Finished")
+            .accessibilityElement(children: .combine)
             Button(action: close) {
                 Image(systemName: "xmark")
                     .font(.system(size: 10.5, weight: .semibold))
@@ -81,98 +127,146 @@ struct SessionWorkingSet: View {
             .appTooltip("Close working set")
             .accessibilityLabel("Close working set")
         }
-        .padding(.horizontal, 14)
-        .headerBand(height: Theme.subHeaderHeight)
+        .padding(.leading, 14)
+        .padding(.trailing, 10)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(headerTint)
+        .headerBand(Theme.sidebar, height: Theme.subHeaderHeight)
     }
 
-    // MARK: - Now
+    private var headerTint: Color {
+        switch tone {
+        case .running: Theme.dotOn.opacity(0.07)
+        case .needsYou: Theme.attention.opacity(0.1)
+        case .waiting, .idle: .clear
+        }
+    }
 
-    private func nowPanel(_ running: [WorkingSetRunningItem]) -> some View {
-        WorkingSetPanel(title: "NOW", accent: Theme.dotOn) {
-            PanelReading("\(running.count) running")
-        } content: {
-            VStack(spacing: 0) {
-                ForEach(Array(running.enumerated()), id: \.element.id) { index, item in
-                    if index > 0 { Divider().overlay(Theme.hairline) }
-                    runningRow(item)
+    private struct HeaderStatus {
+        let word: String
+        // Nil when the line says how long ago the session finished, which has to keep
+        // counting while nothing else redraws the header.
+        var line: String?
+        var elapsedSince: Date? = nil
+        var isNew = false
+    }
+
+    @ViewBuilder
+    private func lineText(_ status: HeaderStatus) -> some View {
+        if let line = status.line {
+            Text(line)
+        } else {
+            TimelineView(.periodic(from: .now, by: 30)) { context in
+                Text("Finished " + CommandRunSummary.ago(
+                    context.date.timeIntervalSince(session.lastActivity)))
+            }
+        }
+    }
+
+    private func headerStatus(headline: WorkingSetRunningItem?) -> HeaderStatus {
+        let live = LiveConversation.id(of: session.id, store: store, runner: runner)
+        let turnStart = session.messages.last { $0.role == .user }?.date
+        if session.messages.isEmpty, tone != .running {
+            return HeaderStatus(word: "New session", line: "Waiting for the first prompt",
+                                isNew: true)
+        }
+        switch tone {
+        case .running:
+            let doing = headline?.title ?? "Thinking"
+            return HeaderStatus(word: "Running", line: doing, elapsedSince: turnStart ?? headline?.startedAt)
+        case .waiting:
+            let doing = SessionActivity.line(for: session, store: store, runner: runner)
+            return HeaderStatus(word: "Waiting", line: doing, elapsedSince: turnStart)
+        case .needsYou:
+            if let request = runner.question(live) {
+                return HeaderStatus(word: "Needs you", line: Self.ask(request))
+            }
+            if runner.state(live).isBusy {
+                let doing = SessionActivity.line(for: session, store: store, runner: runner)
+                return HeaderStatus(word: "Needs you", line: doing)
+            }
+            return HeaderStatus(word: "Needs you")
+        case .idle:
+            return HeaderStatus(word: "Idle")
+        }
+    }
+
+    private static func ask(_ request: PermissionRequest) -> String {
+        if request.isQuestion { return request.title }
+        let subject = request.subject.split(separator: "\n").first.map(String.init) ?? ""
+        return "Asked to approve " + (subject.isBlank ? request.toolName : subject)
+    }
+
+    // MARK: - Activity
+
+    private var emptyState: some View {
+        VStack(spacing: 3) {
+            Text("Nothing has run yet")
+                .font(.system(size: 12.5, weight: .semibold))
+            Text("Each prompt you send starts a new group here.")
+                .font(.system(size: 12))
+                .foregroundStyle(.secondary)
+        }
+        .multilineTextAlignment(.center)
+        .padding(.horizontal, 18)
+        .padding(.vertical, 28)
+        .frame(maxWidth: .infinity)
+    }
+
+    private func turnView(_ turn: WorkingSetTurn, isLatest: Bool, hiding hiddenID: String?)
+        -> some View {
+        let key = "turn\u{0}" + turn.id
+        let expanded = turns.isExpanded(key, byDefault: isLatest)
+        // The running call already has the header to itself.
+        let entries = turn.entries.filter { $0.id != hiddenID }
+        return VStack(spacing: 0) {
+            WorkingSetTurnHeader(turn: turn, expanded: expanded) {
+                withAnimation(.easeOut(duration: 0.15)) {
+                    turns.toggle(key, byDefault: isLatest)
                 }
             }
+            if expanded { turnRows(entries, key: key) }
+        }
+        .overlay(alignment: .bottom) {
+            Rectangle().fill(Theme.border).frame(height: 1)
         }
     }
 
-    private func runningRow(_ item: WorkingSetRunningItem) -> some View {
-        let ink = WorkingSetInk.of(item)
-        return HStack(spacing: 8) {
-            Image(systemName: item.symbol)
-                .font(.system(size: 8, weight: .semibold))
-                .foregroundStyle(ink.ink)
-                .frame(width: 18, height: 18)
-                .background(Circle().fill(ink.fill))
-                .accessibilityHidden(true)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(item.title)
-                    .font(.mono(10.5, .semibold))
-                    .lineLimit(2)
-                    .truncationMode(.middle)
-                Text(item.detail)
-                    .font(.mono(8.5))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            if let startedAt = item.startedAt { ElapsedTime(since: startedAt) }
-        }
-        .padding(.horizontal, 11)
-        .padding(.vertical, 9)
-        .accessibilityElement(children: .combine)
-    }
-
-    // MARK: - Timeline
-
-    private func timelinePanel(_ entries: [WorkingSetTimelineEntry]) -> some View {
+    @ViewBuilder
+    private func turnRows(_ entries: [WorkingSetTimelineEntry], key: String) -> some View {
         // Newest first: what just happened is what the sidebar was opened for, and the
         // older work trails off below it.
-        let visible = Array(visibility.visible(entries, in: Self.timelineList).reversed())
+        let visible = Array(visibility.visible(entries, in: key).reversed())
         let hidden = entries.count - visible.count
-        return WorkingSetPanel(title: "TIMELINE") {
-            PanelReading(entries.isEmpty
-                         ? nil
-                         : counted(WorkingSetSummary.eventCount(in: entries), "event"))
-        } content: {
-            if entries.isEmpty {
-                emptyRow("No activity yet.")
+        ForEach(Array(visible.enumerated()), id: \.element.id) { index, entry in
+            if index > 0 { Divider().overlay(Theme.hairline) }
+            switch entry.content {
+            case .agent(let activity):
+                spanView(activity)
+            case .call(let call):
+                WorkingSetTimelineRow(call: call, projectPath: projectPath,
+                                      indent: Self.rowIndent)
+            }
+        }
+        if entries.count > WorkingSetToolCallVisibility.limit {
+            Divider().overlay(Theme.hairline)
+            if hidden > 0 {
+                WorkingSetVisibilityRow(
+                    icon: "ellipsis",
+                    title: "Show \(hidden) earlier in this prompt",
+                    indent: Self.rowIndent,
+                    accessibilityLabel: "Show \(hidden) earlier events in this prompt"
+                ) {
+                    visibility.showAll(in: key)
+                }
             } else {
-                LazyVStack(spacing: 0) {
-                    ForEach(Array(visible.enumerated()), id: \.element.id) { index, entry in
-                        if index > 0 { Divider().overlay(Theme.hairline) }
-                        switch entry.content {
-                        case .agent(let activity):
-                            spanView(activity)
-                        case .call(let call):
-                            WorkingSetTimelineRow(call: call, projectPath: projectPath)
-                        }
-                    }
-                    if entries.count > WorkingSetToolCallVisibility.limit {
-                        Divider().overlay(Theme.hairline)
-                        if hidden > 0 {
-                            WorkingSetVisibilityRow(
-                                icon: "ellipsis",
-                                title: "See \(hidden) earlier…",
-                                accessibilityLabel: "Show \(hidden) earlier events"
-                            ) {
-                                visibility.showAll(in: Self.timelineList)
-                            }
-                        } else {
-                            WorkingSetVisibilityRow(
-                                icon: "chevron.up",
-                                title: "Hide",
-                                accessibilityLabel: "Show only the five newest events"
-                            ) {
-                                visibility.hideOlder(in: Self.timelineList)
-                            }
-                        }
-                    }
+                WorkingSetVisibilityRow(
+                    icon: "chevron.up",
+                    title: "Show fewer",
+                    indent: Self.rowIndent,
+                    accessibilityLabel: "Show only the five newest events in this prompt"
+                ) {
+                    visibility.hideOlder(in: key)
                 }
             }
         }
@@ -181,7 +275,7 @@ struct SessionWorkingSet: View {
     private func spanView(_ activity: WorkingSetActivity) -> some View {
         let ink = WorkingSetInk.of(activity)
         let running = activity.state == .running
-        let expanded = spans.isExpanded(activity.id, running: running)
+        let expanded = spans.isExpanded(activity.id, byDefault: running)
         return VStack(spacing: 0) {
             spanHeader(activity, ink: ink, expanded: expanded, running: running)
             if expanded, !activity.actions.isEmpty {
@@ -193,6 +287,7 @@ struct SessionWorkingSet: View {
         // agent's work starts and stops.
         .overlay(alignment: .leading) {
             Rectangle().fill(ink.rail).frame(width: 2)
+                .padding(.leading, Self.railInset)
         }
     }
 
@@ -200,7 +295,7 @@ struct SessionWorkingSet: View {
                             expanded: Bool, running: Bool) -> some View {
         Button {
             withAnimation(.easeOut(duration: 0.15)) {
-                spans.toggle(activity.id, running: running)
+                spans.toggle(activity.id, byDefault: running)
             }
         } label: {
             HStack(spacing: 7) {
@@ -220,18 +315,17 @@ struct SessionWorkingSet: View {
                 Spacer(minLength: 6)
                 spanSummary(activity, ink: ink, expanded: expanded)
             }
-            .padding(.leading, 9)
-            .padding(.trailing, 11)
+            .padding(.leading, Self.rowIndent - 4)
+            .padding(.trailing, 14)
             .padding(.vertical, 8)
             .background(expanded ? ink.rail.opacity(0.05) : .clear)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .accessibilityLabel(activity.title)
-        .accessibilityValue(activity.state.label)
+        .accessibilityLabel("\(activity.title), \(activity.kind.label)")
+        .accessibilityValue("\(activity.state.label), \(expanded ? "expanded" : "collapsed")")
         .accessibilityHint(expanded ? "Hides what this agent ran" : "Shows what this agent ran")
     }
-
     private func spanSummary(_ activity: WorkingSetActivity, ink: WorkingSetInk,
                              expanded: Bool) -> some View {
         HStack(spacing: 4) {
@@ -257,8 +351,8 @@ struct SessionWorkingSet: View {
                 if hidden > 0 {
                     WorkingSetVisibilityRow(
                         icon: "ellipsis",
-                        title: "See \(hidden) more…",
-                        indent: WorkingSetTimelineRow.childIndent,
+                        title: "Show \(hidden) earlier",
+                        indent: Self.childIndent,
                         accessibilityLabel:
                             "Show \(hidden) older actions for \(activity.title)"
                     ) {
@@ -267,8 +361,8 @@ struct SessionWorkingSet: View {
                 } else {
                     WorkingSetVisibilityRow(
                         icon: "chevron.up",
-                        title: "Hide",
-                        indent: WorkingSetTimelineRow.childIndent,
+                        title: "Show fewer",
+                        indent: Self.childIndent,
                         accessibilityLabel:
                             "Show only the five newest actions for \(activity.title)"
                     ) {
@@ -276,118 +370,13 @@ struct SessionWorkingSet: View {
                     }
                 }
                 Divider().overlay(Theme.hairline)
-                    .padding(.leading, WorkingSetTimelineRow.childIndent)
+                    .padding(.leading, Self.childIndent)
             }
             ForEach(visible) { action in
                 WorkingSetTimelineRow(call: action, projectPath: projectPath,
-                                      indent: WorkingSetTimelineRow.childIndent)
+                                      indent: Self.childIndent)
             }
         }
-    }
-
-    // MARK: - Files
-
-    private func filesPanel(_ entries: [WorkingSetTimelineEntry]) -> some View {
-        let files = touchedFiles(entries)
-        // Named in every row once more than one repository is in play; a single-project
-        // session would only be told its own name over and over.
-        let namesProject = Set(files.map(\.projectID)).count > 1
-        return WorkingSetPanel(title: "TOUCHED FILES") {
-            if !files.isEmpty {
-                DiffPair(added: files.compactMap(\.change.added).reduce(0, +),
-                         removed: files.compactMap(\.change.removed).reduce(0, +),
-                         size: 8.5, spacing: 5)
-            }
-        } content: {
-            if files.isEmpty {
-                emptyRow("No uncommitted files.")
-            } else {
-                VStack(spacing: 0) {
-                    ForEach(Array(files.enumerated()), id: \.element.id) { index, file in
-                        if index > 0 { Divider().overlay(Theme.hairline) }
-                        fileRow(file, namesProject: namesProject)
-                    }
-                }
-            }
-        }
-    }
-
-    private func fileRow(_ file: TouchedFile, namesProject: Bool) -> some View {
-        Button {
-            openChange(file.projectID, file.root, file.change.path)
-        } label: {
-            HStack(spacing: 8) {
-                workingSetStatus(file.change.kind)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(file.change.fileName)
-                        .font(.mono(10.5, .semibold))
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                    HStack(spacing: 4) {
-                        RoundedRectangle(cornerRadius: 2)
-                            .fill(WorkingSetInk.of(file.author).rail)
-                            .frame(width: 7, height: 7)
-                        Text(namesProject
-                             ? "\(file.author.name) · \(file.projectName)"
-                             : file.author.name)
-                            .font(.mono(8.5))
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                    }
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                DiffPair(added: file.change.added ?? 0,
-                         removed: file.change.removed ?? 0,
-                         size: 8.5, spacing: 5)
-            }
-            .padding(.horizontal, 11)
-            .padding(.vertical, 9)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .hoverFill(cornerRadius: 8)
-        .appTooltip("Open \(file.change.path) in Changes")
-        .accessibilityLabel("Open \(file.change.path) in Changes")
-        .accessibilityValue("last touched by \(file.author.name)")
-    }
-
-    private func touchedFiles(_ entries: [WorkingSetTimelineEntry]) -> [TouchedFile] {
-        let written = WorkingSetSummary.attribution(in: entries, projectPath: projectPath)
-        return store.checkoutProjects(for: session).flatMap { checkout -> [TouchedFile] in
-            guard let project = store.project(checkout.projectID) else { return [] }
-            let root = checkout.worktreePath ?? project.path
-            guard let snapshot = gitStats.snapshot(at: root) else { return [] }
-            return snapshot.files.map { change in
-                TouchedFile(projectID: project.id, projectName: project.name,
-                            root: root, change: change,
-                            author: WorkingSetSummary.attributor(of: change.path, in: root,
-                                                                 from: written))
-            }
-        }
-    }
-
-    private func emptyRow(_ text: String) -> some View {
-        Text(text)
-            .font(.system(size: 10.5))
-            .foregroundStyle(.secondary)
-            .padding(11)
-            .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    private func workingSetStatus(_ kind: GitStatusKind) -> some View {
-        let colour: Color = switch kind {
-        case .modified: Theme.secret
-        case .added, .untracked: Theme.dotOn
-        case .deleted, .conflicted: Theme.deletion
-        case .renamed: Theme.accent
-        }
-        return Text(kind.letter)
-            .font(.mono(8.5, .bold))
-            .foregroundStyle(colour)
-            .frame(width: 18, height: 18)
-            .background(RoundedRectangle(cornerRadius: 5).fill(colour.opacity(0.14)))
-            .accessibilityLabel(kind.label)
     }
 }
 
@@ -407,31 +396,8 @@ private struct WorkingSetInk {
         return WorkingSetInk(fill: tint.fill, ink: tint.ink, rail: tint.colour)
     }
 
-    static func of(_ item: WorkingSetRunningItem) -> WorkingSetInk {
-        item.origin == .agent ? agent(item.title) : neutral
-    }
-
     static func of(_ activity: WorkingSetActivity) -> WorkingSetInk {
         activity.kind == .agent ? agent(activity.title) : neutral
-    }
-
-    static func of(_ author: WorkingSetAttribution) -> WorkingSetInk {
-        author.isAgent ? agent(author.name) : neutral
-    }
-}
-
-// The quiet reading at the right of a panel header.
-private struct PanelReading: View {
-    let text: String?
-
-    init(_ text: String?) { self.text = text }
-
-    var body: some View {
-        if let text {
-            Text(text)
-                .font(.mono(8.5))
-                .foregroundStyle(.tertiary)
-        }
     }
 }
 
@@ -455,7 +421,7 @@ private struct WorkingSetVisibilityRow: View {
             .foregroundStyle(.secondary)
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.leading, indent)
-            .padding(.trailing, 11)
+            .padding(.trailing, 14)
             .padding(.vertical, 9)
             .background(hovering ? Theme.field : Color.clear)
             .contentShape(Rectangle())
@@ -467,19 +433,82 @@ private struct WorkingSetVisibilityRow: View {
     }
 }
 
-// One line of the timeline: a call the main loop made, or one of the actions inside an
-// agent's span. The running one is the only row that moves, so it is the only one anybody
-// has to look for.
-private struct WorkingSetTimelineRow: View {
-    // Clears the rail and the span header's avatar, so an agent's actions read as sitting
-    // under the agent rather than beside it.
-    static let childIndent: CGFloat = 30
+// The header of one prompt's group. Closed it is one line, so a long session folds down to
+// a list of what was asked; open it gives the prompt a second line, which is usually
+// enough to tell two similar requests apart.
+private struct WorkingSetTurnHeader: View {
+    let turn: WorkingSetTurn
+    let expanded: Bool
+    let toggle: () -> Void
 
+    @State private var hovering = false
+
+    var body: some View {
+        let events = WorkingSetSummary.eventCount(in: turn.entries)
+        let failures = WorkingSetSummary.failureCount(in: turn.entries)
+        Button(action: toggle) {
+            HStack(alignment: .top, spacing: 8) {
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 8, weight: .semibold))
+                    .foregroundStyle(.tertiary)
+                    .rotationEffect(.degrees(expanded ? 90 : 0))
+                    .frame(width: 10, height: 15)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(turn.prompt)
+                        .font(.system(size: 12, weight: .semibold))
+                        .lineLimit(expanded ? 2 : 1)
+                        .truncationMode(.tail)
+                        .multilineTextAlignment(.leading)
+                    HStack(spacing: 10) {
+                        if let sentAt = turn.sentAt {
+                            Text(sentAt.formatted(date: .omitted, time: .shortened))
+                        }
+                        Text(events == 0 ? "No activity" : counted(events, "event"))
+                        if failures > 0 {
+                            Text("\(failures) failed").foregroundStyle(Theme.deletion)
+                        }
+                    }
+                    .font(.mono(10))
+                    .foregroundStyle(.tertiary)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .background(background)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+        .motion(Motion.hover, value: hovering)
+        .appTooltip(turn.prompt)
+        .accessibilityLabel("Prompt: \(turn.prompt)")
+        .accessibilityValue([counted(events, "event"),
+                             failures > 0 ? "\(failures) failed" : nil,
+                             expanded ? "expanded" : "collapsed"]
+            .compactMap { $0 }.joined(separator: ", "))
+        .accessibilityHint(expanded ? "Hides what this prompt did" : "Shows what this prompt did")
+    }
+
+    private var background: Color {
+        switch (expanded, hovering) {
+        case (true, true): Theme.dotOn.opacity(0.14)
+        case (true, false): Theme.dotOn.opacity(0.09)
+        case (false, true): Theme.field
+        case (false, false): .clear
+        }
+    }
+}
+
+// One line of activity: a call the main loop made, or one of the actions inside an agent's
+// span. The tool's name is set in the UI font so a column of them can be skimmed, and the
+// command beside it in mono, cut to one line with the whole of it on hover.
+private struct WorkingSetTimelineRow: View {
     @Environment(ToolCallDetailPresenter.self) private var details
 
     let call: WorkingSetToolCall
     let projectPath: String
-    var indent: CGFloat = 11
+    let indent: CGFloat
 
     @State private var anchor = FrameAnchor()
     @State private var hovering = false
@@ -487,19 +516,27 @@ private struct WorkingSetTimelineRow: View {
     private var running: Bool { call.state == .running }
 
     var body: some View {
+        let presentation = ToolPresentationCache.presentation(for: call.tool,
+                                                              projectPath: projectPath)
         Button(action: showDetails) {
             HStack(spacing: 8) {
                 glyph
-                Text(call.title)
-                    .font(.mono(10, running ? .semibold : .regular))
-                    .lineLimit(2)
-                    .truncationMode(.middle)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                HStack(spacing: 6) {
+                    Text(presentation.verb)
+                        .font(.system(size: 11.5, weight: .semibold))
+                        .fixedSize()
+                    Text(presentation.argument)
+                        .font(.mono(11, running ? .semibold : .regular))
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
                 trailing
             }
             .padding(.leading, indent)
-            .padding(.trailing, 11)
-            .padding(.vertical, 7)
+            .padding(.trailing, 14)
+            .padding(.vertical, 6)
+            .frame(minHeight: 30)
             .background(background)
             .contentShape(Rectangle())
         }
@@ -507,6 +544,7 @@ private struct WorkingSetTimelineRow: View {
         .background(FrameAnchorView(anchor: anchor))
         .onHover { hovering = $0 }
         .motion(Motion.hover, value: hovering)
+        .appTooltip(presentation.command.map { "\(presentation.verb) \($0)" } ?? call.title)
         .onChange(of: call) { _, call in
             details.refresh(call, projectPath: projectPath)
         }
@@ -526,7 +564,7 @@ private struct WorkingSetTimelineRow: View {
                     .foregroundStyle(call.state.colour)
             }
         }
-        .frame(width: 8)
+        .frame(width: 10)
         .accessibilityHidden(true)
     }
 
@@ -534,18 +572,18 @@ private struct WorkingSetTimelineRow: View {
     private var trailing: some View {
         if running {
             Text("now")
-                .font(.mono(8.5, .semibold))
+                .font(.mono(10, .semibold))
                 .foregroundStyle(Theme.addition)
         } else if let startedAt = call.startedAt {
             Text(startedAt.formatted(date: .omitted, time: .shortened))
-                .font(.mono(8.5))
+                .font(.mono(10))
                 .foregroundStyle(.tertiary)
         }
     }
 
     private var background: Color {
         if hovering { return Theme.field }
-        return running ? Theme.dotOn.opacity(0.06) : .clear
+        return running ? Theme.dotOn.opacity(0.07) : .clear
     }
 
     private func showDetails() {
@@ -562,46 +600,5 @@ extension WorkingSetToolCall.State {
         case .failed: Theme.deletion
         case .interrupted: Theme.secret
         }
-    }
-}
-
-private struct WorkingSetPanel<Trailing: View, Content: View>: View {
-    let title: String
-    // The live tint on the NOW panel: it borders the card and backs the header, so the one
-    // panel that is still moving does not read as another record of what is over.
-    var accent: Color?
-    @ViewBuilder let trailing: Trailing
-    @ViewBuilder let content: Content
-
-    init(title: String, accent: Color? = nil,
-         @ViewBuilder trailing: () -> Trailing,
-         @ViewBuilder content: () -> Content) {
-        self.title = title
-        self.accent = accent
-        self.trailing = trailing()
-        self.content = content()
-    }
-
-    var body: some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 6) {
-                if accent != nil { PulsingDot() }
-                Text(title)
-                    .font(.mono(8.5, .semibold))
-                    .kerning(1)
-                    .foregroundStyle(accent == nil
-                                     ? AnyShapeStyle(.secondary)
-                                     : AnyShapeStyle(Theme.addition))
-                Spacer(minLength: 6)
-                trailing
-            }
-            .padding(.horizontal, 11)
-            .frame(height: 34)
-            .background(accent?.opacity(0.05) ?? .clear)
-            .overlay(alignment: .bottom) { Divider().overlay(Theme.hairline) }
-            content
-        }
-        .surface(Theme.card, cornerRadius: 11, border: accent?.opacity(0.28) ?? Theme.border)
-        .clipShape(RoundedRectangle(cornerRadius: 11))
     }
 }
