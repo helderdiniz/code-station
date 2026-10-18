@@ -29,6 +29,15 @@ struct BreathingTests {
         #expect(circle.loops.isEmpty)
     }
 
+    // The pill's rail flows on the same media clock as every other loop.
+    @Test func theStateRailFlowsOnceItIsOnScreen() {
+        let rail = FlowingRailView(frame: NSRect(x: 0, y: 0, width: 3, height: 22))
+        rail.update(colour: .black)
+        #expect(rail.loops.isEmpty)
+        rail.restartLoops()
+        #expect(rail.loops == ["flow"])
+    }
+
     // Resting is the state Reduce Motion and a session with nothing to do both land in,
     // and it has to be the full-strength drawing rather than some point mid-swing.
     @Test func restingDrawsTheContentAtFullStrength() throws {

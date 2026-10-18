@@ -55,4 +55,49 @@ struct SessionFactsTests {
         #expect(!ContextHairline.animatesFuse(at: 0.801, whileActive: false))
         #expect(!ContextHairline.animatesFuse(at: 0.8, whileActive: true))
     }
+
+    // The pill is one button for the state and the branch, so VoiceOver hears both halves
+    // in one go, state first.
+    @Test func speaksTheStateThenTheBranch() {
+        let state = SessionStateReading(tone: .running, since: Date().addingTimeInterval(-312),
+                                        ticks: true)
+        let facts = SessionFacts(branch: "code-station/6318e9ff")
+        #expect(SessionFactsChip.accessibilityLabel(state: state, facts: facts, showsBranch: true)
+                    == "Running for 5m, branch code-station/6318e9ff, session details")
+        // The Changes tab names the branch itself, so the pill leaves it out there.
+        #expect(SessionFactsChip.accessibilityLabel(state: state, facts: facts, showsBranch: false)
+                    == "Running for 5m, session details")
+    }
+
+    @Test func speaksTheWindowAndASessionWithNoTime() {
+        let state = SessionStateReading(tone: .needsYou)
+        let facts = SessionFacts(context: 0.42, agent: .claudeCode)
+        #expect(SessionFactsChip.accessibilityLabel(state: state, facts: facts, showsBranch: true)
+                    == "Needs you, session details, context 42% full")
+    }
+
+    @Test func namesADiagnosisOnlyWhileItRuns() {
+        #expect(SessionStateReading(tone: .running, diagnosing: true).word == "DIAGNOSING")
+        #expect(SessionStateReading(tone: .idle, diagnosing: true).word == "IDLE")
+        #expect(SessionStateReading(tone: .running, diagnosing: true).spokenWord == "Diagnosing")
+    }
+
+    // The card carries the count the pill rounds off.
+    @Test func countsPreciselyOnTheCard() {
+        #expect(SessionStateReading.preciseElapsed(4) == "0m 04s")
+        #expect(SessionStateReading.preciseElapsed(312) == "5m 12s")
+        #expect(SessionStateReading.preciseElapsed(2 * 3_600 + 14 * 60 + 9) == "2h 14m")
+        #expect(SessionStateReading.preciseElapsed(27 * 3_600) == "1d 3h")
+        #expect(SessionStateReading.preciseElapsed(-5) == "0m 00s")
+    }
+
+    @Test func saysWhenALiveStateBeganAndWhenAnIdleOneLastMoved() {
+        let now = Date()
+        let clock = now.formatted(date: .omitted, time: .shortened)
+        #expect(SessionStateReading.sinceLine(now, tone: .running) == "since \(clock)")
+        #expect(SessionStateReading.sinceLine(now, tone: .idle) == "last active \(clock)")
+        let lastWeek = now.addingTimeInterval(-7 * 86_400)
+        #expect(SessionStateReading.sinceLine(lastWeek, tone: .idle)
+                    == "last active \(RelativeTime.stamp(lastWeek))")
+    }
 }

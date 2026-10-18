@@ -492,14 +492,14 @@ struct SessionView: View {
     // What the identity deck gives up to fit the pane. Nothing here drops an action: the
     // rail on the deck below is where every one of them lives.
     private enum HeaderFit {
-        // The branch chip at the width a name deserves.
+        // The branch at the width a name deserves.
         case whole
         // The branch cut back to a stub.
         case folded
     }
 
     // The first deck stands taller than the second: it carries the identity tile and the
-    // state seat, and it is the band a reader lands on first.
+    // state pill, and it is the band a reader lands on first.
     private static let identityDeckHeight: CGFloat = 58
     // A 34pt tab needs more room than the thin strip of state this replaces. The eight
     // points buy destinations that are readable without being pointed at.
@@ -594,7 +594,7 @@ struct SessionView: View {
         }
     }
 
-    // The session's state and branch, with the other details behind the branch chip.
+    // The session's state and branch as one pill, with the other details behind it.
     private func readings(session: ChatSession, fit: HeaderFit) -> some View {
         // The lead checkout is the one the branch speaks for, the same root the stats
         // refresh puts first. The cache only ever holds snapshots of a readable
@@ -607,8 +607,6 @@ struct SessionView: View {
         // it counts while Design is the side running.
         let live = LiveConversation.of(sessionID, store: store, runner: runner) ?? session
         return HStack(spacing: 9) {
-            stateSeat(tone: tone, conversation: live,
-                      isTroubleshooting: session.isTroubleshooting)
             SessionAgentIndicator(session: session) { target in
                 tab = .conversation
                 transcriptWindow.reveal(target.messageID, in: session.messages)
@@ -617,6 +615,8 @@ struct SessionView: View {
             }
             SessionFactsChip(
                 facts: facts,
+                state: sessionState(tone: tone, conversation: live,
+                                    isTroubleshooting: session.isTroubleshooting),
                 maxWidth: fit == .whole ? Self.branchRoom : Self.foldedBranchRoom,
                 showsBranch: tab != .changes,
                 openChanges: openChanges,
@@ -1128,52 +1128,18 @@ struct SessionView: View {
             removed: snapshots.reduce(0) { $0 + $1.totalRemoved })
     }
 
-    // "RUNNING · 4m", "WAITING · 12m", "IDLE · 2h": the state and how long it has been
-    // in it. A running turn counts up from its own start rather than from the session's
-    // last activity, which is what makes it the age of the work in flight. A waiting one
-    // counts from where the work stopped, so the number is the length of the wait rather
-    // than of the turn that is still holding it.
-    //
-    // The seat under it is a tint of the state's own colour, which is what lets the
-    // reading hold the end of the deck without being drawn any larger. The word is always
-    // there beside the light, so nothing here is said in colour alone.
-    private func stateSeat(tone: SessionTone, conversation: ChatSession,
-                           isTroubleshooting: Bool) -> some View {
+    private func sessionState(tone: SessionTone, conversation: ChatSession,
+                              isTroubleshooting: Bool) -> SessionStateReading {
         // Read off the wait rather than the tone: a wait that has gone stale reads as
-        // NEEDS YOU, and how long it has been held is exactly what that row is for.
+        // NEEDS YOU, and how long it has been held is exactly what that state is for.
         let waitingSince = runner.waitingSince(conversation.id)
         let since: Date? = switch tone {
         case .running: runner.turnStarted(conversation.id)
         default: waitingSince ?? conversation.lastActivity
         }
-        return HStack(spacing: 6) {
-            if tone == .running {
-                PulsingDot(size: 7)
-            } else {
-                StateLight(tone: tone, size: 7)
-            }
-            // A diagnosis runs like any other turn, but naming it is what tells the reader
-            // the brief landed and the agent is working through it.
-            StatusCaps(text: isTroubleshooting && tone == .running
-                           ? "DIAGNOSING" : tone.word,
-                       tint: tone.colour)
-            if let since {
-                StatusDot()
-                // A live turn has to keep counting when nothing arrives to redraw it,
-                // which is most of a long one and all of a wait.
-                if tone == .running || waitingSince != nil {
-                    TimelineView(.periodic(from: .now, by: 1)) { _ in
-                        StatusValue(text: RelativeTime.duration(since: since))
-                    }
-                } else {
-                    StatusValue(text: RelativeTime.short(since))
-                }
-            }
-        }
-        .fixedSize()
-        .padding(.horizontal, 9)
-        .frame(height: 24)
-        .background(RoundedRectangle(cornerRadius: 7).fill(tone.colour.opacity(0.12)))
+        return SessionStateReading(tone: tone, since: since,
+                            ticks: tone == .running || waitingSince != nil,
+                            diagnosing: isTroubleshooting)
     }
 
     private func workspaceRepositories(_ session: ChatSession) -> [ChangesRepository] {

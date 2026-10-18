@@ -49,6 +49,18 @@ enum SessionTone {
         }
     }
 
+    // The same colour read as words, or as a thin mark that stands in for them. The light
+    // colours sink into a pale card, so these are the ones measured as ink.
+    var wordColour: Color {
+        switch self {
+        case .running, .waiting: Theme.dotOnText
+        case .needsYou: Theme.attentionText
+        // The system's secondary grey falls short of text contrast on the pale card at
+        // the small sizes a state word is set in, so idle is a step darker.
+        case .idle: Color(nsColor: .labelColor).opacity(0.72)
+        }
+    }
+
     // A card carries its state as a ring rather than a fill, so a column of them reads as
     // one column with a few live rows in it.
     var ring: Color {
@@ -576,10 +588,11 @@ struct MonoChip: View {
 struct StatusCaps: View {
     let text: String
     var tint: Color? = nil
+    var size: CGFloat = 10.5
 
     var body: some View {
         Text(text)
-            .font(.mono(10.5, .semibold))
+            .font(.mono(size, .semibold))
             .kerning(0.6)
             .foregroundStyle(tint ?? Color.secondary)
             .fixedSize()
@@ -592,10 +605,11 @@ struct StatusValue: View {
     let text: String
     var tint: Color? = nil
     var truncation: Text.TruncationMode = .tail
+    var size: CGFloat = 10.5
 
     var body: some View {
         Text(text)
-            .font(.mono(10.5))
+            .font(.mono(size))
             .foregroundStyle(tint ?? Color.secondary)
             .lineLimit(1)
             .truncationMode(truncation)
@@ -604,8 +618,10 @@ struct StatusValue: View {
 
 // The separator between two readings that belong to the same item.
 struct StatusDot: View {
+    var size: CGFloat = 10.5
+
     var body: some View {
-        Text("·").font(.mono(10.5)).foregroundStyle(.tertiary)
+        Text("·").font(.mono(size)).foregroundStyle(.tertiary)
     }
 }
 

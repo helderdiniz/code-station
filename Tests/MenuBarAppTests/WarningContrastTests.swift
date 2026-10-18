@@ -144,4 +144,24 @@ struct WarningContrastTests {
                     "on \(appearance.name.rawValue)")
         }
     }
+
+    // The header pill carries the state as a 9.5pt word and a thin rail, both on the card
+    // at rest and on the sunken fill once the card opens. The word has to read as text,
+    // the rail as a mark.
+    @Test func sessionStatePillIsReadableInBothAppearances() throws {
+        for appearance in try appearances() {
+            let card = try swatch(Theme.card, in: appearance)
+            let open = try swatch(Theme.sunken, in: appearance).over(card)
+            for tone in [SessionTone.running, .waiting, .needsYou, .idle] {
+                let ink = try swatch(tone.wordColour, in: appearance)
+                for (surface, backdrop) in [("rest", card), ("open", open)] {
+                    let colour = ink.over(backdrop)
+                    #expect(colour.contrast(against: backdrop) >= 4.5,
+                            "\(tone.word) word at \(surface) on \(appearance.name.rawValue)")
+                    #expect(colour.contrast(against: backdrop) >= 3,
+                            "\(tone.word) rail at \(surface) on \(appearance.name.rawValue)")
+                }
+            }
+        }
+    }
 }
