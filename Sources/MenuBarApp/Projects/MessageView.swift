@@ -73,22 +73,27 @@ struct MessageView: View, Equatable {
     private var userBubble: some View {
         HStack(spacing: 0) {
             Spacer(minLength: userBubbleLeadingSpace)
-            VStack(alignment: .leading, spacing: 8) {
-                if let paths = message.attachments, !paths.isEmpty {
-                    // An image that is still on disk shows itself; anything else - other
-                    // files, or an image gone since - keeps the chip and its name.
-                    ForEach(paths, id: \.self) { path in
-                        let url = URL(fileURLWithPath: path)
-                        if Attachment(url: url).isImage,
-                           FileManager.default.fileExists(atPath: url.path) {
-                            InlineImageView(url: url, maximumWidth: userBubbleContentWidth)
-                        } else {
-                            AttachmentChip(url: url)
+            VStack(alignment: .trailing, spacing: 6) {
+                VStack(alignment: .leading, spacing: 8) {
+                    if let paths = message.attachments, !paths.isEmpty {
+                        // An image that is still on disk shows itself; anything else - other
+                        // files, or an image gone since - keeps the chip and its name.
+                        ForEach(paths, id: \.self) { path in
+                            let url = URL(fileURLWithPath: path)
+                            if Attachment(url: url).isImage,
+                               FileManager.default.fileExists(atPath: url.path) {
+                                InlineImageView(url: url, maximumWidth: userBubbleContentWidth)
+                            } else {
+                                AttachmentChip(url: url)
+                            }
                         }
                     }
+                    if !message.text.isEmpty {
+                        SentPromptText(text: message.text)
+                    }
                 }
-                if !message.text.isEmpty {
-                    SentPromptText(text: message.text)
+                if message.dictated == true {
+                    DictatedTag()
                 }
             }
             .environment(\.colorScheme, bubble.inverts ? colorScheme.inverted : colorScheme)
@@ -130,6 +135,22 @@ struct MessageView: View, Equatable {
     }
 
     private static let edgeWidth: CGFloat = 4
+
+    // Says the prompt was spoken, so a stray word in it reads as the engine's slip rather
+    // than the writer's.
+    private struct DictatedTag: View {
+        var body: some View {
+            HStack(spacing: 5) {
+                Image(systemName: "mic")
+                    .font(.system(size: 10, weight: .medium))
+                Text("Dictated")
+                    .font(.mono(10.5, .medium))
+            }
+            .foregroundStyle(.secondary)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("Dictated")
+        }
+    }
 
     // The text and the copy button keep clear of the project's bar.
     private var userBubbleTrailingPadding: CGFloat {

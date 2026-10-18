@@ -34,6 +34,14 @@ struct ComposerField<TrailingAccessory: View>: View {
     // box takes no files, so a drag over it does nothing.
     var onDropFiles: (([URL]) -> Void)? = nil
     var onFileDragTargeted: ((Bool) -> Void)? = nil
+    // While the app is listening the words are the microphone's, so the box takes no
+    // typing and wears the listening colour.
+    var listening = false
+    var marks = ComposerMarks()
+    var onMarkClick: ((Int, CGRect) -> Void)? = nil
+    var link: ComposerFieldLink? = nil
+    // Room kept clear at the end of the text for whatever sits there.
+    var trailingInset: CGFloat = 48
 
     // Past this the box stops growing and the text scrolls inside it, so a long prompt
     // can never push the transcript off the screen.
@@ -55,6 +63,11 @@ struct ComposerField<TrailingAccessory: View>: View {
          onDropFiles: (([URL]) -> Void)? = nil,
          onFileDragTargeted: ((Bool) -> Void)? = nil,
          minimumLines: Int = 1,
+         listening: Bool = false,
+         marks: ComposerMarks = ComposerMarks(),
+         onMarkClick: ((Int, CGRect) -> Void)? = nil,
+         link: ComposerFieldLink? = nil,
+         trailingInset: CGFloat = 48,
          @ViewBuilder trailingAccessory: () -> TrailingAccessory) {
         _text = text
         _isFocused = isFocused
@@ -72,6 +85,11 @@ struct ComposerField<TrailingAccessory: View>: View {
         self.onFileDragTargeted = onFileDragTargeted
         self.trailingAccessory = trailingAccessory()
         self.minimumLines = minimumLines
+        self.listening = listening
+        self.marks = marks
+        self.onMarkClick = onMarkClick
+        self.link = link
+        self.trailingInset = trailingInset
     }
 
     var body: some View {
@@ -92,6 +110,10 @@ struct ComposerField<TrailingAccessory: View>: View {
                  onCommandKey: onCommandKey,
                  onDropFiles: onDropFiles,
                  onFileDragTargeted: onFileDragTargeted,
+                 readOnly: listening,
+                 marks: marks,
+                 onMarkClick: onMarkClick,
+                 link: link,
                  animatesKeyword: !reduceMotion,
                  onHeightChange: { height = $0 })
             .frame(height: min(max(height, line * CGFloat(minimumLines)), line * CGFloat(maxLines)))
@@ -104,18 +126,27 @@ struct ComposerField<TrailingAccessory: View>: View {
                 }
             }
             .padding(.leading, 12)
-            .padding(.trailing, 48)
+            .padding(.trailing, trailingInset)
             .padding(.vertical, 10)
             // The text view only covers the text itself, so the padding around it would
             // swallow a click and leave the box unfocused. The background sits behind the
             // text view and takes only the clicks it does not want, which is the padding.
             .background {
                 RoundedRectangle(cornerRadius: 10)
-                    .fill(isFocused ? Theme.card : Theme.field)
+                    .fill(isFocused || listening ? Theme.card : Theme.field)
                     .onTapGesture { if isEnabled { isFocused = true } }
             }
             .overlay(RoundedRectangle(cornerRadius: 10)
-                .stroke(isFocused ? Theme.accent : Theme.border, lineWidth: isFocused ? 1.5 : 1))
+                .stroke(listening ? Theme.listenEdge : isFocused ? Theme.accent : Theme.border,
+                        lineWidth: isFocused || listening ? 1.5 : 1))
+            .background {
+                if listening {
+                    RoundedRectangle(cornerRadius: 12)
+                        .stroke(Theme.listenGlow, lineWidth: 3)
+                        .padding(-1.5)
+                }
+            }
+            .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: listening)
             .overlay(alignment: .trailing) {
                 trailingAccessory
                     .padding(.trailing, 6)
@@ -144,6 +175,10 @@ struct TextArea: NSViewRepresentable {
     let onCommandKey: ((CommandKey) -> Bool)?
     var onDropFiles: (([URL]) -> Void)? = nil
     var onFileDragTargeted: ((Bool) -> Void)? = nil
+    var readOnly = false
+    var marks = ComposerMarks()
+    var onMarkClick: ((Int, CGRect) -> Void)? = nil
+    var link: ComposerFieldLink? = nil
     let animatesKeyword: Bool
     let onHeightChange: (CGFloat) -> Void
 
@@ -166,11 +201,13 @@ struct TextArea: NSViewRepresentable {
             textView.setSelectedRange(NSRange(location: (text as NSString).length, length: 0))
             context.coordinator.reportHeight(of: textView)
         }
+        link?.textView = textView
+        link?.applyPendingCaret()
 
         // Still selectable while a turn runs: making it otherwise would push first
         // responder out of the box, and the cursor would not come back when the turn ends.
         textView.setAccessibilityLabel("Prompt")
-        textView.isEditable = isEnabled
+        textView.isEditable = isEnabled && !readOnly
         textView.textColor = isEnabled ? .labelColor : .disabledControlTextColor
 
         // Only ever claim focus, never clear it: handing it back to nobody would leave the
@@ -193,6 +230,7 @@ struct TextArea: NSViewRepresentable {
         textView.highlightsKeyword = highlightsKeyword
         textView.commandNames = commandNames
         textView.animatesKeyword = animatesKeyword
+        textView.marks = marks
         // After the colour above, which is written into the text and takes the keyword's
         // own colours off it.
         textView.refreshHighlights()
@@ -232,7 +270,9 @@ struct TextArea: NSViewRepresentable {
             textView.highlightsKeyword = parent.highlightsKeyword
             textView.animatesKeyword = parent.animatesKeyword
             textView.commandNames = parent.commandNames
+            textView.marks = parent.marks
             textView.refreshHighlights()
+            parent.link?.textView = textView
 
             let scrollView = NSScrollView()
             scrollView.documentView = textView
@@ -355,6 +395,7 @@ struct TextArea: NSViewRepresentable {
         var highlightsKeyword = false
         var animatesKeyword = true
         var commandNames: Set<String> = []
+        var marks = ComposerMarks()
         private var keywordRanges: [NSRange] = []
         private var commandRange: NSRange?
         private var sweep: Task<Void, Never>?
@@ -391,10 +432,26 @@ struct TextArea: NSViewRepresentable {
             guard let layoutManager else { return }
 
             let length = (string as NSString).length
+            let whole = NSRange(location: 0, length: length)
             // AppKit shifts temporary ranges as text is edited, so their previous
             // offsets cannot tell us where all the old colour is now.
-            layoutManager.removeTemporaryAttribute(.foregroundColor,
-                                                   forCharacterRange: NSRange(location: 0, length: length))
+            for key in [NSAttributedString.Key.foregroundColor, .backgroundColor, .underlineStyle, .underlineColor] {
+                layoutManager.removeTemporaryAttribute(key, forCharacterRange: whole)
+            }
+
+            // A file name in backticks is sent as code, so it is shown as the same chip
+            // here that it becomes in the transcript.
+            for range in ComposerMarks.fileChips(in: string) {
+                layoutManager.addTemporaryAttributes([.foregroundColor: Theme.accentNSColor,
+                                                      .backgroundColor: Theme.accentNSColor.withAlphaComponent(0.08)],
+                                                     forCharacterRange: range)
+            }
+            for range in marks.unsure where NSMaxRange(range) <= length {
+                layoutManager.addTemporaryAttributes([
+                    .underlineStyle: NSUnderlineStyle([.single, .patternDot]).rawValue,
+                    .underlineColor: Theme.listenEdgeNSColor
+                ], forCharacterRange: range)
+            }
 
             let dark = effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
             let now = Date()
@@ -412,6 +469,46 @@ struct TextArea: NSViewRepresentable {
                 layoutManager.addTemporaryAttribute(.foregroundColor, value: Theme.accentNSColor,
                                                     forCharacterRange: commandRange)
             }
+            // The words the engine is still guessing at, which may yet change.
+            if let tentative = marks.tentative, NSMaxRange(tentative) <= length {
+                layoutManager.addTemporaryAttribute(.foregroundColor, value: NSColor.tertiaryLabelColor,
+                                                    forCharacterRange: tentative)
+            }
+        }
+
+        // A click on a dotted word asks about it rather than placing the caret.
+        override func mouseDown(with event: NSEvent) {
+            let point = convert(event.locationInWindow, from: nil)
+            let index = characterIndexForInsertion(at: point)
+            if event.clickCount == 1, let handler = coordinator?.parent.onMarkClick,
+               let mark = marks.unsure.firstIndex(where: {
+                   NSLocationInRange(index, $0) || (index == NSMaxRange($0) && index > 0
+                       && glyphRect(forCharacter: index - 1).contains(point))
+               }),
+               let frame = frameInWindow(of: marks.unsure[mark]) {
+                handler(mark, frame)
+                return
+            }
+            super.mouseDown(with: event)
+        }
+
+        private func glyphRect(forCharacter index: Int) -> NSRect {
+            guard let layoutManager, let textContainer else { return .zero }
+            let glyphs = layoutManager.glyphRange(forCharacterRange: NSRange(location: index, length: 1),
+                                                  actualCharacterRange: nil)
+            return layoutManager.boundingRect(forGlyphRange: glyphs, in: textContainer)
+                .offsetBy(dx: textContainerOrigin.x, dy: textContainerOrigin.y)
+        }
+
+        // Where a run of text sits in the window, measured from the top the way the
+        // app's menus are placed.
+        func frameInWindow(of range: NSRange) -> CGRect? {
+            guard let layoutManager, let textContainer, let content = window?.contentView,
+                  NSMaxRange(range) <= (string as NSString).length else { return nil }
+            let glyphs = layoutManager.glyphRange(forCharacterRange: range, actualCharacterRange: nil)
+            let local = layoutManager.boundingRect(forGlyphRange: glyphs, in: textContainer)
+                .offsetBy(dx: textContainerOrigin.x, dy: textContainerOrigin.y)
+            return FrameAnchor.fromTop(convert(local, to: content), in: content)
         }
 
         override func didChangeText() {
@@ -518,5 +615,57 @@ enum ComposerPaste {
 
     static func isTooLong(_ text: String) -> Bool {
         text.count > characterLimit
+    }
+}
+
+// What the field marks on the text without changing it.
+struct ComposerMarks: Equatable {
+    var tentative: NSRange?
+    var unsure: [NSRange] = []
+
+    // Only a lone file name in backticks, which is what a file said aloud becomes. Other
+    // code in backticks stays plain, the way it was typed.
+    private static let fileChip = try? NSRegularExpression(pattern: #"`[\w-]+(?:\.[\w-]+)*\.[A-Za-z0-9]+`"#)
+
+    static func fileChips(in text: String) -> [NSRange] {
+        let whole = NSRange(location: 0, length: (text as NSString).length)
+        return fileChip?.matches(in: text, range: whole).map(\.range) ?? []
+    }
+}
+
+// Lets something outside the field read and move its caret, for words that have to go in
+// where the person was typing rather than at the end.
+@MainActor
+final class ComposerFieldLink {
+    weak var textView: NSTextView?
+    private var pendingCaret: Int?
+
+    // The end of the selection, so a selection is kept and the words follow it.
+    var caret: Int? {
+        textView.map { NSMaxRange($0.selectedRange()) }
+    }
+
+    // The text is usually being changed in the same moment, so the caret is placed once
+    // the field has the new text.
+    func placeCaret(_ location: Int) {
+        pendingCaret = location
+        DispatchQueue.main.async { [weak self] in self?.applyPendingCaret() }
+    }
+
+    func applyPendingCaret() {
+        guard let location = pendingCaret, let textView,
+              location <= (textView.string as NSString).length else { return }
+        pendingCaret = nil
+        textView.setSelectedRange(NSRange(location: location, length: 0))
+        textView.scrollRangeToVisible(NSRange(location: location, length: 0))
+    }
+
+    func frameInWindow(of range: NSRange) -> CGRect? {
+        (textView as? TextArea.EditorView)?.frameInWindow(of: range)
+    }
+
+    func focus() {
+        guard let textView, let window = textView.window, window.firstResponder !== textView else { return }
+        window.makeFirstResponder(textView)
     }
 }

@@ -13,6 +13,9 @@ final class SessionComposerStore {
         var text: String = ""
         var attachments: [Attachment] = []
         var customInstructions: String?
+        // Some of it was spoken rather than typed, which the sent prompt says in the
+        // transcript.
+        var dictated = false
 
         var isEmpty: Bool {
             text.isBlank && attachments.isEmpty && customInstructions?.isBlank != false

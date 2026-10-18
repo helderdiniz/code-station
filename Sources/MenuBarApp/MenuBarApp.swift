@@ -32,6 +32,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private let copilot = CopilotCodeManager()
     private let projects = ProjectStore()
     private lazy var runner = SessionRunner(configs: store)
+    private let dictation = Dictation()
     private lazy var mobileAccess = MobileAccessController(store: projects, runner: runner,
                                                            gitStats: gitStats)
     private let workingTrees = WorkingTreeWatch()
@@ -155,6 +156,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                     .environment(copilot)
                     .environment(projects)
                     .environment(runner)
+                    .environment(dictation)
                     .environment(workingTrees)
                     .environment(sessionTimes)
                     .environment(orphanedWorktrees)

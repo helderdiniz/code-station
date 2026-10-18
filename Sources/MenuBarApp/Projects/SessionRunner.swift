@@ -558,6 +558,7 @@ final class SessionRunner {
         // conversation, so it does not appear as one.
         var isAppCommand = false
         var summary: SummaryAttempt? = nil
+        var dictated = false
 
         var prompt: String {
             let text = expansion ?? text
@@ -570,6 +571,7 @@ final class SessionRunner {
             // The note explaining what the app is doing is already in the transcript.
             guard !isAppCommand else { return [] }
             var userMessage = ChatMessage(role: .user, text: text)
+            if dictated { userMessage.dictated = true }
             if !attachments.isEmpty {
                 userMessage.attachments = attachments.map(\.url.path)
             }
@@ -607,7 +609,8 @@ final class SessionRunner {
         records[sessionID]?.queue.remove(at: index)
         preserveDraft(at: index, sessionID: sessionID)
         composer.restore(SessionComposerStore.Draft(text: item.text, attachments: item.attachments,
-                                                     customInstructions: item.customInstructions), in: sessionID)
+                                                     customInstructions: item.customInstructions,
+                                                     dictated: item.dictated), in: sessionID)
     }
 
     // Moves what is in the composer into the queue at this position, so the prompt about
@@ -618,7 +621,8 @@ final class SessionRunner {
         recordAddingIfMissing(sessionID).queue.insert(
             QueuedPrompt(text: current.text.trimmed,
                          attachments: current.attachments,
-                         customInstructions: current.customInstructions),
+                         customInstructions: current.customInstructions,
+                         dictated: current.dictated),
             at: index)
     }
 
@@ -1193,7 +1197,8 @@ final class SessionRunner {
     // what runs. Typing during a turn therefore costs nothing, and the ones already waiting
     // keep their order.
     func send(_ prompt: String, attachments: [Attachment] = [],
-              customInstructions: String? = nil, sessionID: UUID, store: ProjectStore) {
+              customInstructions: String? = nil, dictated: Bool = false,
+              sessionID: UUID, store: ProjectStore) {
         guard !isBeingRemoved(sessionID), store.session(sessionID) != nil else { return }
         var text = prompt.trimmed
         let instructions = customInstructions?.trimmed
@@ -1222,7 +1227,8 @@ final class SessionRunner {
             text: text,
             attachments: attachments,
             customInstructions: instructions?.isEmpty == false ? instructions : nil,
-            expansion: expansion(of: text, sessionID: sessionID, store: store)))
+            expansion: expansion(of: text, sessionID: sessionID, store: store),
+            dictated: dictated))
         runQueue(sessionID, store: store)
     }
 

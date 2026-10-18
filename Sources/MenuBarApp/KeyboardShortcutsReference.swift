@@ -53,7 +53,13 @@ enum KeyboardShortcutsReference {
             KeyboardShortcutHelp(keys: "⌘ ⏎", title: "Send the suggestion",
                                  detail: "Send the suggested next prompt as written. Nothing typed is ever sent over."),
             KeyboardShortcutHelp(keys: "Esc", title: "Cancel the suggestion",
-                                 detail: "Drop the suggested next prompt for this turn.")
+                                 detail: "Drop the suggested next prompt for this turn."),
+            KeyboardShortcutHelp(keys: "⇧ ⌘ D", title: "Dictate",
+                                 detail: "Speak into the prompt box. Press again to stop. Nothing is sent until you send it."),
+            KeyboardShortcutHelp(keys: "⏎", title: "Stop dictating",
+                                 detail: "Keep the words in the prompt box while the microphone is on."),
+            KeyboardShortcutHelp(keys: "Esc", title: "Throw away the take",
+                                 detail: "Put the prompt back as it was before you spoke.")
         ]),
         KeyboardShortcutGroup(title: "Files", shortcuts: [
             KeyboardShortcutHelp(keys: "⌘ S", title: "Save the file",

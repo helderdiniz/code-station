@@ -2313,6 +2313,7 @@ struct SessionView: View {
                             transcriptScrollRequest += 1
                         },
                         onSuggestionKey: { suggestionKey($0, blocked: blocked) },
+                        dictates: true,
                         above: {
                             runChoices(session, project: project)
                             contextNudge(session)

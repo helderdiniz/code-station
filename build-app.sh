@@ -55,6 +55,10 @@ cat > "$APP/Contents/Info.plist" <<PLIST
     <key>NSHighResolutionCapable</key><true/>
     <key>NSLocalNetworkUsageDescription</key>
     <string>Open a selected Code Station session on a phone connected to the same Wi-Fi.</string>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>Speak a prompt into the composer. Audio stays on this Mac and is never kept.</string>
+    <key>NSSpeechRecognitionUsageDescription</key>
+    <string>Turn what you say into the words of a prompt, on this Mac.</string>
 </dict>
 </plist>
 PLIST

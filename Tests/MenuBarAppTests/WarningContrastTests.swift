@@ -116,6 +116,23 @@ struct WarningContrastTests {
         }
     }
 
+    // Dictation's lime: the mic pill's clock on the lime fill, the notice row's words on
+    // the pale lime tint, and the dotted mark under an unsure word against the card.
+    @Test func listeningIsReadableInBothAppearances() throws {
+        for appearance in try appearances() {
+            let card = try swatch(Theme.card, in: appearance)
+            let fill = try swatch(Theme.listenFill, in: appearance)
+            let tint = try swatch(Theme.listenTint, in: appearance).over(card)
+
+            #expect(try swatch(Theme.listenOnFill, in: appearance).contrast(against: fill) >= 4.5,
+                    "mic pill on \(appearance.name.rawValue)")
+            #expect(try swatch(Theme.listenInk, in: appearance).contrast(against: tint) >= 4.5,
+                    "notice on \(appearance.name.rawValue)")
+            #expect(try swatch(Theme.listenEdge, in: appearance).contrast(against: card) >= 3,
+                    "unsure mark on \(appearance.name.rawValue)")
+        }
+    }
+
     // All out has to stand apart from the house green, or the level that changes the
     // most looks the same as the everyday one.
     @Test func allOutDoesNotShareBalancedColour() throws {

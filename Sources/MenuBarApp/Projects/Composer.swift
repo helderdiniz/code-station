@@ -13,6 +13,9 @@ struct Composer<Above: View, Accessory: View>: View {
     @Environment(ProjectStore.self) private var store
     @Environment(SessionRunner.self) private var runner
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    // Optional so a pane hosted without them simply has no microphone.
+    @Environment(Dictation.self) private var dictation: Dictation?
+    @Environment(MenuPresenter.self) private var menus: MenuPresenter?
 
     let sessionID: UUID
     // Which CLI the prompt is bound for: only Claude's reads a thinking keyword out of it.
@@ -31,6 +34,8 @@ struct Composer<Above: View, Accessory: View>: View {
     // Passed to the field so the keys the suggestion above answers are only taken while
     // the cursor is in the box.
     var onSuggestionKey: ((SuggestionKey) -> Bool)? = nil
+    // Whether the box has a microphone. Only the Chat pane speaks into its prompt.
+    var dictates = false
     @ViewBuilder let above: Above
     @ViewBuilder let accessory: Accessory
 
@@ -40,6 +45,9 @@ struct Composer<Above: View, Accessory: View>: View {
     // The command being typed when the menu was waved away, so it stays away until the
     // word changes rather than coming back on the next keystroke.
     @State private var dismissedQuery: String?
+    @State private var fieldLink = ComposerFieldLink()
+    @State private var dictateShortcut = WindowKeyMonitor([.command, .shift], "d")
+    @State private var dictationKeys = DictationKeys()
 
     private var attachments: [Attachment] { runner.composer.draft(sessionID).attachments }
 
@@ -53,18 +61,29 @@ struct Composer<Above: View, Accessory: View>: View {
 
     private var draft: Binding<String> {
         Binding(get: { runner.composer.draft(sessionID).text },
-                set: { text in runner.composer.editDraft(sessionID) { $0.text = text } })
+                set: { text in
+                    runner.composer.editDraft(sessionID) { $0.text = text }
+                    dictationHere?.draftEdited(sessionID, text: text)
+                })
     }
+
+    private var dictationHere: Dictation? { dictates ? dictation : nil }
 
     var body: some View {
         let state = runner.state(sessionID)
         let busy = state.isBusy
-        let canSend = !blocked && !runner.composer.draft(sessionID).isEmpty
+        let listening = dictationHere?.isListening(sessionID) == true
+        // Speaking never sends: while the app listens the words are still arriving, and
+        // only a deliberate send once they have settled takes them to the agent.
+        let canSend = !blocked && !listening && !runner.composer.draft(sessionID).isEmpty
         let roots = store.session(sessionID).map(store.workingDirectories(for:)) ?? []
 
         let matches = matches
 
         VStack(alignment: .leading, spacing: 8) {
+            if let dictation = dictationHere, let notice = dictation.notice(for: sessionID) {
+                dictationNotice(notice, dictation: dictation)
+            }
             above
             attachmentStrip
 
@@ -95,8 +114,25 @@ struct Composer<Above: View, Accessory: View>: View {
                               onCommandKey: commandKey,
                               onDropFiles: blocked ? nil : { attach(Attachments.fromDrop($0)) },
                               onFileDragTargeted: { dropTargeted = $0 },
-                              minimumLines: minimumLines) {
-                    accessory
+                              minimumLines: minimumLines,
+                              listening: listening,
+                              marks: dictationMarks,
+                              onMarkClick: dictationHere == nil ? nil : { showWordMenu($0, at: $1) },
+                              link: fieldLink,
+                              trailingInset: dictationHere == nil ? 48 : listening ? 134 : 82) {
+                    HStack(spacing: 6) {
+                        if let dictation = dictationHere {
+                            DictationMicButton(live: listening,
+                                               preparing: dictation.isPreparing(sessionID),
+                                               blocked: dictation.notice(for: sessionID).isMicrophoneBlocked,
+                                               level: dictation.level,
+                                               startedAt: dictation.startedAt,
+                                               download: dictation.notice(for: sessionID).downloadFraction,
+                                               action: toggleDictation)
+                                .disabled(blocked)
+                        }
+                        accessory
+                    }
                 }
 
                 if busy, canSend {
@@ -147,6 +183,34 @@ struct Composer<Above: View, Accessory: View>: View {
             // Waving the menu away is about the word that was on screen, so the next one
             // typed gets its own answer.
             if typed != dismissedQuery { dismissedQuery = nil }
+        }
+        .background {
+            if dictationHere != nil {
+                WindowAnchor(monitor: dictateShortcut)
+                DictationKeysAnchor(keys: dictationKeys)
+            }
+        }
+        // Registered again when the session's state changes, since the handler holds on
+        // to this copy of the view.
+        .onChange(of: blocked, initial: true) {
+            guard dictationHere != nil else { return }
+            dictateShortcut.start {
+                guard !blocked else { return false }
+                toggleDictation()
+                return true
+            }
+        }
+        .onDisappear {
+            dictateShortcut.stop()
+            dictationKeys.stop()
+            dictationHere?.leave(sessionID)
+        }
+        .onChange(of: listening, initial: true) { _, live in
+            guard let dictation = dictationHere, live else {
+                dictationKeys.stop()
+                return
+            }
+            dictationKeys.start(stop: { dictation.stop() }, throwAway: { dictation.throwAway() })
         }
         .pasteAttachments(enabled: isFocused && !blocked) { attach($0) }
         .dropDestination(for: URL.self) { urls, _ in
@@ -267,13 +331,105 @@ struct Composer<Above: View, Accessory: View>: View {
     private func send() {
         let draft = runner.composer.draft(sessionID)
         guard !blocked, !draft.isEmpty else { return }
+        guard dictationHere?.isListening(sessionID) != true else { return }
         onSend?()
         runner.send(draft.text.trimmed,
                     attachments: draft.attachments,
                     customInstructions: draft.customInstructions,
+                    dictated: draft.dictated,
                     sessionID: sessionID,
                     store: store)
         runner.composer.clearDraft(sessionID)
+        dictationHere?.sent(sessionID)
+    }
+
+    // MARK: - Dictation
+
+    private var dictationMarks: ComposerMarks {
+        guard let dictation = dictationHere else { return ComposerMarks() }
+        if dictation.isListening(sessionID) {
+            return ComposerMarks(tentative: dictation.tentative)
+        }
+        return ComposerMarks(unsure: dictation.review(sessionID)?.unsure.map(\.range) ?? [])
+    }
+
+    private func toggleDictation() {
+        guard let dictation = dictationHere, !blocked else { return }
+        let session = store.session(sessionID)
+        let project = session.flatMap { store.project($0.projectID) }
+        // Names the engine is likely to hear in a prompt about this project.
+        let vocabulary = [project?.name, session?.worktreeBranch].compactMap { $0 }
+            + store.sessions.filter { $0.projectID == session?.projectID }.map(\.title)
+        let link = fieldLink
+        dictation.toggle(DictationRequest(
+            sessionID: sessionID,
+            composer: runner.composer,
+            caret: link.caret ?? (runner.composer.draft(sessionID).text as NSString).length,
+            roots: session.map(store.workingDirectories(for:)) ?? [],
+            vocabulary: vocabulary,
+            placeCaret: { location in
+                isFocused = true
+                link.placeCaret(location)
+            }))
+    }
+
+    private func wordMenu(_ word: UnsureWord) -> [MenuEntry] {
+        guard let dictation = dictationHere else { return [] }
+        let composer = runner.composer
+        let sessionID = sessionID
+        var entries: [MenuEntry] = [
+            .item(word.heard, checked: true, subtitle: "What Code Station heard") {
+                dictation.choose(nil, for: word, in: sessionID, composer: composer)
+            }
+        ]
+        entries += word.alternatives.map { alternative in
+            .item(alternative) { dictation.choose(alternative, for: word, in: sessionID, composer: composer) }
+        }
+        entries.append(.separator)
+        entries.append(.item("Keep and stop asking") {
+            dictation.choose(nil, for: word, in: sessionID, composer: composer)
+        })
+        return entries
+    }
+
+    private func showWordMenu(_ index: Int, at frame: CGRect) {
+        guard let words = dictationHere?.review(sessionID)?.unsure, words.indices.contains(index) else { return }
+        menus?.show(wordMenu(words[index]),
+                   at: CGPoint(x: frame.minX, y: frame.minY - 4),
+                   verticalAttachment: .control(edge: .top, oppositeY: frame.maxY + 4))
+    }
+
+    private func dictationNotice(_ notice: Dictation.Notice, dictation: Dictation) -> some View {
+        DictationNoticeRow(
+            notice: notice,
+            languageName: dictation.languageName,
+            inputName: dictation.inputName,
+            unsure: dictation.review(sessionID)?.unsure ?? [],
+            languageMenu: { languageMenu(dictation) },
+            inputMenu: { inputMenu(dictation) },
+            wordMenu: wordMenu,
+            openSettings: { dictation.openPrivacySettings($0) },
+            undo: { dictation.undo() })
+            .accessibilityAddTraits(.updatesFrequently)
+    }
+
+    private func inputMenu(_ dictation: Dictation) -> [MenuEntry] {
+        AudioInputs.all().map { input in
+            .item(input.name, checked: input.name == dictation.inputName,
+                  detail: input.name == dictation.inputName ? "no sound" : nil) {
+                dictation.chooseInput(input)
+            }
+        }
+    }
+
+    private func languageMenu(_ dictation: Dictation) -> [MenuEntry] {
+        let current = dictation.language.identifier(.bcp47)
+        let items = dictation.languages.map { locale in
+            MenuItem(label: DictationLanguages.name(of: locale),
+                     checked: locale.identifier(.bcp47) == current,
+                     handler: { dictation.chooseLanguage(locale) })
+        }
+        return [.searchable(items, prompt: "Find a language", noResults: "No language matches")]
     }
 }
 

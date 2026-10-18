@@ -211,6 +211,9 @@ struct ChatMessage: Identifiable, Codable, Equatable, Sendable {
     // carry one; a prompt sent into a turn already running does not mark a point the
     // conversation could go back to.
     var checkpoint: ConversationCheckpoint?
+    // A prompt that was spoken into the composer. Optional so older conversations still
+    // decode.
+    var dictated: Bool?
 
     mutating func recordAgentTask(_ record: AgentTaskRecord) {
         var record = record

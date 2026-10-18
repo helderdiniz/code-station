@@ -81,6 +81,27 @@ enum Theme {
     // needs a colour of its own.
     static let brand = Color(red: 0.867, green: 0.878, blue: 0.282)
 
+    // The app listening through the microphone. Dictation is the app's own feature, so it
+    // wears the brand lime, kept apart from the green of an agent at work, the red of a
+    // turn that can be stopped and the amber of something waiting. Lime is only on screen
+    // while the app is listening, so it always means the microphone is open.
+    // WarningContrastTests measures the inks on their surfaces.
+    static let listenFill = brand
+    // Ink on the lime fill, which is the same lime in both appearances.
+    static let listenOnFill = Color(red: 0.173, green: 0.176, blue: 0.031)
+    // Words on the pale lime tint of the notice row.
+    static let listenInk = adaptive(
+        light: NSColor(srgbRed: 0.353, green: 0.365, blue: 0.071, alpha: 1),
+        dark: NSColor(srgbRed: 0.871, green: 0.882, blue: 0.420, alpha: 1))
+    static let listenTint = adaptive(
+        light: NSColor(srgbRed: 0.867, green: 0.878, blue: 0.282, alpha: 0.22),
+        dark: NSColor(srgbRed: 0.867, green: 0.878, blue: 0.282, alpha: 0.14))
+    static let listenEdgeNSColor = adaptiveNSColor(
+        light: NSColor(srgbRed: 0.520, green: 0.530, blue: 0.070, alpha: 1),
+        dark: NSColor(srgbRed: 0.800, green: 0.812, blue: 0.259, alpha: 1))
+    static let listenEdge = Color(nsColor: listenEdgeNSColor)
+    static let listenGlow = brand.opacity(0.38)
+
     static let botStage = Color(red: 0.075, green: 0.463, blue: 0.459)
     static let botSelection = adaptive(
         light: NSColor(srgbRed: 0.898, green: 0.922, blue: 0.855, alpha: 1),
