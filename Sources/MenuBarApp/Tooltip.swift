@@ -199,7 +199,8 @@ private struct AppTooltip: ViewModifier {
 
     func body(content: Content) -> some View {
         content
-            .background(FrameAnchorView(anchor: anchor))
+            // UI tests use this name to find the control after the layout changes.
+            .background(FrameAnchorView(anchor: anchor, identifier: text))
             .onChange(of: activation) { _, _ in showTooltip() }
             // A hint belongs to the pointer resting on something. Rows sliding past
             // under a scroll are not that, and a hint is taken down by a scroll anyway.

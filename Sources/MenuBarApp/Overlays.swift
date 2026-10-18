@@ -71,6 +71,7 @@ final class FrameAnchor {
 
 struct FrameAnchorView: NSViewRepresentable {
     let anchor: FrameAnchor
+    var identifier: String? = nil
 
     func makeNSView(context: Context) -> NSView {
         let view = MeasuredView()
@@ -78,7 +79,10 @@ struct FrameAnchorView: NSViewRepresentable {
         return view
     }
 
-    func updateNSView(_ view: NSView, context: Context) { anchor.view = view }
+    func updateNSView(_ view: NSView, context: Context) {
+        anchor.view = view
+        view.identifier = identifier.map { NSUserInterfaceItemIdentifier(rawValue: $0) }
+    }
 }
 
 // Only there to be measured, so it takes no clicks of its own.

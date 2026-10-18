@@ -68,8 +68,9 @@ struct SessionScrollTests {
         #expect(endInWindow() == resting)
     }
 
-    @Test func theAgentIndicatorRevealsDelegationOutsideTheLoadedMessages() async throws {
-        let pane = try Pane(includesAgent: true)
+    @Test(arguments: [CGFloat(760), CGFloat(1000)])
+    func theAgentIndicatorRevealsDelegationOutsideTheLoadedMessages(width: CGFloat) async throws {
+        let pane = try Pane(includesAgent: true, width: width)
         defer {
             pane.window.orderOut(nil)
             pane.harness.tearDown()
@@ -77,7 +78,12 @@ struct SessionScrollTests {
         pane.window.setFrameOrigin(NSPoint(x: -10_000, y: -10_000))
         pane.window.orderFront(nil)
         let scroll = try await pane.transcript()
-        let point = NSPoint(x: pane.view.bounds.maxX - 85, y: pane.view.bounds.maxY - 30)
+        let indicator = try #require(pane.views.first {
+            $0.identifier?.rawValue == "Show agents in the transcript"
+                && !$0.isHiddenOrHasHiddenAncestor && !$0.bounds.isEmpty
+        })
+        let frame = indicator.convert(indicator.bounds, to: nil)
+        let point = NSPoint(x: frame.midX, y: frame.midY)
         for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
             let event = try #require(NSEvent.mouseEvent(
                 with: type, location: point, modifierFlags: [], timestamp: 0,
@@ -150,7 +156,8 @@ struct SessionScrollTests {
         let window: NSWindow
         let view: NSView
 
-        init(includesAgent: Bool = false, find: TranscriptFind = TranscriptFind()) throws {
+        init(includesAgent: Bool = false, find: TranscriptFind = TranscriptFind(),
+             width: CGFloat = 1000) throws {
             harness = try RunnerHarness(agent: .claudeCode, script: """
             IFS= read -r input
             printf '%s\n' '{"type":"system","subtype":"init","session_id":"scroll-fixture"}'
@@ -188,11 +195,11 @@ struct SessionScrollTests {
                     .environment(GlobalCommandPaletteController())
                     .appOverlays())
             hosting.sizingOptions = []
-            window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1000, height: 700),
+            window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: width, height: 700),
                               styleMask: [.borderless], backing: .buffered, defer: false)
             window.contentViewController = hosting
-            window.setContentSize(NSSize(width: 1000, height: 700))
-            hosting.view.frame = NSRect(x: 0, y: 0, width: 1000, height: 700)
+            window.setContentSize(NSSize(width: width, height: 700))
+            hosting.view.frame = NSRect(x: 0, y: 0, width: width, height: 700)
             view = hosting.view
         }
 
