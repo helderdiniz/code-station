@@ -146,28 +146,25 @@ struct OrbitSessionCard: View {
         let quick = live.quickAnswers
         let primary = live.primaryAction(hasChanges: hasChanges)
         HStack(spacing: 6) {
+            if !quick.isEmpty || primary.destination != live.destination {
+                ActionButton(title: "Open session", tone: .outlined, height: 26, size: 12) {
+                    open(live.destination)
+                }
+            }
             if !quick.isEmpty {
                 ForEach(quick.indices, id: \.self) { index in
                     ActionButton(title: quick[index].title, tone: index == 0 ? .green : .outlined,
                                  height: 26, size: 12) { answer(quick[index].answer) }
                 }
-                Spacer(minLength: 4)
-                InlineLink(title: "Open session") { open(live.destination) }
-            } else if live.needsAttention {
-                ActionButton(title: primary.title, tone: .green, height: 26, size: 12) {
-                    open(primary.destination)
-                }
-                Spacer(minLength: 4)
-                if primary.destination != live.destination {
-                    InlineLink(title: "Open session") { open(live.destination) }
-                }
             } else {
                 ActionButton(title: primary.title, tone: .green, height: 26, size: 12) {
                     open(primary.destination)
                 }
-                ActionButton(title: "Show in sidebar", tone: .outlined, height: 26, size: 12, action: reveal)
-                Spacer(minLength: 0)
+                if !live.needsAttention {
+                    ActionButton(title: "Show in sidebar", tone: .outlined, height: 26, size: 12, action: reveal)
+                }
             }
+            Spacer(minLength: 0)
         }
     }
 }

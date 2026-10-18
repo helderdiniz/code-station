@@ -562,13 +562,14 @@ struct HomeMapActionRow: View {
         let primary = live.primaryAction(hasChanges: hasChanges)
         HStack(spacing: 6) {
             if !quick.isEmpty {
+                if !showsProject {
+                    ActionButton(title: "Open session", tone: .outlined, height: 26, size: 12) {
+                        open(live.destination)
+                    }
+                }
                 ForEach(quick.indices, id: \.self) { index in
                     ActionButton(title: quick[index].title, tone: index == 0 ? .green : .outlined,
                                  height: 26, size: 12) { answer(quick[index].answer) }
-                }
-                if !showsProject {
-                    InlineLink(title: "Open session") { open(live.destination) }
-                        .padding(.leading, 6)
                 }
             } else {
                 let title = showsProject && live.permission?.isQuestion == true ? "Answer" : primary.title
