@@ -63,5 +63,8 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 </plist>
 PLIST
 
-codesign --force --deep --sign - "$APP" >/dev/null 2>&1 || true
+# Even an ad-hoc build carries the entitlements, so it asks macOS for the same things as
+# the app that ships, and a re-sign that keeps them has them to keep.
+codesign --force --deep --sign - --entitlements Resources/CodeStation.entitlements "$APP" \
+    >/dev/null 2>&1 || true
 echo "Built $APP"
