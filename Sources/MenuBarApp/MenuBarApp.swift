@@ -54,6 +54,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private let dispatchAuth = DispatchAuthStore()
     private let shortcuts = ShortcutStore()
     private let appUpdates = AppUpdateChecker()
+    private let accountUsage = AccountUsageMonitor()
     private var window: NSWindow?
 
     func applicationWillFinishLaunching(_ notification: Notification) {
@@ -169,7 +170,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                     .environment(dispatchRunner)
                     .environment(dispatchAuth)
                     .environment(shortcuts)
-                    .environment(appUpdates))
+                    .environment(appUpdates)
+                    .environment(accountUsage))
             // Let the window own its size instead of shrinking to the view's ideal size.
             hosting.sizingOptions = []
             let win = NSWindow(

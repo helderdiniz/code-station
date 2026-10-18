@@ -15,6 +15,7 @@ struct RootView: View {
     @Environment(MobileAccessController.self) private var mobileAccess
     @Environment(OrphanedWorktreeMonitor.self) private var orphanedWorktrees
     @Environment(AppUpdateChecker.self) private var appUpdates
+    @Environment(AccountUsageMonitor.self) private var accountUsage
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var skills = SkillsManager()
     @State private var commandPalette = GlobalCommandPaletteController()
@@ -135,6 +136,19 @@ struct RootView: View {
             }
             .task { await resumePendingSessionRemovals() }
             .task { await appUpdates.keepChecking() }
+            .task { await accountUsage.keepChecking(isInstalled: { [runner] in runner.isAvailable($0) }) }
+            // A turn spends from the account, so its end is when the limits are worth
+            // reading again; what it reported on the way moves them on in the meantime.
+            .onChange(of: runner.finishedTurns) { old, new in
+                for agent in AgentKind.allCases where new[agent] != old[agent] {
+                    accountUsage.refreshSoon(agent)
+                }
+            }
+            // Only Claude's own report counts: another agent's would merge Claude's older
+            // windows back over a newer read of the account.
+            .onChange(of: runner.rateLimitsUpdatedAt[.claudeCode]) { _, _ in
+                accountUsage.absorb(runner.rateLimits[.claudeCode] ?? [:], for: .claudeCode)
+            }
             .task(id: skillsRefreshRule) { await refreshSkillsAutomatically() }
             .task(id: sweepRule) { await deleteOldSessionsAutomatically() }
             .task(id: settings.autoPruneOrphanedWorktrees) { await monitorOrphanedWorktrees() }

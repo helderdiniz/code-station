@@ -31,6 +31,9 @@ final class SessionRunner {
     // account usage instead of allowing the last reporting CLI to replace the other.
     private(set) var rateLimits: [AgentKind: [String: RateLimit]] = [:]
     private(set) var rateLimitsUpdatedAt: [AgentKind: Date] = [:]
+    // How many turns each agent has finished since launch. A finished turn is spend the
+    // account's limits have not been read since, so this is what asks for a fresh read.
+    private(set) var finishedTurns: [AgentKind: Int] = [:]
 
     // Everything the runner keeps about one session, in one place so that removing the
     // session is one delete and nothing is left behind. Most of it outlives any single
@@ -2648,6 +2651,7 @@ final class SessionRunner {
             recordAgentTask(record, turn: turn, sessionID: sessionID, store: store)
         }
         records[sessionID]?.turn = nil
+        finishedTurns[turn.agent, default: 0] += 1
         records[sessionID]?.runningTools = []
         records[sessionID]?.agentsAtWork = []
         records[sessionID]?.wait = nil
