@@ -117,6 +117,35 @@ struct ProjectPersistence: Sendable {
         }
     }
 
+    func importTranscript(_ transcript: PendingTranscript) async -> Result<SessionSummary, PersistenceFailure> {
+        await withCheckedContinuation { continuation in
+            Self.queue.async {
+                let result = writeContents(Batch(generation: 0, transcripts: [transcript],
+                                                 index: nil, blockedFailures: []))
+                if let summary = result.summaries[transcript.sessionID]?.value {
+                    continuation.resume(returning: .success(summary))
+                } else {
+                    continuation.resume(returning: .failure(PersistenceFailure(
+                        message: result.failures.joined(separator: "\n"))))
+                }
+            }
+        }
+    }
+
+    func conversationIDs(at url: URL) async -> Set<String>? {
+        await withCheckedContinuation { continuation in
+            Self.queue.async {
+                let read = readTranscriptContents(at: url)
+                guard read.error == nil else { continuation.resume(returning: nil); return }
+                let ids = read.messages.compactMap(\.checkpoint).flatMap { checkpoint in
+                    [(AgentKind.claudeCode, checkpoint.claudeSessionID), (.codex, checkpoint.codexSessionID), (.copilot, checkpoint.copilotSessionID)]
+                        .compactMap { agent, id in id.map { ImportedSessionOrigin.key(agent: agent, sessionID: $0) } }
+                }
+                continuation.resume(returning: Set(ids))
+            }
+        }
+    }
+
     func readTranscriptAndWait(at url: URL) -> TranscriptRead {
         Self.queue.sync { readTranscriptContents(at: url) }
     }
@@ -131,6 +160,10 @@ struct ProjectPersistence: Sendable {
                     message: "The transcript at \(url.path) could not be deleted: \(error.localizedDescription)"))
             }
         }
+    }
+
+    func removeTranscriptInBackground(at url: URL) async -> Result<Void, PersistenceFailure> {
+        await Task.detached { removeTranscript(at: url) }.value
     }
 
     func writeRemovalJournal(_ data: Data, to url: URL) throws {

@@ -3,8 +3,9 @@ import Foundation
 import Observation
 import SwiftUI
 
-struct PersistenceFailure: Error, Equatable, Sendable {
+struct PersistenceFailure: LocalizedError, Equatable, Sendable {
     let message: String
+    var errorDescription: String? { message }
 }
 
 struct PendingSessionRemoval: Identifiable, Codable, Equatable {
@@ -1735,6 +1736,11 @@ final class ProjectStore {
         guard let i = index(sessionID) else { return }
         loadTranscript(i)
         sessions[i].messages.append(message)
+        if let checkpoint = message.checkpoint {
+            for (agent, id) in [(AgentKind.claudeCode, checkpoint.claudeSessionID), (.codex, checkpoint.codexSessionID), (.copilot, checkpoint.copilotSessionID)] {
+                if let id { sessions[i].knownAgentSessionIDs?.insert(ImportedSessionOrigin.key(agent: agent, sessionID: id)) }
+            }
+        }
         sessions[i].summary.lastMessageAt = message.date
         if message.role == .user {
             sessions[i].retitleIfNeeded(from: message)
@@ -1817,6 +1823,10 @@ final class ProjectStore {
     func setAgentSessionID(_ agentID: String, agent: AgentKind, for sessionID: UUID) {
         guard let i = index(sessionID), sessions[i].agent == agent else { return }
         guard sessions[i].agentSessionID(for: agent) != agentID else { return }
+        if let previous = sessions[i].agentSessionID(for: agent) {
+            sessions[i].knownAgentSessionIDs?.insert(ImportedSessionOrigin.key(agent: agent, sessionID: previous))
+        }
+        sessions[i].knownAgentSessionIDs?.insert(ImportedSessionOrigin.key(agent: agent, sessionID: agentID))
         switch agent {
         case .claudeCode: sessions[i].claudeSessionID = agentID
         case .codex: sessions[i].codexSessionID = agentID
@@ -1907,6 +1917,8 @@ final class ProjectStore {
         fork.title = source.title == "New session" ? source.title : "\(source.title) · fork"
         fork.settings = source.settings
         fork.agentAvatarName = source.agentAvatarName
+        fork.importedOrigin = source.importedOrigin
+        fork.knownAgentSessionIDs = source.knownAgentSessionIDs
         fork.claudeSessionID = checkpoint.claudeSessionID
         fork.messages = Array(messages[..<m])
         fork.messages.append(ChatMessage(
@@ -1922,6 +1934,109 @@ final class ProjectStore {
         navigation.arrived()
         saveIndex()
         return fork
+    }
+
+    // MARK: - Importing sessions
+
+    struct SessionImport: Sendable {
+        let candidate: ExternalSessionCandidate
+        let messages: [ChatMessage]
+        var resumeID: String? = nil
+    }
+
+    private var importsInFlight: Set<String> = []
+    private var historyIndexReads: [UUID: Task<Set<String>?, Never>] = [:]
+
+    // Older indexes need one background pass over their checkpoints. The decoded
+    // messages never enter the store, and later checks use only these saved IDs.
+    func knownAgentSessionIDs(inProject projectID: UUID) async -> Set<String> {
+        let missing = sessions.filter { $0.projectID == projectID && $0.knownAgentSessionIDs == nil }.map(\.id)
+        for id in missing {
+            guard !Task.isCancelled else { break }
+            guard session(id)?.knownAgentSessionIDs == nil else { continue }
+            let persistence = persistence
+            let url = transcriptURL(id)
+            let read = historyIndexReads[id] ?? Task { await persistence.conversationIDs(at: url) }
+            historyIndexReads[id] = read
+            let ids = await read.value
+            historyIndexReads[id] = nil
+            guard let ids,
+                  let i = index(id) else { continue }
+            sessions[i].knownAgentSessionIDs = (sessions[i].knownAgentSessionIDs ?? []).union(ids)
+            scheduleIndexSave()
+        }
+        var known: Set<String> = []
+        for session in sessions {
+            known.formUnion(session.knownAgentSessionIDs ?? [])
+            for agent in AgentKind.allCases {
+                if let id = session.agentSessionID(for: agent) {
+                    known.insert(ImportedSessionOrigin.key(agent: agent, sessionID: id))
+                }
+            }
+            if let origin = session.importedOrigin {
+                known.insert(ImportedSessionOrigin.key(agent: origin.agent, sessionID: origin.sessionID))
+            }
+        }
+        return known
+    }
+
+    func importSession(_ item: SessionImport, into projectID: UUID) async
+        -> Result<ChatSession, PersistenceFailure> {
+        guard let project = project(projectID), loadError == nil else {
+            return .failure(PersistenceFailure(message: loadError ?? "The project is no longer in the app."))
+        }
+        if let existing = sessions.first(where: {
+            $0.importedOrigin?.sessionID == item.candidate.sessionID
+                && $0.importedOrigin?.agent == item.candidate.agent
+        }) { return .success(existing) }
+        guard !item.messages.isEmpty else {
+            return .failure(PersistenceFailure(message: "The session has no readable conversation."))
+        }
+        guard importsInFlight.insert(item.candidate.id).inserted else {
+            return .failure(PersistenceFailure(message: "This session is already being imported."))
+        }
+        defer { importsInFlight.remove(item.candidate.id) }
+        var session = ChatSession(projectID: projectID, agent: item.candidate.agent)
+        session.settings = SessionSettings(model: ModelChoice.valid(nil, for: session.agent))
+        let resumeID = item.resumeID ?? item.candidate.sessionID
+        switch session.agent {
+        case .claudeCode: session.claudeSessionID = resumeID
+        case .codex: session.codexSessionID = resumeID
+        case .copilot: session.copilotSessionID = resumeID
+        }
+        session.importedOrigin = item.candidate.origin
+        session.knownAgentSessionIDs = [item.candidate.id,
+            ImportedSessionOrigin.key(agent: session.agent, sessionID: resumeID)]
+        session.createdAt = item.candidate.startedAt ?? item.messages.first?.date ?? Date()
+        if let title = item.candidate.title, !title.isBlank {
+            session.title = title
+        } else if let first = item.messages.first(where: { $0.role == .user }) {
+            session.retitleIfNeeded(from: first)
+        }
+        let written = await persistence.importTranscript(.init(
+            sessionID: session.id, revision: 0, messages: item.messages,
+            projectPath: project.path, url: transcriptURL(session.id)))
+        switch written {
+        case .failure(let error): return .failure(error)
+        case .success(let summary): session.summary = summary
+        }
+        guard self.project(projectID) != nil else {
+            _ = await persistence.removeTranscriptInBackground(at: transcriptURL(session.id))
+            return .failure(PersistenceFailure(message: "The project is no longer in the app."))
+        }
+        if session.summary.lastMessageAt == nil { session.summary.lastMessageAt = item.candidate.lastActivity }
+        sessions.append(session)
+        publishSidebarSessions()
+        markIndexDirty()
+        guard await saveInBackground() else {
+            let failure = persistenceFailure("The imported session could not be saved.")
+            sessions.removeAll { $0.id == session.id }
+            publishSidebarSessions()
+            markIndexDirty()
+            _ = await persistence.removeTranscriptInBackground(at: transcriptURL(session.id))
+            return .failure(failure)
+        }
+        return .success(session)
     }
 
     // A turn that fails before Claude Code produces anything leaves an empty assistant
@@ -1951,6 +2066,7 @@ final class ProjectStore {
     private var lastCompletedGeneration = 0
     private var asynchronousWriteInFlight = false
     private var saveAfterCurrentWrite = false
+    private var saveWaiters: [CheckedContinuation<Bool, Never>] = []
 
     // The index carries what the sidebar reads, so anything that changes a title, a
     // number or where a session runs goes through one of these.
@@ -1985,6 +2101,16 @@ final class ProjectStore {
     func save() -> Bool { save(waiting: true) }
 
     @discardableResult
+    private func saveInBackground() async -> Bool {
+        await withCheckedContinuation { continuation in
+            guard save(waiting: false), asynchronousWriteInFlight else {
+                continuation.resume(returning: loadError == nil && !indexDirty && dirtyTranscripts.isEmpty)
+                return
+            }
+            saveWaiters.append(continuation)
+        }
+    }
+
     private func save(waiting: Bool) -> Bool {
         saveTask?.cancel()
         saveTask = nil
@@ -2042,6 +2168,15 @@ final class ProjectStore {
     }
 
     private func finishWrite(_ completion: ProjectPersistence.WriteCompletion, asynchronous: Bool) {
+        defer {
+            if !asynchronousWriteInFlight {
+                let waiting = saveWaiters
+                saveWaiters.removeAll()
+                for waiter in waiting {
+                    waiter.resume(returning: loadError == nil && !indexDirty && dirtyTranscripts.isEmpty)
+                }
+            }
+        }
         var summaryChanged = false
         for (sessionID, summary) in completion.summaries
         where transcriptRevisions[sessionID] == summary.revision {
@@ -2073,7 +2208,7 @@ final class ProjectStore {
                 if !dirtyTranscripts.isEmpty || indexDirty {
                     // Messages waiting on a write are held in memory until it lands, so
                     // the one they wait for is not left sitting behind the debounce.
-                    if evictWhenWritten.isEmpty { scheduleSave() } else { save(waiting: false) }
+                    if evictWhenWritten.isEmpty && saveWaiters.isEmpty { scheduleSave() } else { save(waiting: false) }
                 }
             }
         }

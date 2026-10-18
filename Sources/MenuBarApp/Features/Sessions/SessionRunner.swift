@@ -1403,6 +1403,7 @@ final class SessionRunner {
         // saying in its environment.
         var suggestsPrompts = false
         var serverLaunch: AgentServerLaunch?
+        var historyDirectory: String?
     }
 
     private func turnPlan(for session: ChatSession, prompt: String, attachments: [Attachment],
@@ -1457,7 +1458,10 @@ final class SessionRunner {
             ? try AgentServerLaunch(configuration: configuration, directory: workingDirectories[0]) : nil
         return TurnPlan(agent: agent, arguments: serverLaunch?.arguments ?? configuration.arguments, prompt: promptForAgent,
                         resumeSessionID: resume, presetSessionID: presetSessionID,
-                        suggestsPrompts: suggestsPrompts, serverLaunch: serverLaunch)
+                        suggestsPrompts: suggestsPrompts, serverLaunch: serverLaunch,
+                        historyDirectory: session.importedOrigin.flatMap {
+                            $0.agent == agent ? $0.configDirectory : nil
+                        })
     }
 
     // Starts the process and wires up everything that listens to it: the two output
@@ -1469,6 +1473,9 @@ final class SessionRunner {
                        sessionID: UUID, store: ProjectStore) throws -> Turn {
         var env = ProcessInfo.processInfo.environment
         env["PATH"] = ProcessManager.searchPath
+        if let directory = plan.historyDirectory {
+            env[plan.agent.historyEnvironmentVariable] = directory
+        }
         if plan.suggestsPrompts { env["CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION"] = "1" }
 
         let out = Pipe()

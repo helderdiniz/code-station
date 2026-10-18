@@ -34,6 +34,36 @@ struct NewSessionSheetSizeTests {
     private let testPreferences = TestPreferences()
 
     @MainActor
+    @Test(arguments: [0, 200])
+    func importKeepsItsActionsWithinAShortWindow(sessionCount: Int) throws {
+        let (store, scratch) = TestStore.make()
+        defer { withExtendedLifetime(scratch) {} }
+        let project = try TestStore.project(in: store)
+        let candidates = (0..<sessionCount).map { i in
+            ExternalSessionCandidate(sessionID: "session-\(i)", agent: AgentKind.allCases[i % 3],
+                file: scratch.path("history"), cwd: project.path, title: "Session \(i)",
+                firstPrompt: "Hello", startedAt: nil, lastActivity: Date(), gitBranch: "main", bytes: 0)
+        }
+        let request = SessionImportRequest(folder: project.path, projectID: project.id,
+                                           roots: [:], candidates: candidates)
+        let measured = MeasuredHeight()
+        let host = NSHostingView(rootView: HeightProbe(report: { height in
+            MainActor.assumeIsolated { measured.value = height }
+        }) {
+            ImportSessionsView(request: request) { _ in }
+                .environment(store)
+                .environment(MenuPresenter())
+                .environment(TooltipPresenter())
+        })
+        host.frame = NSRect(x: 0, y: 0, width: 620, height: 800)
+        host.layoutSubtreeIfNeeded()
+        #expect(measured.value > 200)
+        host.frame = NSRect(x: 0, y: 0, width: 620, height: 200)
+        host.layoutSubtreeIfNeeded()
+        #expect(measured.value <= 200)
+    }
+
+    @MainActor
     @Test func theSheetGivesUpHeightToAShortWindow() throws {
         let settings = AppSettings(
             agentAvatarURL: URL(fileURLWithPath: NSTemporaryDirectory())

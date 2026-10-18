@@ -85,6 +85,8 @@ struct ChatSession: Identifiable, Codable, Equatable, Sendable {
     var claudeSessionID: String?
     var codexSessionID: String?
     var copilotSessionID: String?
+    var importedOrigin: ImportedSessionOrigin?
+    var knownAgentSessionIDs: Set<String>? = []
     var createdAt: Date = Date()
     // Set when the session runs in its own git worktree instead of the project
     // folder. The worktree and branch belong to this session and go with it.
@@ -238,6 +240,7 @@ struct ChatSession: Identifiable, Codable, Equatable, Sendable {
         case designRevisions, approvedDesignRevisionID, sourceDesignSessionID
         case handedOffDesignRevisionID, designSourceSessionID
         case claudeSessionID, codexSessionID, copilotSessionID, createdAt
+        case importedOrigin, knownAgentSessionIDs
         case worktreePath, worktreeBranch
         case workspaceID, sessionProjects, settings, designAmbitionRan, usage, agentAvatarName
         // `pullRequest` is only read: a file written when a session could hold one
@@ -280,6 +283,8 @@ struct ChatSession: Identifiable, Codable, Equatable, Sendable {
         claudeSessionID = try container.decodeIfPresent(String.self, forKey: .claudeSessionID)
         codexSessionID = try container.decodeIfPresent(String.self, forKey: .codexSessionID)
         copilotSessionID = try container.decodeIfPresent(String.self, forKey: .copilotSessionID)
+        importedOrigin = try container.decodeIfPresent(ImportedSessionOrigin.self, forKey: .importedOrigin)
+        knownAgentSessionIDs = try container.decodeIfPresent(Set<String>.self, forKey: .knownAgentSessionIDs)
         createdAt = try container.decodeIfPresent(Date.self, forKey: .createdAt) ?? Date()
         worktreePath = try container.decodeIfPresent(String.self, forKey: .worktreePath)
         worktreeBranch = try container.decodeIfPresent(String.self, forKey: .worktreeBranch)
@@ -333,6 +338,8 @@ struct ChatSession: Identifiable, Codable, Equatable, Sendable {
         try container.encodeIfPresent(claudeSessionID, forKey: .claudeSessionID)
         try container.encodeIfPresent(codexSessionID, forKey: .codexSessionID)
         try container.encodeIfPresent(copilotSessionID, forKey: .copilotSessionID)
+        try container.encodeIfPresent(importedOrigin, forKey: .importedOrigin)
+        try container.encodeIfPresent(knownAgentSessionIDs, forKey: .knownAgentSessionIDs)
         try container.encode(createdAt, forKey: .createdAt)
         try container.encodeIfPresent(worktreePath, forKey: .worktreePath)
         try container.encodeIfPresent(worktreeBranch, forKey: .worktreeBranch)
