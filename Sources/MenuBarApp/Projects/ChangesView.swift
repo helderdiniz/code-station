@@ -871,17 +871,23 @@ struct ChangesView: View {
             navigatorFocused = true
             selectRepository(repositoryRoot, file.id)
         } label: {
-            HStack {
+            // Same spacing as the selected project's rows, so picking another project
+            // does not shift the list.
+            HStack(spacing: 10) {
                 StatusChip(kind: file.kind)
                 fileName(file)
                 counts(file)
-            }.padding(10)
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 7)
             .overlay {
                 RoundedRectangle(cornerRadius: 8)
                     .stroke(showsCursor(item) ? Theme.accent : .clear, lineWidth: 2)
             }
             .contentShape(Rectangle())
-        }.buttonStyle(.plain)
+        }
+        .buttonStyle(.plain)
+        .hoverFill(cornerRadius: 8)
     }
 
     // MARK: - History navigator
