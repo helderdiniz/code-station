@@ -55,10 +55,8 @@ final class LocalServerPreview {
         if url != address { address = url }
     }
 
-    // Nothing arrives when a load only moves within the page that is there, so a load
-    // that ends while the preview is still opening has left that page showing. When there
-    // is no page, the server answered with something only a browser can take, such as a
-    // download.
+    // Nothing arrives when a load only moves within the page, so one that ends while
+    // opening has left that page showing. No page means a download or another app's link.
     func finishLoading(hasPage: Bool) {
         guard phase == .opening else { return }
         phase = hasPage ? .showing : .noPage
@@ -275,6 +273,7 @@ struct LocalServerPreviewWebContent: NSViewRepresentable {
         if !showing { container.letGoOfKeyboard() }
         guard context.coordinator.loadedGeneration != reloadGeneration else { return }
         context.coordinator.loadedGeneration = reloadGeneration
+        context.coordinator.declinedAt = nil
         preview.webView.load(URLRequest(url: address))
     }
 
@@ -293,6 +292,7 @@ struct LocalServerPreviewWebContent: NSViewRepresentable {
         configuration.preferences.javaScriptCanOpenWindowsAutomatically = false
         let webView = WKWebView(frame: .zero, configuration: configuration)
         webView.navigationDelegate = coordinator
+        webView.uiDelegate = coordinator
         webView.isInspectable = true
         coordinator.observations = [
             // The address can change during a SwiftUI update, so it is passed on later.
@@ -349,7 +349,7 @@ struct LocalServerPreviewWebContent: NSViewRepresentable {
         }
     }
 
-    final class Coordinator: NSObject, WKNavigationDelegate {
+    final class Coordinator: NSObject, WKNavigationDelegate, WKUIDelegate, WKDownloadDelegate {
         // This is WebKitErrorFrameLoadInterruptedByPolicyChange, which WKError lacks.
         private static let interruptedByPolicy = 102
 
@@ -361,6 +361,20 @@ struct LocalServerPreviewWebContent: NSViewRepresentable {
         var onPhase: (LocalServerPreview.Phase) -> Void = { _ in }
         var onLoaded: (Bool) -> Void = { _ in }
         var openInBrowser: (URL) -> Void = { NSWorkspace.shared.open($0) }
+        var saveDownload: @MainActor (String) -> URL? = { name in
+            FilePicker.saveFile(suggestedName: name, prompt: "Save",
+                                message: "Choose where to save the file from the running app.")
+        }
+        // When the person last turned a save down. For a moment after, a file the page sends
+        // by itself is not offered, so a page that keeps sending them cannot hold Code Station
+        // behind save panels, and there is time to close it.
+        var declinedAt: ContinuousClock.Instant?
+        private var personsLoad = false
+        private var asking = false
+
+        private var resting: Bool {
+            declinedAt.map { ContinuousClock.now - $0 < .seconds(2) } ?? false
+        }
 
         // A page sent off the machine is stopped, since its session would not follow it.
         func webView(_ webView: WKWebView, decidePolicyFor action: WKNavigationAction,
@@ -372,12 +386,19 @@ struct LocalServerPreviewWebContent: NSViewRepresentable {
             }
             let scheme = url.scheme?.lowercased() ?? ""
             let mainFrame = action.targetFrame?.isMainFrame == true
+            // WebKit drops a link's `download` attribute unless this returns .download.
+            if action.shouldPerformDownload,
+               TranscriptLink.isLocalServer(url) || ["blob", "data"].contains(scheme) {
+                decisionHandler(resting && action.buttonNumber == 0 ? .cancel : .download)
+                return
+            }
             if action.targetFrame != nil, !mainFrame {
                 decisionHandler(["http", "https", "about", "data", "blob"].contains(scheme)
                                 ? .allow : .cancel)
                 return
             }
             if mainFrame, TranscriptLink.isLocalServer(url) || url.absoluteString == "about:blank" {
+                personsLoad = action.buttonNumber > 0
                 decisionHandler(.allow)
                 return
             }
@@ -389,6 +410,22 @@ struct LocalServerPreviewWebContent: NSViewRepresentable {
                 onPhase(.left(url))
             }
             decisionHandler(.cancel)
+        }
+
+        func webView(_ webView: WKWebView, decidePolicyFor response: WKNavigationResponse,
+                     decisionHandler: @escaping @MainActor @Sendable
+                        (WKNavigationResponsePolicy) -> Void) {
+            let disposition = (response.response as? HTTPURLResponse)?
+                .value(forHTTPHeaderField: "Content-Disposition") ?? ""
+            let file = disposition.lowercased().hasPrefix("attachment") || !response.canShowMIMEType
+            let local = response.isForMainFrame
+                || response.response.url.map(TranscriptLink.isLocalServer) == true
+            guard file, local else {
+                decisionHandler(.allow)
+                return
+            }
+            let persons = response.isForMainFrame && personsLoad
+            decisionHandler(resting && !persons ? .cancel : .download)
         }
 
         // Dev servers often serve HTTPS with a self-signed certificate. The connection
@@ -429,6 +466,49 @@ struct LocalServerPreviewWebContent: NSViewRepresentable {
 
         func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
             onPhase(.stopped)
+        }
+
+        func webView(_ webView: WKWebView, navigationAction: WKNavigationAction,
+                     didBecome download: WKDownload) {
+            download.delegate = self
+        }
+
+        func webView(_ webView: WKWebView, navigationResponse: WKNavigationResponse,
+                     didBecome download: WKDownload) {
+            download.delegate = self
+        }
+
+        // The save panel runs modally, so another download can arrive while it is open.
+        func download(_ download: WKDownload, decideDestinationUsing response: URLResponse,
+                      suggestedFilename: String,
+                      completionHandler: @escaping @MainActor @Sendable (URL?) -> Void) {
+            guard !asking else {
+                completionHandler(nil)
+                return
+            }
+            asking = true
+            let destination = saveDownload(suggestedFilename)
+            asking = false
+            guard let destination else {
+                declinedAt = .now
+                completionHandler(nil)
+                return
+            }
+            // The save panel has already asked before replacing a file, and a download
+            // fails when its destination exists.
+            try? FileManager.default.removeItem(at: destination)
+            completionHandler(destination)
+        }
+
+        // Alerts are left to WebKit, since Code Station's dialog may already be in use.
+        func webView(_ webView: WKWebView, runOpenPanelWith parameters: WKOpenPanelParameters,
+                     initiatedByFrame frame: WKFrameInfo,
+                     completionHandler: @escaping @MainActor @Sendable ([URL]?) -> Void) {
+            let urls = parameters.allowsMultipleSelection
+                ? FilePicker.chooseFiles(prompt: "Choose", message: "Choose files for the running app.")
+                : FilePicker.chooseFile(prompt: "Choose", message: "Choose a file for the running app.")
+                    .map { [$0] } ?? []
+            completionHandler(urls.isEmpty ? nil : urls)
         }
 
         private func report(_ error: Error) {
