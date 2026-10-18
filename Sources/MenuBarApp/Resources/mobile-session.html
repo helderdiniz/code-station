@@ -1122,7 +1122,7 @@
         const unreachable = !pairingEnded && failedAttempts >= unreachableAfter;
         if (live) { clearTimeout(toastTimer); toast.classList.remove('visible'); }
         document.querySelectorAll('.connection-label').forEach(node => {
-          node.textContent = live ? 'Connected to Mac' : pairingEnded ? 'Pairing ended' : 'Disconnected';
+          node.textContent = live ? 'Connected' : pairingEnded ? 'Pairing ended' : 'Disconnected';
         });
         for (const dot of [light, listLight]) dot.className = live ? 'light live' : 'light';
         find('offline').hidden = live;
