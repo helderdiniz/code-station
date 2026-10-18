@@ -5,16 +5,16 @@ import SwiftUI
 // display without a 2x backing store. Proportions match the file, margin included, so the
 // Dock icon that make-icon.swift still builds from it is the same mark.
 struct AppMark: View {
-    private static let tile = Color(red: 0.867, green: 0.878, blue: 0.282)
-    private static let dot = Color(red: 0.647, green: 0.655, blue: 0.227)
-    private static let accent = Color(red: 0.082, green: 0.082, blue: 0.082)
+    static let tile = Theme.brand
+    static let dot = Color(red: 0.647, green: 0.655, blue: 0.227)
+    static let accent = Color(red: 0.082, green: 0.082, blue: 0.082)
 
     // Fractions of the side, measured off the art.
-    private static let margin = 0.0975
-    private static let corner = 0.1625
-    private static let centres = [0.3356, 0.4994, 0.6631]
-    private static let dotRadius = 0.0475
-    private static let accentRadius = 0.0725
+    nonisolated static let margin = 0.0975
+    nonisolated static let corner = 0.1625
+    nonisolated static let centres = [0.3356, 0.4994, 0.6631]
+    nonisolated static let dotRadius = 0.0475
+    nonisolated static let accentRadius = 0.0725
 
     var body: some View {
         Canvas { context, size in

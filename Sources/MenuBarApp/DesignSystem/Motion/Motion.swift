@@ -7,13 +7,16 @@ import SwiftUI
 // on one of these three curves, so the window reads as a single surface reacting rather
 // than a set of parts each keeping its own time.
 enum Motion {
+    static let hoverDuration: TimeInterval = 0.12
+    static let revealDuration: TimeInterval = 0.18
+
     // A colour settling under the pointer: over almost before it is noticed.
-    static let hover = Animation.easeOut(duration: 0.12)
+    static let hover = Animation.easeOut(duration: hoverDuration)
     // A control taking a new state. The spring overshoots by a hair, which is what makes
     // a switch feel thrown rather than redrawn.
     static let control = Animation.spring(response: 0.26, dampingFraction: 0.78)
     // Something arriving or leaving: a menu unfolding, a pane swapped for another.
-    static let reveal = Animation.easeOut(duration: 0.18)
+    static let reveal = Animation.easeOut(duration: revealDuration)
     // A dialog's card rising into place. A touch softer than a control, so a large
     // surface settles rather than snaps.
     static let arrive = Animation.spring(response: 0.3, dampingFraction: 0.85)

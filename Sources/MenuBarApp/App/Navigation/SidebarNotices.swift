@@ -66,8 +66,12 @@ struct SidebarBrandBar: View {
     let selectHome: () -> Void
 
     @Environment(\.textScale) private var textScale
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(MobileAccessController.self) private var mobileAccess
     @State private var hovering = false
+    @State private var pointer = CGPoint(x: 0.6, y: -0.4)
+    @State private var headerSize = CGSize.zero
+    @FocusState private var focused: Bool
 
     private var phone: SidebarPhoneStatus? { SidebarPhoneStatus(mobileAccess.share) }
 
@@ -96,7 +100,14 @@ struct SidebarBrandBar: View {
         }
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
-        .sidebarFocusRing()
+        .onGeometryChange(for: CGSize.self) { $0.size } action: { headerSize = $0 }
+        .onContinuousHover { phase in
+            if case .active(let point) = phase {
+                pointer = CGPoint(x: min(1, max(-1, point.x / max(1, headerSize.width) * 2 - 1)),
+                                  y: min(1, max(-1, point.y / max(1, headerSize.height) * 2 - 1)))
+            }
+        }
+        .sidebarFocusRing($focused)
         .accessibilityLabel("Teya Code Station home")
         .accessibilityValue(Self.accessibilityValue(runningCount: runningCount, phone: phone))
         .accessibilityAddTraits(isHome ? .isSelected : [])
@@ -111,7 +122,10 @@ struct SidebarBrandBar: View {
 
     private var brand: some View {
         HStack(spacing: 9) {
-            AppMark()
+            SidebarBrandMark(input: .init(hovered: hovering,
+                                          focused: focused && KeyboardFocusVisibility.shared.isVisible,
+                                          pointer: hovering ? pointer : CGPoint(x: 0.6, y: -0.4),
+                                          reducedMotion: reduceMotion))
                 .frame(width: 41, height: 41)
                 .frame(width: 33, height: 33)
                 .accessibilityHidden(true)
