@@ -274,6 +274,7 @@ struct LocalServerPreviewPage: View {
     @State private var conversationMinimized = true
     @State private var conversationExpanded = false
     @State private var composerFocused = false
+    @State private var promptSentAt: Date?
     @State private var selectionEnabled = false
     @State private var editingAddress = false
     @State private var typedAddress = ""
@@ -300,6 +301,7 @@ struct LocalServerPreviewPage: View {
                                        conversationExpanded: $conversationExpanded,
                                        conversationMinimized: $conversationMinimized,
                                        composerFocused: $composerFocused,
+                                       promptSentAt: $promptSentAt,
                                        designEmpty: false, selectionEnabled: picking,
                                        placeholder: placeholder,
                                        attachMessage: "Choose references for this change.",

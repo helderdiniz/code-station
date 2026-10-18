@@ -8,7 +8,7 @@ struct WorkspaceChangesView: View {
     @Environment(SessionRunner.self) private var runner
     @Binding var selectedRoot: String
     let navigation: ChangesNavigationMemory
-    // Called once comments left on these changes have been sent to the session.
+    // Goes back to the conversation, where a sent review is taken up.
     let reviewSent: () -> Void
     // The file someone asked to open, from outside or from another project's row. Once
     // they move to another project it is served, so coming back opens on whatever was
@@ -52,11 +52,20 @@ struct WorkspaceChangesView: View {
 
     private var review: ReviewTarget {
         let sessionID = session.id
+        let author = runner.author(of: session)
         return ReviewTarget(sessionID: sessionID, agent: session.agent, reviews: runner.reviews,
+                            authorModel: author.model, authorEffort: author.effort,
                             executable: { [runner] in runner.executable(for: $0) },
                             isBusy: { [runner] in runner.state(sessionID).isBusy },
                             send: { [runner, store] in runner.send($0, sessionID: sessionID, store: store) },
-                            sent: reviewSent)
+                            openChat: reviewSent,
+                            conversation: { [store, session, initialRoot] in
+                                let current = store.session(sessionID) ?? session
+                                return ReviewConversation(
+                                    directory: store.workingDirectories(for: current).first ?? initialRoot,
+                                    claudeSessionID: current.agentSessionID(for: .claudeCode),
+                                    recentChat: SideQuestion.recentChat(current.messages))
+                            })
     }
 
     private func name(_ root: String) -> String {

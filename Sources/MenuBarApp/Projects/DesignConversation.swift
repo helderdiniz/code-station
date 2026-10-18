@@ -161,6 +161,8 @@ struct DesignConversation: View {
     @Binding var conversationExpanded: Bool
     @Binding var conversationMinimized: Bool
     @Binding var composerFocused: Bool
+    // When a prompt last left this composer, so the bubble it becomes can lift into place.
+    @Binding var promptSentAt: Date?
     let designEmpty: Bool
     let selectionEnabled: Bool
     let placeholder: String
@@ -188,8 +190,6 @@ struct DesignConversation: View {
     @State private var composerHeight: CGFloat = 167
     @State private var transcriptHeight: CGFloat = .infinity
     @State private var waitNoticeDismissed = false
-    // When a prompt last left this composer, so the bubble it becomes can lift into place.
-    @State private var promptSentAt: Date?
 
     private var sessionID: UUID { session.id }
 
