@@ -2,12 +2,9 @@ import AppKit
 import SwiftUI
 import WebKit
 
-// A running app the conversation links to: its page and how the last load went. The
-// session's pane keeps it, so a link clicked in the conversation over the app takes the
-// page to the new address.
 @MainActor
 @Observable
-final class LocalServerPreview {
+final class LocalServerPreview: Identifiable {
     enum Phase: Equatable {
         case opening, showing, unreachable, failed(String), noPage, stopped, left(URL)
         indirect case elsewhere(URL, over: Phase)
@@ -19,12 +16,16 @@ final class LocalServerPreview {
     private var pageBehind = false
     private var pageAhead = false
 
+    let id = UUID()
     // Held here rather than in the view, so the page survives a switch to another tab.
     @ObservationIgnored let coordinator = LocalServerPreviewWebContent.Coordinator()
     @ObservationIgnored private var madeWebView: WKWebView?
+    // Kept off disk, so nothing a running app stores outlives the session's pane.
+    @ObservationIgnored private let dataStore: WKWebsiteDataStore
 
-    init(opening address: URL) {
+    init(opening address: URL, dataStore: WKWebsiteDataStore = .nonPersistent()) {
         self.address = address
+        self.dataStore = dataStore
         reload()
     }
 
@@ -37,7 +38,8 @@ final class LocalServerPreview {
             self?.pageBehind = behind
             self?.pageAhead = ahead
         }
-        let webView = LocalServerPreviewWebContent.makeWebView(coordinator: coordinator)
+        let webView = LocalServerPreviewWebContent.makeWebView(coordinator: coordinator,
+                                                               dataStore: dataStore)
         madeWebView = webView
         return webView
     }
@@ -192,11 +194,70 @@ final class LocalServerPreview {
     }
 }
 
+@MainActor
+@Observable
+final class LocalServerPreviewTabs {
+    private(set) var pages: [LocalServerPreview] = []
+    private(set) var selectedID: UUID?
+    private(set) var isOpen = false
+    @ObservationIgnored private lazy var dataStore = WKWebsiteDataStore.nonPersistent()
+
+    var selected: LocalServerPreview? { pages.first { $0.id == selectedID } }
+
+    func open(_ url: URL, inNewPage: Bool = false) {
+        let label = LocalServerPreview.label(for: url)
+        let shows = { (page: LocalServerPreview) in
+            LocalServerPreview.label(for: page.address) == label
+        }
+        let showing = selected.flatMap { shows($0) ? $0 : nil } ?? pages.first(where: shows)
+        if !inNewPage, let page = showing ?? selected {
+            page.open(url)
+            selectedID = page.id
+        } else {
+            let page = LocalServerPreview(opening: url, dataStore: dataStore)
+            pages.append(page)
+            selectedID = page.id
+        }
+        isOpen = true
+    }
+
+    func openAnotherPage() {
+        guard let address = selected?.address,
+              let root = URL(string: "/", relativeTo: address)?.absoluteURL else { return }
+        open(root, inNewPage: true)
+    }
+
+    func select(_ page: LocalServerPreview) { selectedID = page.id }
+
+    func close(_ page: LocalServerPreview) {
+        guard let index = pages.firstIndex(where: { $0.id == page.id }) else { return }
+        page.close()
+        pages.remove(at: index)
+        if pages.isEmpty {
+            selectedID = nil
+            isOpen = false
+        } else if selectedID == page.id {
+            selectedID = pages[min(index, pages.count - 1)].id
+        }
+    }
+
+    func show() { isOpen = !pages.isEmpty }
+    func hide() { isOpen = false }
+
+    func closeAll() {
+        pages.forEach { $0.close() }
+        pages = []
+        selectedID = nil
+        isOpen = false
+    }
+}
+
 struct LocalServerPreviewPage: View {
     @Environment(SessionRunner.self) private var runner
     @Environment(DialogPresenter.self) private var dialogs
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
+    let previews: LocalServerPreviewTabs
     let preview: LocalServerPreview
     let session: ChatSession
     let placeholder: String
@@ -214,6 +275,8 @@ struct LocalServerPreviewPage: View {
     @State private var selectionEnabled = false
     @State private var editingAddress = false
     @State private var typedAddress = ""
+    @State private var barWidth: CGFloat = .infinity
+    @State private var scrolledPageID: UUID?
     @FocusState private var addressFieldFocused: Bool
     // A monitor sees these keys before the page and before the window's Back and Forward.
     @State private var addressMonitor = WindowKeyMonitor(.command, "l")
@@ -225,6 +288,7 @@ struct LocalServerPreviewPage: View {
     var body: some View {
         VStack(spacing: 0) {
             bar
+            pageStrip
             GeometryReader { geometry in
                 // An overlay would rebuild the composer when a message replaces the page.
                 ZStack(alignment: .bottom) {
@@ -253,6 +317,11 @@ struct LocalServerPreviewPage: View {
         .background(WindowAnchor(monitor: forwardMonitor))
         .onChange(of: dialogs.current == nil, initial: true) { _, free in
             if free { startMonitors() } else { stopMonitors() }
+        }
+        // The monitors capture the page they started with, so they start again with the new one.
+        .onChange(of: preview.id) {
+            if dialogs.current == nil { startMonitors() }
+            if editingAddress { typedAddress = preview.address.absoluteString }
         }
         .onChange(of: addressFieldFocused) { _, focused in
             addressFocused = focused
@@ -299,6 +368,8 @@ struct LocalServerPreviewPage: View {
                                          selectionEnabled: picking,
                                          isFocused: $pageFocused,
                                          onPick: pick)
+                // A mount keeps its first coordinator, so each page needs its own.
+                .id(preview.id)
                 .background(Color.white)
                 // The page stays built under a message, so it and its sign-in
                 // survive a failed reload.
@@ -315,16 +386,24 @@ struct LocalServerPreviewPage: View {
         }
     }
 
+    private static let roomForHistory: CGFloat = 400
+
     private var bar: some View {
         HStack(spacing: 10) {
-            barButton("chevron.left", help: "Go back", disabled: !preview.canGoBack) {
-                preview.goBack()
-            }
-            barButton("chevron.right", help: "Go forward", disabled: !preview.canGoForward) {
-                preview.goForward()
+            if barWidth >= Self.roomForHistory {
+                barButton("chevron.left", help: "Go back", disabled: !preview.canGoBack) {
+                    preview.goBack()
+                }
+                barButton("chevron.right", help: "Go forward", disabled: !preview.canGoForward) {
+                    preview.goForward()
+                }
             }
             addressField
                 .frame(maxWidth: .infinity, alignment: .leading)
+            barButton("plus", help: "Open another page") {
+                previews.openAnotherPage()
+                editAddress()
+            }
             if preview.phase == .showing {
                 GlyphButton(icon: selectionEnabled ? "scope" : "cursorarrow", side: 28,
                             active: selectionEnabled, tint: Theme.accent) {
@@ -337,9 +416,10 @@ struct LocalServerPreviewPage: View {
                 .accessibilityLabel("Select an element to refine")
             }
             barButton("arrow.up.right", help: "Open in browser") { openInBrowser(preview.address) }
-            barButton("xmark", help: "Close preview", action: onClose)
+            barButton("xmark", help: "Hide preview", action: onClose)
             barButton("arrow.clockwise", help: "Reload page") { preview.reload() }
         }
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { barWidth = $0 }
         .canvasBar()
     }
 
@@ -395,11 +475,12 @@ struct LocalServerPreviewPage: View {
         .fieldSurface(cornerRadius: 7)
     }
 
+    // Just after a page opens, this view still holds the old one, so the selection is read.
     private func editAddress() {
-        guard !editingAddress else { return }
+        guard let address = previews.selected?.address, !editingAddress else { return }
         // An expanded conversation would take Escape from the field.
         conversationExpanded = false
-        typedAddress = preview.address.absoluteString
+        typedAddress = address.absoluteString
         editingAddress = true
     }
 
@@ -481,24 +562,92 @@ struct LocalServerPreviewPage: View {
         .padding(.top, 4)
     }
 
-    // The browser takes the app over, so the pane goes back to the conversation rather than
-    // keep a second copy of the page running.
     private func openInBrowser(_ url: URL) {
         preview.coordinator.openInBrowser(url)
-        onClose()
+        previews.close(preview)
+        if !previews.isOpen { onClose() }
     }
 
-    // A pick writes into the composer and sends nothing, as one on a design does, so
-    // several elements can be picked before the change is asked for.
-    private func pick(_ selection: DesignElementSelection, page: URL, image: NSImage?) {
-        runner.composer.editDraft(session.id) {
-            $0.text = LocalServerPreview.draft($0.text, adding: selection, on: page)
+    @ViewBuilder private var pageStrip: some View {
+        if previews.pages.count > 1 {
+            let servers = Set(previews.pages.map { LocalServerPreview.server($0.address) })
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 6) {
+                    ForEach(previews.pages) { page in
+                        pageTab(page, spansServers: servers.count > 1)
+                            .id(page.id)
+                    }
+                }
+                .scrollTargetLayout()
+                .padding(.horizontal, 14)
+                .padding(.vertical, 7)
+            }
+            // A page opened from + or a Command-click joins the end of the strip, so the strip
+            // follows the page on screen.
+            .scrollPosition(id: $scrolledPageID, anchor: .center)
+            .onChange(of: previews.selectedID, initial: true) { _, selected in
+                scrolledPageID = selected
+            }
+            .background(Theme.card)
+            .overlay(alignment: .bottom) { Rectangle().fill(Theme.hairline).frame(height: 1) }
         }
-        if let image, let attachment = Attachments.fromImage(image, prefix: "selection") {
-            runner.composer.attach([attachment], to: session.id)
+    }
+
+    private func pageTab(_ page: LocalServerPreview, spansServers: Bool) -> some View {
+        let selected = page.id == preview.id
+        let label = spansServers
+            ? LocalServerPreview.label(for: page.address) : LocalServerPreview.path(page.address)
+        return HStack(spacing: 0) {
+            Button { previews.select(page) } label: {
+                Text(label)
+                    .font(.system(size: 12, weight: selected ? .semibold : .regular))
+                    .foregroundStyle(selected ? Color.primary : Color.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .frame(maxWidth: 160)
+                    .padding(.leading, 10)
+                    .padding(.trailing, 6)
+                    .padding(.vertical, 4)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .appTooltip(page.address.absoluteString)
+            .accessibilityAddTraits(selected ? .isSelected : [])
+            Button { previews.close(page) } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundStyle(.secondary)
+                    .padding(.trailing, 8)
+                    .padding(.vertical, 4)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .appTooltip("Close page")
+            .accessibilityLabel("Close \(label)")
         }
-        conversationMinimized = false
-        composerFocused = true
+        .background(
+            RoundedRectangle(cornerRadius: 7)
+                .fill(selected ? Theme.card : .clear)
+                .shadow(color: .black.opacity(selected ? 0.07 : 0), radius: 1, y: 0.5))
+        .overlay(RoundedRectangle(cornerRadius: 7).stroke(selected ? Theme.border : .clear))
+        .hoverLift()
+    }
+
+    // The page keeps this closure, so it captures the composer rather than this view,
+    // which holds the page: SwiftUI updates a closing mount once more, leaving a cycle.
+    private var pick: (DesignElementSelection, URL, NSImage?) -> Void {
+        let composer = runner.composer, sessionID = session.id
+        let minimized = $conversationMinimized, focused = $composerFocused
+        return { selection, page, image in
+            composer.editDraft(sessionID) {
+                $0.text = LocalServerPreview.draft($0.text, adding: selection, on: page)
+            }
+            if let image, let attachment = Attachments.fromImage(image, prefix: "selection") {
+                composer.attach([attachment], to: sessionID)
+            }
+            minimized.wrappedValue = false
+            focused.wrappedValue = true
+        }
     }
 }
 
@@ -528,6 +677,12 @@ struct LocalServerPreviewWebContent: NSViewRepresentable {
         preview.webView.load(URLRequest(url: address))
     }
 
+    // A web view already moved to another container is left as that container set it.
+    static func dismantleNSView(_ container: Container, coordinator: Coordinator) {
+        guard let webView = container.subviews.first as? WKWebView else { return }
+        coordinator.setSelection(false, in: webView)
+    }
+
     private func install(in container: NSView) {
         let webView = preview.webView
         webView.removeFromSuperview()
@@ -536,9 +691,10 @@ struct LocalServerPreviewWebContent: NSViewRepresentable {
         container.addSubview(webView)
     }
 
-    static func makeWebView(coordinator: Coordinator) -> WKWebView {
+    static func makeWebView(coordinator: Coordinator,
+                            dataStore: WKWebsiteDataStore = .nonPersistent()) -> WKWebView {
         let configuration = WKWebViewConfiguration()
-        configuration.websiteDataStore = .nonPersistent()
+        configuration.websiteDataStore = dataStore
         configuration.defaultWebpagePreferences.allowsContentJavaScript = true
         configuration.preferences.javaScriptCanOpenWindowsAutomatically = false
         // The picker runs in a world the page's scripts cannot reach, and is added
@@ -589,9 +745,6 @@ struct LocalServerPreviewWebContent: NSViewRepresentable {
         webView.configuration.userContentController.removeScriptMessageHandler(
             forName: DesignWebContent.Coordinator.messageName, contentWorld: .defaultClient)
         coordinator.observations = []
-        // A pick goes back through the page that shows the preview, and that page holds the
-        // preview, so it is let go here or the preview would outlive its pane.
-        coordinator.onPick = { _, _, _ in }
     }
 
     final class Container: NSView {
@@ -644,15 +797,14 @@ struct LocalServerPreviewWebContent: NSViewRepresentable {
             FilePicker.saveFile(suggestedName: name, prompt: "Save",
                                 message: "Choose where to save the file from the running app.")
         }
-        // When the person last turned a save down. For a moment after, a file the page sends
-        // by itself is not offered, so a page that keeps sending them cannot hold Code Station
-        // behind save panels, and there is time to close it.
+        // A page that keeps sending files must not trap the person behind save panels.
         var declinedAt: ContinuousClock.Instant?
         private var personsLoad = false
         private var asking = false
 
-        private var resting: Bool {
-            declinedAt.map { ContinuousClock.now - $0 < .seconds(2) } ?? false
+        private func holdsBackFiles(_ webView: WKWebView) -> Bool {
+            let resting = declinedAt.map { ContinuousClock.now - $0 < .seconds(2) } ?? false
+            return resting || webView.window == nil
         }
 
         func setSelection(_ enabled: Bool, in webView: WKWebView) {
@@ -700,7 +852,8 @@ struct LocalServerPreviewWebContent: NSViewRepresentable {
             // WebKit drops a link's `download` attribute unless this returns .download.
             if action.shouldPerformDownload,
                TranscriptLink.isLocalServer(url) || ["blob", "data"].contains(scheme) {
-                decisionHandler(resting && action.buttonNumber == 0 ? .cancel : .download)
+                decisionHandler(holdsBackFiles(webView) && action.buttonNumber == 0
+                                ? .cancel : .download)
                 return
             }
             if action.targetFrame != nil, !mainFrame {
@@ -736,7 +889,7 @@ struct LocalServerPreviewWebContent: NSViewRepresentable {
                 return
             }
             let persons = response.isForMainFrame && personsLoad
-            decisionHandler(resting && !persons ? .cancel : .download)
+            decisionHandler(holdsBackFiles(webView) && !persons ? .cancel : .download)
         }
 
         // Dev servers often serve HTTPS with a self-signed certificate. The connection

@@ -254,14 +254,9 @@ struct SessionView: View {
     @State private var workingSetVisible: Bool
     @State private var requestedChange: RequestedChange?
     @State private var explorerReveal: ExplorerReveal?
-    // The running app this conversation links to. While there is one it takes the
-    // conversation's place, with the conversation floating over it as it does over a design.
-    @State private var preview: LocalServerPreview?
+    @State private var previews = LocalServerPreviewTabs()
     @State private var previewFocused = false
     @State private var previewAddressFocused = false
-    // The address the preview was on when it closed, for the Preview seat to open again, or
-    // else the app the conversation last linked.
-    @State private var lastPreviewAddress: URL?
     @State private var linkedApp = LinkedApp()
     // False until this session's transcript has been scrolled to its end. The pane is
     // rebuilt per session, so it starts false on every switch without being reset.
@@ -383,7 +378,7 @@ struct SessionView: View {
                                                  }), navigation: changesNavigation,
                                                  reviewSent: {
                                                      tab = .conversation
-                                                     if preview != nil { closePreview() }
+                                                     previews.hide()
                                                  })
                             if let reviewingEnding,
                                reviewingEnding == runner.lastTurnEnding(sessionID)?.ended,
@@ -473,10 +468,8 @@ struct SessionView: View {
             }
             .onDisappear {
                 findMonitors.forEach { $0.stop() }
-                // A closed page no longer follows its address or how its loads end, so it is
-                // dropped rather than shown again if this session comes back.
-                preview?.close()
-                preview = nil
+                // A closed page stops following its loads, so it cannot be shown again.
+                previews.closeAll()
             }
             .onChange(of: transcriptFind.isPresented ? session.messages : []) {
                 transcriptFind.refresh(in: session.messages)
@@ -684,7 +677,7 @@ struct SessionView: View {
                       isTroubleshooting: session.isTroubleshooting)
             SessionAgentIndicator(session: session) { target in
                 tab = .conversation
-                if preview != nil { closePreview() }
+                previews.hide()
                 transcriptWindow.reveal(target.messageID, in: session.messages)
                 transcriptPinnedToBottom = false
                 agentFocus = target
@@ -838,29 +831,28 @@ struct SessionView: View {
                 $findFocused.request()
             }
         }
-        .disabled(session.isActivelyDesigning || preview != nil)
+        .disabled(session.isActivelyDesigning || previews.isOpen)
         .onCentreChange { findOrigin = $0 }
     }
 
-    // Brings back the running app once its link has scrolled away: the address last open here,
-    // or else the app the conversation last linked. It only joins the dock once there is an
-    // app to bring back, since most sessions never link one, and it joins at the front: the
-    // rail keeps to the trailing edge, so the seats already there stay where they were.
+    // Placed first: the rail keeps to the trailing edge, so the other seats do not move.
     @ViewBuilder
     private func previewSeat(_ session: ChatSession, showsWord: Bool) -> some View {
         if !session.isActivelyDesigning,
-           let address = preview?.address ?? lastPreviewAddress ?? linkedApp.address {
-            let isOpen = tab == .conversation && preview != nil
+           let address = previews.selected?.address ?? linkedApp.address {
+            let isOpen = tab == .conversation && previews.isOpen
+            let pages = previews.pages.count
             HeaderDockSeat(icon: "globe",
                            word: "Preview",
                            isOpen: isOpen,
+                           count: pages > 1 ? pages : nil,
                            showsWord: showsWord,
                            detail: "The running app at \(LocalServerPreview.label(for: address))") {
                 if isOpen {
                     closePreview()
                 } else {
                     tab = .conversation
-                    if preview == nil { preview = LocalServerPreview(opening: address) }
+                    if previews.pages.isEmpty { previews.open(address) } else { previews.show() }
                 }
             }
         }
@@ -1385,7 +1377,7 @@ struct SessionView: View {
     // Only the conversation is searched: the other tabs are either a file view with a
     // find of its own or a pane with no transcript in it.
     private func canFindInChat(_ session: ChatSession) -> Bool {
-        tab == .conversation && !session.isActivelyDesigning && preview == nil
+        tab == .conversation && !session.isActivelyDesigning && !previews.isOpen
             && dialogs.current == nil
     }
 
@@ -1598,10 +1590,10 @@ struct SessionView: View {
         GeometryReader { geometry in
             // A running app has the conversation floating over it, reading every press around
             // it, so the drawer sits beside the app rather than over the two.
-            let isDocked = geometry.size.width >= 800 || preview != nil
+            let isDocked = geometry.size.width >= 800 || previews.isOpen
             ZStack(alignment: .trailing) {
                 Group {
-                    if let preview {
+                    if previews.isOpen, let preview = previews.selected {
                         previewPage(preview, session: session)
                     } else {
                         conversationContent(session: session, project: project)
@@ -2027,25 +2019,19 @@ struct SessionView: View {
         return true
     }
 
-    // A link followed from the conversation over the app loads in the page already open, so
-    // the app keeps its place and its sign-in.
     private func openPreview(_ url: URL) -> Bool {
-        if let preview { preview.open(url) } else { preview = LocalServerPreview(opening: url) }
+        previews.open(url, inNewPage: NSApp.currentEvent?.modifierFlags.contains(.command) == true)
         return true
     }
 
-    // The conversation comes back ready to type into. The next link starts a new page, and
-    // the Preview seat opens one at the address this one was on.
     private func closePreview() {
-        lastPreviewAddress = preview?.address
-        preview?.close()
-        preview = nil
+        previews.hide()
         composerFocused = true
     }
 
     private func previewPage(_ preview: LocalServerPreview, session: ChatSession) -> some View {
         let projectPath = store.workingDirectory(for: session) ?? ""
-        return LocalServerPreviewPage(preview: preview, session: session,
+        return LocalServerPreviewPage(previews: previews, preview: preview, session: session,
                                       placeholder: placeholder(state: runner.state(sessionID)),
                                       openPreview: openPreview,
                                       openChange: { path in

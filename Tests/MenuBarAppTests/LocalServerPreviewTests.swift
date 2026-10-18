@@ -129,6 +129,74 @@ struct LocalServerPreviewTests {
     }
 }
 
+// A link has to land on the page a person expects, and closing a page has to leave the right
+// one showing.
+@MainActor
+struct LocalServerPreviewTabsTests {
+    @Test func aLinkLandsOnThePageAPersonExpects() throws {
+        let previews = LocalServerPreviewTabs()
+        previews.open(url("http://localhost:3000/"))
+        let home = try #require(previews.selected)
+        previews.open(url("http://localhost:3000/billing"))
+        #expect(previews.pages.count == 1)
+        #expect(previews.selected === home)
+        #expect(home.address.path == "/billing")
+        previews.open(url("http://localhost:3000/billing?tab=2"), inNewPage: true)
+        let billing = try #require(previews.selected)
+        #expect(billing !== home)
+        #expect(home.address.absoluteString == "http://localhost:3000/billing")
+        previews.open(url("http://localhost:3000/billing"))
+        #expect(previews.selected === billing)
+
+        previews.select(home)
+        previews.open(url("http://localhost:3000/settings"))
+        previews.open(url("http://localhost:3000/billing?tab=3"))
+        #expect(previews.pages.count == 2)
+        #expect(previews.selected === billing)
+        #expect(billing.address.absoluteString == "http://localhost:3000/billing?tab=3")
+        #expect(home.address.path == "/settings")
+    }
+
+    @Test func closingAPageShowsTheOneBesideIt() {
+        let previews = LocalServerPreviewTabs()
+        for path in ["/", "/settings", "/billing", "/team"] {
+            previews.open(url("http://localhost:3000" + path), inNewPage: true)
+        }
+        let pages = previews.pages
+        previews.select(pages[1])
+
+        previews.close(pages[3])
+        #expect(previews.pages.count == 3)
+        #expect(previews.selected === pages[1])
+        previews.close(pages[1])
+        #expect(previews.selected === pages[2])
+        previews.close(pages[2])
+        #expect(previews.selected === pages[0])
+        #expect(previews.isOpen)
+        previews.close(pages[0])
+        #expect(previews.pages.isEmpty)
+        #expect(previews.selected == nil)
+        #expect(!previews.isOpen)
+    }
+
+    @Test func hidingThePreviewKeepsItsPagesWhichShareOneSignIn() {
+        let previews = LocalServerPreviewTabs(), elsewhere = LocalServerPreviewTabs()
+        previews.open(url("http://localhost:3000/"))
+        previews.open(url("http://localhost:3000/settings"), inNewPage: true)
+        elsewhere.open(url("http://localhost:3000/"))
+
+        previews.hide()
+        #expect(!previews.isOpen)
+        #expect(previews.pages.count == 2)
+        previews.show()
+        #expect(previews.isOpen)
+        #expect(previews.selected === previews.pages[1])
+        let stores = (previews.pages + elsewhere.pages).map { $0.webView.configuration.websiteDataStore }
+        #expect(stores[0] === stores[1])
+        #expect(stores[0] !== stores[2])
+    }
+}
+
 // An agent reads a pick, so it names the element and its page once, as a pick on Design does.
 @MainActor
 struct LocalServerPreviewDraftTests {
@@ -255,9 +323,10 @@ struct LocalServerPreviewPageTests {
     private final class Pane {
         // The bar runs along the top 42 points of the window, with its controls this far across.
         enum Control: CGFloat {
-            case back = 28, forward = 66, address = 500, picker = 858, openInBrowser = 896
+            case back = 28, forward = 66, address = 500, newPage = 820, picker = 858, openInBrowser = 896
         }
 
+        let previews = LocalServerPreviewTabs()
         let preview: LocalServerPreview
         // Borderless, as in the other web tests: a window that can become key takes the
         // first click on the page for itself, and the app never sees it.
@@ -283,7 +352,8 @@ struct LocalServerPreviewPageTests {
             let preferences = try #require(UserDefaults(suiteName: "preview-page-\(UUID().uuidString)"))
             settings = AppSettings(agentAvatarURL: scratch.path("avatar.png"), preferences: preferences)
             shortcuts = ShortcutStore(storageURL: scratch.path("shortcuts.json"), siteDefaults: SiteDefaults())
-            preview = LocalServerPreview(opening: address)
+            previews.open(address)
+            preview = try #require(previews.selected)
             preview.coordinator.loadedGeneration = preview.reloadGeneration
             preview.webView.loadHTMLString(app, baseURL: address)
             show(app: true)
@@ -292,20 +362,37 @@ struct LocalServerPreviewPageTests {
             window.setContentSize(NSSize(width: 1000, height: 800))
             window.center()
             window.orderFront(nil)
-            #expect(await waitUntil { preview.phase == .showing && !preview.webView.isLoading })
+            try await load(preview)
+        }
+
+        func add() async throws -> LocalServerPreview {
+            let address = url("http://localhost:3000/billing")
+            previews.open(address, inNewPage: true)
+            let page = try #require(previews.selected)
+            page.coordinator.loadedGeneration = page.reloadGeneration
+            page.webView.loadHTMLString("<p>Billing</p>", baseURL: address)
+            try await load(page)
+            return page
+        }
+
+        private func load(_ page: LocalServerPreview) async throws {
+            #expect(await waitUntil { page.phase == .showing && !page.webView.isLoading })
             try await settle()
         }
 
-        // The Chat tab with the app on it, or another tab with the app out of sight.
+        // The Chat tab with the app on it, or another tab with the app out of sight. It is
+        // built from the pane's parts rather than the pane, which holds the page it shows.
         func show(app: Bool) {
+            let previews = previews, session = session
+            let focus = focus, addressFocus = addressFocus
+            let close: () -> Void = { [weak self] in self?.closed = true }
             hosting.rootView = AnyView(Group {
                 if app {
-                    LocalServerPreviewPage(preview: preview, session: session,
-                                           placeholder: "Ask for a change",
-                                           openPreview: { _ in false },
-                                           pageFocused: focus,
-                                           addressFocused: addressFocus,
-                                           onClose: { [weak self] in self?.closed = true })
+                    OnScreen(previews: previews) { page in
+                        LocalServerPreviewPage(previews: previews, preview: page, session: session,
+                                               placeholder: "Ask for a change", openPreview: { _ in false },
+                                               pageFocused: focus, addressFocused: addressFocus, onClose: close)
+                    }
                 }
             }
             .environment(store)
@@ -366,8 +453,19 @@ struct LocalServerPreviewPageTests {
         func close() {
             window.orderOut(nil)
             window.contentViewController = nil
-            preview.close()
+            previews.closeAll()
             runner.stopAll()
+        }
+    }
+
+    // Whichever page is on screen, as the session's pane shows it, so a switch brings in the
+    // page that takes its place.
+    private struct OnScreen: View {
+        let previews: LocalServerPreviewTabs
+        let page: (LocalServerPreview) -> LocalServerPreviewPage
+
+        var body: some View {
+            if let selected = previews.selected { page(selected) }
         }
     }
 
@@ -604,6 +702,88 @@ struct LocalServerPreviewPageTests {
         #expect(pane.preview.address == url("http://localhost:\(port)/settings"))
         #expect(!pane.preview.canGoForward)
         #expect(try await page.evaluateJavaScript("document.body.innerText") as? String == "Settings")
+    }
+
+    // Nobody is looking at a page off screen, so it hands the keyboard, picking and an address
+    // being typed to the page on screen, and a file it sends by itself is not offered.
+    @Test func keepsEachPagesWorkWhenSwitchingBetweenThem() async throws {
+        let pane = try await Pane(app: "<script>document.cookie = 'session=signed-in; path=/'</script>")
+        defer { pane.close() }
+        let home = pane.preview
+        let other = try await pane.add()
+        var asked: [String] = []
+        for page in [home, other] { page.coordinator.saveDownload = { asked.append($0); return nil } }
+        let export = "Object.assign(document.createElement('a'), "
+            + "{href: 'data:text/csv,name', download: 'export.csv'}).click(); true"
+        let cursor = "getComputedStyle(document.documentElement).cursor"
+        _ = try await home.webView.evaluateJavaScript("window.work = 'home draft'")
+        _ = try await other.webView.evaluateJavaScript("window.work = 'other draft'")
+        let generations = (home.reloadGeneration, other.reloadGeneration)
+        let top = other.webView.convert(other.webView.bounds, to: nil).maxY
+
+        // The first tab, the home page's, is in the strip between the bar and the page.
+        try pane.click(CGPoint(x: 20, y: (top + 800 - 42) / 2))
+        #expect(await waitUntil { pane.previews.selected === home })
+        try await pane.settle()
+        #expect(home.phase == .showing)
+        #expect(home.webView.window != nil)
+        #expect(other.webView.window == nil)
+        #expect(try await home.webView.evaluateJavaScript("window.work") as? String == "home draft")
+        #expect(try await other.webView.evaluateJavaScript("window.work") as? String == "other draft")
+        try #require((home.reloadGeneration, other.reloadGeneration) == generations)
+        #expect(try await other.webView.evaluateJavaScript("document.cookie") as? String == "session=signed-in")
+
+        pane.window.makeFirstResponder(home.webView)
+        #expect(pane.pageFocused)
+        pane.previews.select(other)
+        try await pane.settle()
+        #expect(!pane.pageFocused)
+        _ = try await home.webView.evaluateJavaScript(export)
+        try await pane.settle()
+        #expect(asked.isEmpty)
+        _ = try await other.webView.evaluateJavaScript(export)
+        #expect(await waitUntil { asked == ["export.csv"] })
+        try pane.click(.picker)
+        #expect(try await answer(to: cursor, in: other.webView, awaiting: "crosshair") == "crosshair")
+        try pane.click(.address)
+        #expect(await waitUntil { pane.window.firstResponder is NSTextView })
+        let field = try #require(pane.window.firstResponder as? NSTextView)
+        field.insertText("/team", replacementRange: field.selectedRange())
+        pane.previews.select(home)
+        try await pane.settle()
+        #expect(field.string == "http://localhost:3000/settings")
+        #expect(try await answer(to: cursor, in: home.webView, awaiting: "crosshair") == "crosshair")
+        #expect(try await answer(to: cursor, in: other.webView, awaiting: "auto") == "auto")
+    }
+
+    @Test func anotherPageOpensAtTheAppsRootAndClosesAlone() async throws {
+        let server = FileServer(serving: "<p>Home</p>")
+        let port = try await server.start()
+        defer { server.stop() }
+        let pane = try await Pane(at: url("http://localhost:\(port)/settings"))
+        defer { pane.close() }
+        weak var released: WKWebView?
+        do {
+            let other = try await pane.add()
+            released = other.webView
+            pane.previews.close(other)
+        }
+        try await pane.settle()
+        #expect(pane.previews.selected === pane.preview)
+        #expect(await waitUntil { released == nil })
+
+        try pane.click(.newPage)
+        #expect(await waitUntil { pane.previews.pages.count == 2 })
+        let root = try #require(pane.previews.selected)
+        #expect(root.address.absoluteString == "http://localhost:\(port)/")
+        #expect(await waitUntil { (pane.window.firstResponder as? NSTextView)?.string == "http://localhost:\(port)/" })
+        var opened: [URL] = []
+        root.coordinator.openInBrowser = { opened.append($0) }
+        try pane.click(.openInBrowser)
+        #expect(await waitUntil { pane.previews.pages.count == 1 })
+        #expect(opened.map(\.absoluteString) == ["http://localhost:\(port)/"])
+        #expect(pane.previews.selected === pane.preview)
+        #expect(!pane.closed)
     }
 }
 
