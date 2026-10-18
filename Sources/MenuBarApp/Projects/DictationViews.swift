@@ -1,6 +1,64 @@
 import AppKit
 import SwiftUI
 
+struct DictationFeedback: View {
+    let dictation: Dictation
+    let sessionID: UUID
+    let draft: Binding<SessionComposerStore.Draft>
+    let notice: Dictation.Notice?
+
+    var body: some View {
+        if let notice {
+            DictationNoticeRow(
+                notice: notice,
+                languageName: dictation.languageName,
+                inputName: dictation.inputName,
+                unsure: dictation.review(sessionID)?.unsure ?? [],
+                languageMenu: languageMenu,
+                inputMenu: inputMenu,
+                wordMenu: wordMenu,
+                openSettings: { dictation.openPrivacySettings($0) },
+                undo: { dictation.undo() })
+                .accessibilityAddTraits(.updatesFrequently)
+        }
+    }
+
+    func wordMenu(_ word: UnsureWord) -> [MenuEntry] {
+        var entries: [MenuEntry] = [
+            .item(word.heard, checked: true, subtitle: "What Code Station heard") {
+                dictation.choose(nil, for: word, in: sessionID, draft: draft)
+            }
+        ]
+        entries += word.alternatives.map { alternative in
+            .item(alternative) { dictation.choose(alternative, for: word, in: sessionID, draft: draft) }
+        }
+        entries.append(.separator)
+        entries.append(.item("Keep and stop asking") {
+            dictation.choose(nil, for: word, in: sessionID, draft: draft)
+        })
+        return entries
+    }
+
+    private func inputMenu() -> [MenuEntry] {
+        AudioInputs.all().map { input in
+            .item(input.name, checked: input.name == dictation.inputName,
+                  detail: input.name == dictation.inputName ? "no sound" : nil) {
+                dictation.chooseInput(input)
+            }
+        }
+    }
+
+    private func languageMenu() -> [MenuEntry] {
+        let current = dictation.language.identifier(.bcp47)
+        let items = dictation.languages.map { locale in
+            MenuItem(label: DictationLanguages.name(of: locale),
+                     checked: locale.identifier(.bcp47) == current,
+                     handler: { dictation.chooseLanguage(locale) })
+        }
+        return [.searchable(items, prompt: "Find a language", noResults: "No language matches")]
+    }
+}
+
 // The microphone at the end of the prompt box. Idle it is a plain glyph; while the app
 // listens it widens into a lime pill with a level meter and a clock. It grows in width
 // rather than scaling, since the button holds views AppKit lays out itself.

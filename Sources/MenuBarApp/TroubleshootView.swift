@@ -167,7 +167,7 @@ struct TroubleshootView: View {
     @State private var showingSkills = false
     @State private var showingNewWorkspace = false
     @State private var hasStartedMCPConfigurationCheck = false
-    @FocusState private var problemFocused: Bool
+    @State private var problemFocused = false
 
     private var selectedAgent: AgentKind { agent ?? runner.agent }
 

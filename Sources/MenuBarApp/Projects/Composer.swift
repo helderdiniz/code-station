@@ -34,7 +34,7 @@ struct Composer<Above: View, Accessory: View>: View {
     // Passed to the field so the keys the suggestion above answers are only taken while
     // the cursor is in the box.
     var onSuggestionKey: ((SuggestionKey) -> Bool)? = nil
-    // Whether the box has a microphone. Only the Chat pane speaks into its prompt.
+    // Whether the box has a microphone.
     var dictates = false
     @ViewBuilder let above: Above
     @ViewBuilder let accessory: Accessory
@@ -75,14 +75,16 @@ struct Composer<Above: View, Accessory: View>: View {
         let listening = dictationHere?.isListening(sessionID) == true
         // Speaking never sends: while the app listens the words are still arriving, and
         // only a deliberate send once they have settled takes them to the agent.
-        let canSend = !blocked && !listening && !runner.composer.draft(sessionID).isEmpty
+        let canSend = !blocked && !listening && dictationHere?.isPreparing(sessionID) != true
+            && !runner.composer.draft(sessionID).isEmpty
         let roots = store.session(sessionID).map(store.workingDirectories(for:)) ?? []
 
         let matches = matches
 
         VStack(alignment: .leading, spacing: 8) {
             if let dictation = dictationHere, let notice = dictation.notice(for: sessionID) {
-                dictationNotice(notice, dictation: dictation)
+                DictationFeedback(dictation: dictation, sessionID: sessionID,
+                                  draft: runner.composer.draftBinding(sessionID), notice: notice)
             }
             above
             attachmentStrip
@@ -192,8 +194,12 @@ struct Composer<Above: View, Accessory: View>: View {
         }
         // Registered again when the session's state changes, since the handler holds on
         // to this copy of the view.
-        .onChange(of: blocked, initial: true) {
-            guard dictationHere != nil else { return }
+        .onChange(of: [blocked, dictates], initial: true) {
+            dictateShortcut.stop()
+            guard dictationHere != nil else {
+                dictation?.leave(sessionID)
+                return
+            }
             dictateShortcut.start {
                 guard !blocked else { return false }
                 toggleDictation()
@@ -331,7 +337,8 @@ struct Composer<Above: View, Accessory: View>: View {
     private func send() {
         let draft = runner.composer.draft(sessionID)
         guard !blocked, !draft.isEmpty else { return }
-        guard dictationHere?.isListening(sessionID) != true else { return }
+        guard dictationHere?.isListening(sessionID) != true,
+              dictationHere?.isPreparing(sessionID) != true else { return }
         onSend?()
         runner.send(draft.text.trimmed,
                     attachments: draft.attachments,
@@ -363,7 +370,7 @@ struct Composer<Above: View, Accessory: View>: View {
         let link = fieldLink
         dictation.toggle(DictationRequest(
             sessionID: sessionID,
-            composer: runner.composer,
+            draft: runner.composer.draftBinding(sessionID),
             caret: link.caret ?? (runner.composer.draft(sessionID).text as NSString).length,
             roots: session.map(store.workingDirectories(for:)) ?? [],
             vocabulary: vocabulary,
@@ -373,63 +380,15 @@ struct Composer<Above: View, Accessory: View>: View {
             }))
     }
 
-    private func wordMenu(_ word: UnsureWord) -> [MenuEntry] {
-        guard let dictation = dictationHere else { return [] }
-        let composer = runner.composer
-        let sessionID = sessionID
-        var entries: [MenuEntry] = [
-            .item(word.heard, checked: true, subtitle: "What Code Station heard") {
-                dictation.choose(nil, for: word, in: sessionID, composer: composer)
-            }
-        ]
-        entries += word.alternatives.map { alternative in
-            .item(alternative) { dictation.choose(alternative, for: word, in: sessionID, composer: composer) }
-        }
-        entries.append(.separator)
-        entries.append(.item("Keep and stop asking") {
-            dictation.choose(nil, for: word, in: sessionID, composer: composer)
-        })
-        return entries
-    }
-
     private func showWordMenu(_ index: Int, at frame: CGRect) {
         guard let words = dictationHere?.review(sessionID)?.unsure, words.indices.contains(index) else { return }
-        menus?.show(wordMenu(words[index]),
+        guard let dictation = dictationHere else { return }
+        let feedback = DictationFeedback(dictation: dictation, sessionID: sessionID,
+                                         draft: runner.composer.draftBinding(sessionID),
+                                         notice: dictation.notice(for: sessionID))
+        menus?.show(feedback.wordMenu(words[index]),
                    at: CGPoint(x: frame.minX, y: frame.minY - 4),
                    verticalAttachment: .control(edge: .top, oppositeY: frame.maxY + 4))
-    }
-
-    private func dictationNotice(_ notice: Dictation.Notice, dictation: Dictation) -> some View {
-        DictationNoticeRow(
-            notice: notice,
-            languageName: dictation.languageName,
-            inputName: dictation.inputName,
-            unsure: dictation.review(sessionID)?.unsure ?? [],
-            languageMenu: { languageMenu(dictation) },
-            inputMenu: { inputMenu(dictation) },
-            wordMenu: wordMenu,
-            openSettings: { dictation.openPrivacySettings($0) },
-            undo: { dictation.undo() })
-            .accessibilityAddTraits(.updatesFrequently)
-    }
-
-    private func inputMenu(_ dictation: Dictation) -> [MenuEntry] {
-        AudioInputs.all().map { input in
-            .item(input.name, checked: input.name == dictation.inputName,
-                  detail: input.name == dictation.inputName ? "no sound" : nil) {
-                dictation.chooseInput(input)
-            }
-        }
-    }
-
-    private func languageMenu(_ dictation: Dictation) -> [MenuEntry] {
-        let current = dictation.language.identifier(.bcp47)
-        let items = dictation.languages.map { locale in
-            MenuItem(label: DictationLanguages.name(of: locale),
-                     checked: locale.identifier(.bcp47) == current,
-                     handler: { dictation.chooseLanguage(locale) })
-        }
-        return [.searchable(items, prompt: "Find a language", noResults: "No language matches")]
     }
 }
 

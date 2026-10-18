@@ -125,7 +125,7 @@ struct DictationControllerTests {
     }
 
     private func start(_ dictation: Dictation, caret: Int) async {
-        dictation.toggle(DictationRequest(sessionID: sessionID, composer: runner.composer,
+        dictation.toggle(DictationRequest(sessionID: sessionID, draft: runner.composer.draftBinding(sessionID),
                                           caret: caret, roots: [], vocabulary: []))
         #expect(await waitUntil { dictation.isListening(sessionID) })
     }
@@ -209,7 +209,7 @@ struct DictationControllerTests {
         speech.allowed = false
         let dictation = makeDictation()
         runner.composer.editDraft(sessionID) { $0.text = "keep me" }
-        dictation.toggle(DictationRequest(sessionID: sessionID, composer: runner.composer,
+        dictation.toggle(DictationRequest(sessionID: sessionID, draft: runner.composer.draftBinding(sessionID),
                                           caret: 7, roots: [], vocabulary: []))
 
         #expect(await waitUntil { dictation.notice(for: sessionID) == .blocked(.microphoneBlocked) })
@@ -240,7 +240,7 @@ struct DictationControllerTests {
         #expect(dictation.notice(for: sessionID) == .unsure(count: 1, seconds: review?.seconds ?? 0))
 
         if let word = review?.unsure.first {
-            dictation.choose("merchants", for: word, in: sessionID, composer: runner.composer)
+            dictation.choose("merchants", for: word, in: sessionID, draft: runner.composer.draftBinding(sessionID))
         }
         #expect(draft.text == "Each merchants picked")
         #expect(dictation.review(sessionID) == nil)
@@ -257,6 +257,84 @@ struct DictationControllerTests {
         dictation.draftEdited(sessionID, text: "Merchant ID")
         #expect(dictation.review(sessionID) == nil)
         #expect(dictation.notice(for: sessionID) == nil)
+    }
+
+    @Test func leavingTroubleshootKeepsTheFinalWordsInTheBriefOnly() async {
+        let dictation = makeDictation()
+        let problemID = UUID()
+        let evidence = Attachment(url: URL(fileURLWithPath: "/private/tmp/error.log"))
+        runner.composer.editDraft(sessionID) { $0.text = "Unsent chat prompt" }
+        runner.composer.editBrief(sessionID) {
+            $0.problem = "Requests fail."
+            $0.attachments = [evidence]
+            $0.incidentTime = "Last hour"
+            $0.mcpServersEnabled = false
+        }
+        dictation.toggle(DictationRequest(sessionID: problemID,
+                                          draft: runner.composer.problemBinding(sessionID),
+                                          caret: 14, roots: [], vocabulary: []))
+        #expect(await waitUntil { dictation.isListening(problemID) })
+        speech.say(DictationHeard(settled: words("check the logs")))
+        #expect(runner.composer.brief(sessionID).problem == "Requests fail. Check the logs")
+
+        speech.final = DictationHeard(settled: words("check the error logs"))
+        dictation.leave(problemID)
+        #expect(await waitUntil { dictation.phase == .idle })
+
+        let brief = runner.composer.brief(sessionID)
+        #expect(brief.problem == "Requests fail. Check the error logs")
+        #expect(brief.dictated)
+        #expect(brief.attachments == [evidence])
+        #expect(brief.incidentTime == "Last hour")
+        #expect(!brief.mcpServersEnabled)
+        #expect(draft.text == "Unsent chat prompt")
+        #expect(!draft.dictated)
+        #expect(runner.queued(sessionID).isEmpty)
+    }
+
+    @Test func discardingAndUndoingTroubleshootDictationPreservesOtherBriefEdits() async {
+        let dictation = makeDictation()
+        let problemID = UUID()
+        runner.composer.editBrief(sessionID) { $0.problem = "Requests fail." }
+        dictation.toggle(DictationRequest(sessionID: problemID,
+                                          draft: runner.composer.problemBinding(sessionID),
+                                          caret: 14, roots: [], vocabulary: []))
+        #expect(await waitUntil { dictation.isListening(problemID) })
+        speech.say(DictationHeard(settled: words("check the logs")))
+        runner.composer.editBrief(sessionID) { $0.incidentTime = "Last hour" }
+
+        dictation.throwAway()
+        #expect(runner.composer.brief(sessionID).problem == "Requests fail.")
+        #expect(!runner.composer.brief(sessionID).dictated)
+        #expect(runner.composer.brief(sessionID).incidentTime == "Last hour")
+
+        dictation.undo()
+        #expect(runner.composer.brief(sessionID).problem == "Requests fail. Check the logs")
+        #expect(runner.composer.brief(sessionID).dictated)
+        #expect(runner.composer.brief(sessionID).incidentTime == "Last hour")
+        #expect(draft.isEmpty)
+    }
+
+    @Test func correctingTroubleshootDictationUpdatesTheBriefOnly() async {
+        let dictation = makeDictation()
+        let problemID = UUID()
+        let problem = runner.composer.problemBinding(sessionID)
+        runner.composer.editDraft(sessionID) { $0.text = "Unsent chat prompt" }
+        dictation.toggle(DictationRequest(sessionID: problemID, draft: problem,
+                                          caret: 0, roots: [], vocabulary: []))
+        #expect(await waitUntil { dictation.isListening(problemID) })
+        speech.final = DictationHeard(settled: [HeardWord(text: "each"),
+                                                HeardWord(text: "merchant", alternatives: ["merchants"])])
+        dictation.stop()
+        #expect(await waitUntil { dictation.phase == .idle })
+
+        if let word = dictation.review(problemID)?.unsure.first {
+            dictation.choose("merchants", for: word, in: problemID, draft: problem)
+        }
+        #expect(runner.composer.brief(sessionID).problem == "Each merchants")
+        #expect(dictation.review(problemID) == nil)
+        #expect(dictation.review(sessionID) == nil)
+        #expect(draft.text == "Unsent chat prompt")
     }
 
     @Test func aSpokenPromptCarriesItsTagIntoTheTranscript() throws {

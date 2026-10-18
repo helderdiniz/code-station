@@ -15,6 +15,7 @@ struct TroubleshootTabView: View {
     @Environment(ConfigStore.self) private var configs
     @Environment(DialogPresenter.self) private var dialogs
     @Environment(SkillsManager.self) private var skills
+    @Environment(Dictation.self) private var dictation: Dictation?
 
     let sessionID: UUID
     // Where the brief goes, so the tab can hand the screen over to the conversation that
@@ -25,7 +26,8 @@ struct TroubleshootTabView: View {
     @State private var isStarting = false
     @State private var showingSkills = false
     @State private var hasStartedMCPConfigurationCheck = false
-    @FocusState private var problemFocused: Bool
+    @State private var dictationID = UUID()
+    @State private var problemFocused = false
     @FocusState private var timeFocused: Bool
 
     // The half-written brief is the runner's, not this view's: the pane keeps only the
@@ -51,7 +53,7 @@ struct TroubleshootTabView: View {
                             : AnyLayout(VStackLayout(alignment: .leading, spacing: 28))
                         layout {
                             VStack(alignment: .leading, spacing: 24) {
-                                problemSection
+                                problemSection(session)
                                 optionsSection
                                 Divider().overlay(Theme.hairline)
                                 TroubleshootMCPOptions(agent: session.agent,
@@ -181,7 +183,7 @@ struct TroubleshootTabView: View {
         return model.map { runner.modelTitle($0) }
     }
 
-    private var problemSection: some View {
+    private func problemSection(_ session: ChatSession) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("What’s going wrong?").font(.system(size: 14, weight: .semibold))
             Text("Include what you expected and what you’ve already tried.")
@@ -190,7 +192,14 @@ struct TroubleshootTabView: View {
             TroubleshootProblemEditor(problem: entry(\.problem),
                                       attachments: entry(\.attachments),
                                       focused: $problemFocused,
-                                      isBrief: true)
+                                      isBrief: true,
+                                      dictationID: dictationID,
+                                      dictationDraft: runner.composer.problemBinding(sessionID),
+                                      roots: store.workingDirectories(for: session),
+                                      vocabulary: store.checkoutProjects(for: session).compactMap {
+                                          store.project($0.projectID)?.name
+                                      } + [session.title] + [session.worktreeBranch].compactMap { $0 })
+                .disabled(isStarting)
         }
     }
 
@@ -282,6 +291,9 @@ struct TroubleshootTabView: View {
     }
 
     private func startNote(_ session: ChatSession) -> String {
+        if dictation?.isListening(dictationID) == true || dictation?.isPreparing(dictationID) == true {
+            return "Stop dictating before starting the diagnosis."
+        }
         if !runner.isAvailable(session.agent) {
             return "\(session.agent.title) CLI was not found on PATH."
         }
@@ -300,6 +312,8 @@ struct TroubleshootTabView: View {
 
     private func canStart(_ session: ChatSession) -> Bool {
         !isStarting
+            && dictation?.isListening(dictationID) != true
+            && dictation?.isPreparing(dictationID) != true
             && mcpConfigurationState(session) == .ready
             && (!brief.problem.isBlank || !brief.attachments.isEmpty)
             && runner.isAvailable(session.agent)
@@ -379,10 +393,12 @@ struct TroubleshootTabView: View {
             runner.send(request.userInput,
                         attachments: sent.attachments,
                         customInstructions: request.customInstructions,
+                        dictated: sent.dictated,
                         sessionID: sessionID, store: store)
             // The form is left behind rather than kept: what it said is now in the
             // transcript, and a second brief is a new question about the same session.
             runner.composer.clearBrief(sessionID)
+            dictation?.sent(dictationID)
             openConversation()
         }
     }

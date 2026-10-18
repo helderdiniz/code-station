@@ -184,23 +184,97 @@ struct TroubleshootSkillsBar: View {
 // docked underneath. Files arrive by drag, by paste or from the file chooser, and the
 // three land in the same place.
 struct TroubleshootProblemEditor: View {
+    @Environment(Dictation.self) private var dictation: Dictation?
+    @Environment(MenuPresenter.self) private var menus: MenuPresenter?
+    @Environment(\.isEnabled) private var isEnabled
+
     @Binding var problem: String
     @Binding var attachments: [Attachment]
-    var focused: FocusState<Bool>.Binding
+    @Binding var focused: Bool
     var isBrief = false
+    var dictationID: UUID? = nil
+    var dictationDraft: Binding<SessionComposerStore.Draft>? = nil
+    var roots: [String] = []
+    var vocabulary: [String] = []
 
     @State private var dropTargeted = false
+    @State private var fieldLink = ComposerFieldLink()
+    @State private var dictateShortcut = WindowKeyMonitor([.command, .shift], "d")
+    @State private var dictationKeys = DictationKeys()
+
+    private var listening: Bool {
+        dictationID.map { dictation?.isListening($0) == true } ?? false
+    }
+
+    private var feedback: DictationFeedback? {
+        guard let dictation, let dictationID, let dictationDraft else { return nil }
+        return DictationFeedback(dictation: dictation, sessionID: dictationID,
+                                 draft: dictationDraft, notice: dictation.notice(for: dictationID))
+    }
 
     var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            feedback
+            editor
+        }
+        .background {
+            if feedback != nil {
+                WindowAnchor(monitor: dictateShortcut)
+                DictationKeysAnchor(keys: dictationKeys)
+            }
+        }
+        .onChange(of: isEnabled, initial: true) {
+            guard feedback != nil else { return }
+            dictateShortcut.start {
+                guard isEnabled else { return false }
+                toggleDictation()
+                return true
+            }
+        }
+        .onChange(of: listening, initial: true) { _, live in
+            guard let dictation, live else {
+                dictationKeys.stop()
+                return
+            }
+            dictationKeys.start(stop: { dictation.stop() }, throwAway: { dictation.throwAway() })
+        }
+        .onDisappear {
+            dictateShortcut.stop()
+            dictationKeys.stop()
+            if let dictationID { dictation?.leave(dictationID) }
+        }
+        .onChange(of: problem) { _, text in
+            if let dictationID { dictation?.draftEdited(dictationID, text: text) }
+        }
+    }
+
+    private var editor: some View {
         VStack(alignment: .leading, spacing: 0) {
             ZStack(alignment: .topLeading) {
-                TextEditor(text: $problem)
-                    .font(.system(size: 13))
-                    .scrollContentBackground(.hidden)
+                TextArea(text: $problem,
+                         isFocused: $focused,
+                         isEnabled: isEnabled,
+                         font: .systemFont(ofSize: 13),
+                         onSubmit: {},
+                         onOversizedPaste: { text in
+                             if let attachment = Attachments.fromPastedText(text) { attach([attachment]) }
+                         },
+                         onRecallUp: nil, onRecallDown: nil,
+                         highlightsKeyword: false,
+                         onSuggestionKey: nil, onCommandKey: nil,
+                         onDropFiles: { attach(Attachments.fromDrop($0)) },
+                         onFileDragTargeted: { dropTargeted = $0 },
+                         readOnly: listening,
+                         marks: marks,
+                         onMarkClick: showWordMenu,
+                         link: fieldLink,
+                         submitsOnReturn: false,
+                         accessibilityLabel: "Problem description",
+                         animatesKeyword: false,
+                         onHeightChange: { _ in })
+                    .padding(.horizontal, 5)
                     .padding(10)
                     .frame(height: isBrief ? 174 : 120)
-                    .focused(focused)
-                    .accessibilityLabel("Problem description")
                 if problem.isEmpty {
                     Text("Describe what is failing, what you expected, and anything you already checked.")
                         .font(.system(size: 13))
@@ -234,6 +308,15 @@ struct TroubleshootProblemEditor: View {
                     }
                 }
                 Spacer(minLength: 8)
+                if let dictation, let dictationID, dictationDraft != nil {
+                    DictationMicButton(live: listening,
+                                       preparing: dictation.isPreparing(dictationID),
+                                       blocked: dictation.notice(for: dictationID).isMicrophoneBlocked,
+                                       level: dictation.level,
+                                       startedAt: dictation.startedAt,
+                                       download: dictation.notice(for: dictationID).downloadFraction,
+                                       action: toggleDictation)
+                }
                 Button(action: chooseFiles) {
                     HStack(spacing: 5) {
                         Image(systemName: "paperclip")
@@ -253,7 +336,7 @@ struct TroubleshootProblemEditor: View {
         }
         .background(RoundedRectangle(cornerRadius: 11).fill(Theme.card))
         .overlay(RoundedRectangle(cornerRadius: 11)
-            .stroke(dropTargeted || focused.wrappedValue ? Theme.accent : Theme.border,
+            .stroke(listening ? Theme.listenEdge : dropTargeted || focused ? Theme.accent : Theme.border,
                     lineWidth: dropTargeted ? 2 : 1))
         .dropDestination(for: URL.self) { urls, _ in
             attach(Attachments.fromDrop(urls))
@@ -261,7 +344,7 @@ struct TroubleshootProblemEditor: View {
         } isTargeted: { dropTargeted = $0 }
         // Only while the description has the cursor: a screen that also holds a plain
         // text field would otherwise steal a path pasted into it as a file.
-        .pasteAttachments(enabled: focused.wrappedValue) { attach($0) }
+        .pasteAttachments(enabled: focused) { attach($0) }
         .onChange(of: attachments) { old, new in
             guard let window = NSApp?.keyWindow else { return }
             let added = new.filter { item in !old.contains { $0.id == item.id } }
@@ -276,6 +359,34 @@ struct TroubleshootProblemEditor: View {
         }
     }
 
+    private var marks: ComposerMarks {
+        guard let dictation, let dictationID else { return ComposerMarks() }
+        return listening
+            ? ComposerMarks(tentative: dictation.tentative)
+            : ComposerMarks(unsure: dictation.review(dictationID)?.unsure.map(\.range) ?? [])
+    }
+
+    private func toggleDictation() {
+        guard isEnabled, let dictation, let dictationID, let dictationDraft else { return }
+        let link = fieldLink
+        dictation.toggle(DictationRequest(
+            sessionID: dictationID, draft: dictationDraft,
+            caret: link.caret ?? (problem as NSString).length,
+            roots: roots, vocabulary: vocabulary,
+            placeCaret: { location in
+                focused = true
+                link.placeCaret(location)
+            }))
+    }
+
+    private func showWordMenu(_ index: Int, at frame: CGRect) {
+        guard let dictationID, let words = dictation?.review(dictationID)?.unsure,
+              words.indices.contains(index), let feedback else { return }
+        menus?.show(feedback.wordMenu(words[index]),
+                    at: CGPoint(x: frame.minX, y: frame.minY - 4),
+                    verticalAttachment: .control(edge: .top, oppositeY: frame.maxY + 4))
+    }
+
     private func chooseFiles() {
         let urls = FilePicker.chooseFiles(prompt: "Attach",
                                           message: "Choose files that help explain the problem.")
@@ -286,7 +397,7 @@ struct TroubleshootProblemEditor: View {
         for item in found where !attachments.contains(where: { $0.url == item.url }) {
             attachments.append(item)
         }
-        focused.wrappedValue = true
+        focused = true
     }
 }
 

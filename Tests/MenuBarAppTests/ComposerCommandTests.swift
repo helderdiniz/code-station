@@ -5,6 +5,25 @@ import Testing
 
 @MainActor
 struct ComposerCommandTests {
+    @Test func returnInAProblemDescriptionInsertsANewlineWithoutSubmitting() {
+        var sent = false
+        let area = TextArea(text: .constant("Requests fail"), isFocused: .constant(false),
+                            isEnabled: true, font: .systemFont(ofSize: 13),
+                            onSubmit: { sent = true }, onOversizedPaste: { _ in },
+                            onRecallUp: nil, onRecallDown: nil,
+                            highlightsKeyword: false,
+                            onSuggestionKey: nil, onCommandKey: nil,
+                            submitsOnReturn: false,
+                            animatesKeyword: false, onHeightChange: { _ in })
+        let coordinator = TextArea.Coordinator(area)
+        let view = coordinator.makeField().documentView as! TextArea.EditorView
+        view.setSelectedRange(NSRange(location: 13, length: 0))
+        view.doCommand(by: #selector(NSResponder.insertNewline(_:)))
+
+        #expect(view.string == "Requests fail\n")
+        #expect(!sent)
+    }
+
     @MainActor
     private final class Field {
         let view: TextArea.EditorView

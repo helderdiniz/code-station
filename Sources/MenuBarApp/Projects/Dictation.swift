@@ -7,7 +7,7 @@ import SwiftUI
 // where the caret is, and what the project has in it to recognise.
 struct DictationRequest {
     let sessionID: UUID
-    let composer: SessionComposerStore
+    @Binding var draft: SessionComposerStore.Draft
     let caret: Int
     let roots: [String]
     // Words the engine should expect: session names, the branch, the project's name.
@@ -169,7 +169,7 @@ final class Dictation {
 
     private func listen(_ locale: Locale) async {
         guard let request else { return }
-        before = request.composer.draft(request.sessionID)
+        before = request.draft
         insertion = DictationInsertion(text: before.text, caret: request.caret)
         take = WrittenTake()
         heardSound = false
@@ -217,13 +217,11 @@ final class Dictation {
         let sessionID = request.sessionID
 
         if take.text.isEmpty {
-            request.composer.editDraft(sessionID) { $0 = before }
+            request.draft = before
             show(nil, for: sessionID)
         } else {
-            request.composer.editDraft(sessionID) {
-                $0.text = composed.text
-                $0.dictated = true
-            }
+            request.draft.text = composed.text
+            request.draft.dictated = true
             let review = Review(text: composed.text,
                                 unsure: take.unsure.map { $0.shifted(by: composed.offset) },
                                 seconds: seconds)
@@ -247,7 +245,7 @@ final class Dictation {
         // Undo gives back what was on screen, the words still being guessed included.
         let kept = WrittenTake(text: take.text, unsure: take.unsure)
         let composed = insertion.compose(kept)
-        request.composer.editDraft(request.sessionID) { $0 = before }
+        request.draft = before
         tentative = nil
         if !kept.text.isEmpty {
             let seconds = max(1, Int(Date.now.timeIntervalSince(startedAt ?? .now).rounded()))
@@ -265,10 +263,8 @@ final class Dictation {
         guard let thrown, notice == .thrownAway, noticeSessionID == thrown.sessionID,
               let request, request.sessionID == thrown.sessionID else { return }
         self.thrown = nil
-        request.composer.editDraft(thrown.sessionID) {
-            $0.text = thrown.text
-            $0.dictated = true
-        }
+        request.draft.text = thrown.text
+        request.draft.dictated = true
         reviews[thrown.sessionID] = thrown.review
         show(thrown.review.map { .unsure(count: $0.unsure.count, seconds: $0.seconds) }, for: thrown.sessionID)
         request.placeCaret((thrown.text as NSString).length - (insertion.tail as NSString).length)
@@ -311,7 +307,7 @@ final class Dictation {
         if !heard.isEmpty { noticeSound() }
         take = DictationWriter.write(heard, files: files)
         let composed = insertion.compose(take)
-        request.composer.editDraft(request.sessionID) { $0.text = composed.text }
+        request.draft.text = composed.text
         tentative = take.tentative.map { NSRange(location: $0.location + composed.offset, length: $0.length) }
     }
 
@@ -343,11 +339,9 @@ final class Dictation {
         // The picker is only offered while nothing has been heard, so there is nothing in
         // the take to lose by starting it again on the new input.
         engine.cancel()
-        request.composer.editDraft(request.sessionID) { $0 = before }
+        request.draft = before
         finishListening()
-        start(DictationRequest(sessionID: request.sessionID, composer: request.composer,
-                               caret: request.caret, roots: request.roots,
-                               vocabulary: request.vocabulary, placeCaret: request.placeCaret))
+        start(request)
     }
 
     func chooseLanguage(_ locale: Locale) {
@@ -386,7 +380,8 @@ final class Dictation {
         if notice(for: sessionID).isUnsure { show(nil, for: sessionID) }
     }
 
-    func choose(_ replacement: String?, for word: UnsureWord, in sessionID: UUID, composer: SessionComposerStore) {
+    func choose(_ replacement: String?, for word: UnsureWord, in sessionID: UUID,
+                draft: Binding<SessionComposerStore.Draft>) {
         guard var review = reviews[sessionID],
               let index = review.unsure.firstIndex(of: word) else { return }
         review.unsure.remove(at: index)
@@ -397,7 +392,7 @@ final class Dictation {
                 $0.range.location > word.range.location ? $0.shifted(by: delta) : $0
             }
             review.text = text
-            composer.editDraft(sessionID) { $0.text = text }
+            draft.wrappedValue.text = text
         }
         reviews[sessionID] = review.unsure.isEmpty ? nil : review
         show(review.unsure.isEmpty ? nil : .unsure(count: review.unsure.count, seconds: review.seconds),

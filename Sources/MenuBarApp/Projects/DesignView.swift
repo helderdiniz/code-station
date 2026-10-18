@@ -8,6 +8,7 @@ struct DesignView: View {
     @Environment(SessionRunner.self) private var runner
     @Environment(DialogPresenter.self) private var dialogs
     @Environment(MenuPresenter.self) private var menus
+    @Environment(Dictation.self) private var dictation: Dictation?
     @Environment(\.textScale) private var textScale
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -148,7 +149,8 @@ struct DesignView: View {
             expanded: conversationExpanded,
             minimized: conversationMinimized,
             footerHeight: footerHeight,
-            enabled: dialogs.current == nil && !menus.isOpen && !designEmpty,
+            enabled: dialogs.current == nil && !menus.isOpen && !designEmpty
+                && dictation?.isListening(sessionID) != true,
             collapse: { keyboard in
                 conversationExpanded = false
                 // A press outside shrinks the panel to a small tab, so the canvas gets back
@@ -267,7 +269,7 @@ struct DesignView: View {
                         VStack(alignment: .leading, spacing: 6) {
                             Text("What would you like to design?")
                                 .font(.system(size: 13, weight: .medium))
-                            Text("Describe a screen, or attach a reference to get started.")
+                            Text("Describe a screen, or drag a reference into the prompt to get started.")
                                 .font(.system(size: 12))
                                 .foregroundStyle(.secondary)
                         }
@@ -409,6 +411,7 @@ struct DesignView: View {
                         onRecallUp: { runner.recallEarlier(sessionID, store: store) },
                         onRecallDown: { runner.recallLater(sessionID, store: store) },
                         onSend: { promptSentAt = .now },
+                        dictates: !conversationMinimized,
                         above: {
                             let queued = runner.queued(sessionID).count
                             if queued > 0 {
@@ -418,27 +421,10 @@ struct DesignView: View {
                             }
                         },
                         accessory: {
-                            // The box keeps room for one control at its side, and it is
-                            // always tall enough here to take the two stacked.
-                            VStack(spacing: 4) {
-                                SessionBotPicker(avatars: appSettings.agentAvatars,
-                                                 selectedName: botSelection,
-                                                 sessionID: sessionID,
-                                                 size: 22)
-                                Button {
-                                    let urls = FilePicker.chooseFiles(prompt: "Attach", message: "Choose references for this design.")
-                                    runner.composer.attach(Attachments.fromDrop(urls), to: sessionID)
-                                    composerFocused = true
-                                } label: {
-                                    Image(systemName: "paperclip")
-                                        .foregroundStyle(Theme.accent)
-                                        .frame(width: 28, height: 28)
-                                        .contentShape(Rectangle())
-                                }
-                                .buttonStyle(.plain)
-                                .disabled(blocked)
-                                .accessibilityLabel("Attach a reference")
-                            }
+                            SessionBotPicker(avatars: appSettings.agentAvatars,
+                                             selectedName: botSelection,
+                                             sessionID: sessionID,
+                                             size: 22)
                         })
     }
 

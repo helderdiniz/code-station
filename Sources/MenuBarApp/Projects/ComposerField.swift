@@ -179,6 +179,8 @@ struct TextArea: NSViewRepresentable {
     var marks = ComposerMarks()
     var onMarkClick: ((Int, CGRect) -> Void)? = nil
     var link: ComposerFieldLink? = nil
+    var submitsOnReturn = true
+    var accessibilityLabel = "Prompt"
     let animatesKeyword: Bool
     let onHeightChange: (CGFloat) -> Void
 
@@ -206,7 +208,7 @@ struct TextArea: NSViewRepresentable {
 
         // Still selectable while a turn runs: making it otherwise would push first
         // responder out of the box, and the cursor would not come back when the turn ends.
-        textView.setAccessibilityLabel("Prompt")
+        textView.setAccessibilityLabel(accessibilityLabel)
         textView.isEditable = isEnabled && !readOnly
         textView.textColor = isEnabled ? .labelColor : .disabledControlTextColor
 
@@ -305,6 +307,7 @@ struct TextArea: NSViewRepresentable {
         func textView(_ textView: NSTextView, doCommandBy selector: Selector) -> Bool {
             switch selector {
             case #selector(NSResponder.insertNewline(_:)):
+                guard parent.submitsOnReturn else { return false }
                 if NSApp.currentEvent?.modifierFlags.contains(.shift) == true {
                     textView.insertText("\n", replacementRange: textView.selectedRange())
                 } else if !commandKey(.complete) {

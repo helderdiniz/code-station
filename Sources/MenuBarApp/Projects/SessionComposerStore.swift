@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import SwiftUI
 
 @MainActor
 @Observable
@@ -24,6 +25,11 @@ final class SessionComposerStore {
 
     func draft(_ sessionID: UUID) -> Draft { drafts[sessionID] ?? Draft() }
 
+    func draftBinding(_ sessionID: UUID) -> Binding<Draft> {
+        Binding(get: { self.draft(sessionID) },
+                set: { value in self.editDraft(sessionID) { $0 = value } })
+    }
+
     func editDraft(_ sessionID: UUID, _ change: (inout Draft) -> Void) {
         var draft = drafts[sessionID] ?? Draft()
         change(&draft)
@@ -43,6 +49,7 @@ final class SessionComposerStore {
         var attachments: [Attachment] = []
         var environment = TroubleshootEnvironment.first()
         var mcpServersEnabled = true
+        var dictated = false
     }
 
     func brief(_ sessionID: UUID) -> TroubleshootBrief {
@@ -56,6 +63,18 @@ final class SessionComposerStore {
     }
 
     func clearBrief(_ sessionID: UUID) { briefs[sessionID] = nil }
+
+    func problemBinding(_ sessionID: UUID) -> Binding<Draft> {
+        Binding(get: {
+            let brief = self.brief(sessionID)
+            return Draft(text: brief.problem, dictated: brief.dictated)
+        }, set: { value in
+            self.editBrief(sessionID) {
+                $0.problem = value.text
+                $0.dictated = value.dictated
+            }
+        })
+    }
 
     private struct PromptWalk {
         // The number of steps taken, where one is the most recent prompt.
