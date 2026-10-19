@@ -584,16 +584,25 @@ struct SessionView: View {
     private func rail(session: ChatSession, project: Project, recap: SessionRecap?,
                       fit: RailFit) -> some View {
         HStack(spacing: 10) {
-            // The panels all open beside the chat, so the other tabs have nothing to dock.
-            if tab == .conversation {
+            // Most panels open beside the chat, so only the chat has the whole dock. The
+            // terminal opens under any tab, so it stays where files are being looked at.
+            switch tab {
+            case .conversation:
                 panelDock(session: session, project: project, showsWords: fit == .wide)
                     .transition(.opacity)
-            } else if tab == .explorer {
+            case .design:
+                terminalDock(session: session, project: project, showsWord: fit == .wide)
+                    .transition(.opacity)
+            case .explorer:
                 explorerActions
                     .transition(.opacity)
+                terminalDock(session: session, project: project, showsWord: fit == .wide)
+                    .transition(.opacity)
+            case .troubleshoot, .changes, .reviews:
+                EmptyView()
             }
             if hasUtilities(session: session) {
-                if tab == .conversation || tab == .explorer {
+                if hasDock {
                     HeaderRailDivider()
                 }
                 if fit == .narrow {
@@ -625,27 +634,46 @@ struct SessionView: View {
     // puts the running app in the conversation's place.
     private func panelDock(session: ChatSession, project: Project,
                            showsWords: Bool) -> some View {
-        let directory = session.worktreePath ?? project.path
-        let terminalOpen = terminals.isOpen(terminalScope)
-        return HeaderRailDock {
+        HeaderRailDock {
             previewSeat(session, showsWord: showsWords)
-            // The glyph toggles the drawer; the other ways to reach a shell sit behind
-            // the chevron, so the most common one is a single click.
-            HeaderDockSeat(
-                icon: "terminal",
-                word: "Terminal",
-                isOpen: terminalOpen,
-                showsWord: showsWords,
-                keys: ["⌃", "`"],
-                detail: "A shell under the chat, in this session's folder",
-                options: .init(label: "Other ways to open a shell") {
-                    terminalOptions(isOpen: terminalOpen, directory: directory)
-                }) {
-                    toggleTerminal(directory: directory)
-                }
+            terminalSeat(session: session, project: project, showsWord: showsWords)
             workingSetSeat(session, showsWord: showsWords)
             findSeat(session, showsWord: showsWords)
         }
+    }
+
+    private var hasDock: Bool {
+        switch tab {
+        case .conversation, .design, .explorer: true
+        case .troubleshoot, .changes, .reviews: false
+        }
+    }
+
+    private func terminalDock(session: ChatSession, project: Project,
+                              showsWord: Bool) -> some View {
+        HeaderRailDock {
+            terminalSeat(session: session, project: project, showsWord: showsWord)
+        }
+    }
+
+    // The glyph toggles the drawer; the other ways to reach a shell sit behind the
+    // chevron, so the most common one is a single click.
+    private func terminalSeat(session: ChatSession, project: Project,
+                              showsWord: Bool) -> some View {
+        let directory = session.worktreePath ?? project.path
+        let terminalOpen = terminals.isOpen(terminalScope)
+        return HeaderDockSeat(
+            icon: "terminal",
+            word: "Terminal",
+            isOpen: terminalOpen,
+            showsWord: showsWord,
+            keys: ["⌃", "`"],
+            detail: "A shell under the pane, in this session's folder",
+            options: .init(label: "Other ways to open a shell") {
+                terminalOptions(isOpen: terminalOpen, directory: directory)
+            }) {
+                toggleTerminal(directory: directory)
+            }
     }
 
     // The file tree's own actions sit in the tab row, so the Explorer needs no header band
