@@ -31,6 +31,32 @@ struct ChangesModelTests {
         #expect(model.snapshot == nil)
         #expect(!model.loading)
     }
+
+    @Test func showingADiffSwapsTheFileItsTextAndItsThreadsTogether() async {
+        let model = ChangesModel()
+        let lines = [DiffLine(id: 0, kind: .hunk, text: "@@ -1,1 +1,2 @@"),
+                     DiffLine(id: 1, kind: .context, text: " kept"),
+                     DiffLine(id: 2, kind: .addition, text: "+added")]
+        await model.showDiff(FileDiff(lines: lines), of: "a.swift", language: nil, scale: 1,
+                             comments: DiffComments(threads: [2]))
+        #expect(model.diff?.lines == lines)
+        #expect(model.diffFileID == "a.swift")
+        #expect(model.diffText?.string.contains("added") == true)
+        #expect(model.renderedThreads == [2])
+    }
+
+    // A file with nothing to show as text, such as a picture, must not leave the text of
+    // the file before it on screen.
+    @Test func aFileWithoutLinesReplacesTheTextOfTheOneBefore() async {
+        let model = ChangesModel()
+        await model.showDiff(FileDiff(lines: [DiffLine(id: 0, kind: .addition, text: "+code")]), of: "a.swift",
+                             language: nil, scale: 1, comments: DiffComments(threads: [0]))
+        await model.showDiff(FileDiff(note: "Binary file"), of: "b.png", language: nil, scale: 1, comments: nil)
+        #expect(model.diffFileID == "b.png")
+        #expect(model.diff?.note == "Binary file")
+        #expect(model.diffText == nil)
+        #expect(model.renderedThreads.isEmpty)
+    }
 }
 
 @MainActor

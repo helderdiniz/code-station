@@ -14,7 +14,13 @@ final class ChangesModel {
     var historyNote: String?
     var loadingHistory = false
     var diff: FileDiff?
+    // The changed file the diff on screen belongs to. It can trail the selection while
+    // the next file is read, so the pane keeps showing one whole file until then.
+    var diffFileID: String?
     var diffText: NSAttributedString?
+    // The thread lines the text on screen was built with, so it is only built again
+    // when they change.
+    @ObservationIgnored private(set) var renderedThreads: Set<Int> = []
     var loadingDiff = false
     var expanding: Set<String> = []
     @ObservationIgnored private var renderGeneration = 0
@@ -101,6 +107,24 @@ final class ChangesModel {
         guard !Task.isCancelled, self.diff?.lines == lines,
               generation == renderGeneration else { return }
         diffText = text
+        renderedThreads = comments?.threads ?? []
+    }
+
+    // A newly read file replaces the one on screen only once its text is built, all in
+    // one go. Clearing the pane first would flash it empty while git and the build run.
+    // Only a newer load stops it: the file still on screen may be drawn again meanwhile.
+    func showDiff(_ loaded: FileDiff, of fileID: String, language: CodeLanguage?, scale: CGFloat,
+                  comments: DiffComments?) async {
+        let generation = loadGeneration
+        let text = loaded.lines.isEmpty ? nil
+            : await DiffText.build(loaded.lines, language: language, scale: scale,
+                                   numbered: true, comments: comments)
+        guard !Task.isCancelled, generation == loadGeneration else { return }
+        renderGeneration += 1
+        diff = loaded
+        diffFileID = fileID
+        diffText = text
+        renderedThreads = comments?.threads ?? []
     }
 
     func expand(_ key: String, _ direction: DiffExpandDirection, at root: String) async -> Bool {
@@ -129,7 +153,9 @@ final class ChangesModel {
         loadGeneration += 1
         renderGeneration += 1
         diff = nil
+        diffFileID = nil
         diffText = nil
+        renderedThreads = []
         loadingDiff = false
         expanding = []
     }

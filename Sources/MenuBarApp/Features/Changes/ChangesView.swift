@@ -115,14 +115,8 @@ struct ChangesView: View {
     private var historyNote: String? { model.historyNote }
     private var loadingHistory: Bool { model.loadingHistory }
     private var historySelection: CommitHistorySelection { navigation.history(for: root) }
-    private var diff: FileDiff? {
-        get { model.diff }
-        nonmutating set { model.diff = newValue }
-    }
-    private var diffText: NSAttributedString? {
-        get { model.diffText }
-        nonmutating set { model.diffText = newValue }
-    }
+    private var diff: FileDiff? { model.diff }
+    private var diffText: NSAttributedString? { model.diffText }
     private var loadingDiff: Bool { model.loadingDiff }
     @State private var diffScroll = DiffTextView.Scroll.top
     // Gap rows git is reading the hidden lines for right now.
@@ -131,6 +125,13 @@ struct ChangesView: View {
 
     private var files: [GitChange] { snapshot?.files ?? [] }
     private var selected: GitChange? { files.first { $0.id == fileSelection.activeID } }
+    // The file the diff pane is drawing. While a newly selected file is being read this is
+    // still the one before it, so the header, the cards and a press on a line all agree
+    // with the code on screen.
+    private var shownFile: GitChange? {
+        guard diff != nil, let id = model.diffFileID else { return selected }
+        return files.first { $0.id == id } ?? selected
+    }
     private var selectedFiles: [GitChange] { files.filter { !excluded.contains($0.id) } }
     private var repoRoot: String { snapshot?.root ?? root }
     private var busy: Bool { loading || working != nil }
@@ -269,7 +270,8 @@ struct ChangesView: View {
         // The text keeps an empty row under each line a thread hangs from, so a thread
         // that comes or goes is only seen once the text is built again. The reader stays
         // where they were.
-        .onChange(of: threadLineIDs) { _, _ in
+        .onChange(of: threadLineIDs) { _, ids in
+            guard ids != model.renderedThreads else { return }
             diffScroll = .hold
             Task { await renderDiff() }
         }
@@ -998,7 +1000,7 @@ struct ChangesView: View {
                 cleanContent
             } else {
                 HStack(spacing: 0) {
-                    if let file = selected {
+                    if let file = shownFile {
                         diffPane(truncationHint: "Open the file to see the rest.",
                                  reveal: { reveal(file) }) {
                             fileName(file)
@@ -1146,10 +1148,12 @@ struct ChangesView: View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 10) {
                 title()
-                Spacer()
+                // Beside the title rather than among the controls, so the buttons do not
+                // shift under the pointer while comments are stepped through.
                 if loadingDiff { ChangesProgressLabel(title: "Reading diff…", compact: true) }
+                Spacer()
                 if mode == .changes, review != nil, !orderedComments.isEmpty { commentNavigation }
-                if mode == .changes, let file = selected {
+                if mode == .changes, let file = shownFile {
                     Image(systemName: "ellipsis").padding(8).contentShape(Rectangle())
                         .appMenu {
                             var entries: [MenuEntry] = []
@@ -1181,7 +1185,7 @@ struct ChangesView: View {
             .padding(.horizontal, 20)
             .padding(.vertical, 10)
 
-            if mode == .changes, let file = selected, !file.isBinary, diff?.images == nil {
+            if mode == .changes, let file = shownFile, !file.isBinary, diff?.images == nil {
                 if appSettings.changesDiffLayout == .sideBySide {
                     HStack {
                         versionHeader("Last commit", version: .before, file: file)
@@ -1467,9 +1471,11 @@ struct ChangesView: View {
                              extendingRange: flags.contains(.shift),
                              toggling: flags.contains(.command))
         guard fileSelection.activeID != previousActiveID else { return }
-        clearDiffContent()
         guard let selectedID = fileSelection.activeID,
-              let selected = files.first(where: { $0.id == selectedID }) else { return }
+              let selected = files.first(where: { $0.id == selectedID }) else {
+            clearDiffContent()
+            return
+        }
         let root = snapshot?.root ?? root
         Task { await loadDiff(selected, root: root) }
     }
@@ -1486,18 +1492,21 @@ struct ChangesView: View {
     private func renderDiff() async {
         guard let diff, !diff.lines.isEmpty else { return }
         await model.renderDiff(
-            language: (mode == .changes ? selected : nil).flatMap {
-                CodeLanguage(fileExtension: ($0.path as NSString).pathExtension)
-            },
+            language: (mode == .changes ? shownFile : nil).flatMap(language),
             scale: appSettings.textSize.scale, numbered: mode == .changes,
-            comments: mode == .changes ? diffComments(for: selected, lines: diff.lines) : nil)
+            comments: mode == .changes ? diffComments(for: shownFile, lines: diff.lines) : nil)
+    }
 
+    private func language(_ file: GitChange) -> CodeLanguage? {
+        CodeLanguage(fileExtension: (file.path as NSString).pathExtension)
     }
 
     // A grey gap row stands for the unchanged lines the diff skipped. Pressing one of its
     // controls reads that end of the gap back and drops the lines in beside the row, so a
     // change can be read with the code around it without leaving the pane.
     private func expand(_ key: String, _ direction: DiffExpandDirection) {
+        // The lines on screen belong to the file before; the one selected is on its way.
+        guard mode != .changes || shownFile?.id == selected?.id else { return }
         Task {
             guard await model.expand(key, direction, at: repoRoot) else { return }
             diffScroll = direction == .down ? .follow : .hold
@@ -1528,17 +1537,15 @@ struct ChangesView: View {
             await reload()
             return
         }
-        diffScroll = !recheckList && diff != nil ? .hold : .top
-        diff = loaded
-        // Publish the file before building its text, so comments arriving during the
-        // build are rendered against these lines too.
-        await renderDiff()
+        diffScroll = !recheckList && model.diffFileID == file.id ? .hold : .top
+        await model.showDiff(loaded, of: file.id, language: language(file), scale: appSettings.textSize.scale,
+                             comments: diffComments(for: file, lines: loaded.lines))
     }
 
     // MARK: - Review
 
     private var openFileComments: [ReviewComment] {
-        guard let review, let file = selected else { return [] }
+        guard let review, let file = shownFile else { return [] }
         return inlineComments(review, path: file.path)
     }
 
@@ -1551,7 +1558,7 @@ struct ChangesView: View {
     }
 
     private var openFileQuestions: [ReviewQuestion] {
-        guard let review, let file = selected else { return [] }
+        guard let review, let file = shownFile else { return [] }
         return review.reviews.questions(review.sessionID, root: repoRoot, path: file.path)
     }
 
@@ -1583,7 +1590,7 @@ struct ChangesView: View {
     // Sent comments stay under their lines as threads. One whose code has left the diff
     // is still in the review list, so it is not listed again above the diff.
     private var openFileThreads: [(round: ReviewRound, comment: ReviewComment)] {
-        guard let review, let file = selected else { return [] }
+        guard let review, let file = shownFile else { return [] }
         return review.reviews.threads(review.sessionID, root: repoRoot, path: file.path)
     }
 
@@ -1611,9 +1618,9 @@ struct ChangesView: View {
     // The lines a thread hangs from: those with comments placed under them, and the one a
     // comment is being written about.
     private func threadLines(placement: ReviewPlacement, sent: ReviewPlacement, asked: [Int: [ReviewQuestion]],
-                             lines: [DiffLine]) -> Set<Int> {
+                             lines: [DiffLine], path: String?) -> Set<Int> {
         var ids = Set(placement.below.keys).union(sent.below.keys).union(asked.keys)
-        if let draft = commentDraft, draft.path == selected?.path, draft.editing == nil,
+        if let draft = commentDraft, draft.path == path, draft.editing == nil,
            let id = lineID(for: draft.anchor, in: lines) {
             ids.insert(id)
         }
@@ -1622,7 +1629,8 @@ struct ChangesView: View {
 
     private var threadLineIDs: Set<Int> {
         guard review != nil, mode == .changes, let diff else { return [] }
-        return threadLines(placement: placement, sent: sentPlacement, asked: questionPlacement, lines: diff.lines)
+        return threadLines(placement: placement, sent: sentPlacement, asked: questionPlacement, lines: diff.lines,
+                           path: shownFile?.path)
     }
 
     private func diffComments(for file: GitChange?, lines: [DiffLine]) -> DiffComments? {
@@ -1632,7 +1640,8 @@ struct ChangesView: View {
         let asked = file.map { review.reviews.questions(review.sessionID, root: repoRoot, path: $0.path) } ?? []
         return DiffComments(threads: threadLines(placement: ReviewPlacement.place(comments, in: lines),
                                                  sent: ReviewPlacement.place(sent, in: lines),
-                                                 asked: Self.placeQuestions(asked, in: lines), lines: lines))
+                                                 asked: Self.placeQuestions(asked, in: lines), lines: lines,
+                                                 path: file?.path))
     }
 
     // What hangs under each line: its cards, and the composer where one is being written.
@@ -1645,13 +1654,14 @@ struct ChangesView: View {
         let rounds = Dictionary(openFileThreads.map { ($0.comment.id, $0.round) }, uniquingKeysWith: { first, _ in first })
         var views: [Int: AnyView] = [:]
         let draftLine: Int? = {
-            guard let draft = commentDraft, draft.path == selected?.path else { return nil }
+            guard let draft = commentDraft, draft.path == shownFile?.path else { return nil }
             if let editing = draft.editing {
                 return placement.below.first { $0.value.contains { $0.id == editing } }?.key
             }
             return lineID(for: draft.anchor, in: diff.lines)
         }()
-        for id in threadLines(placement: placement, sent: sent, asked: asked, lines: diff.lines) {
+        for id in threadLines(placement: placement, sent: sent, asked: asked, lines: diff.lines,
+                              path: shownFile?.path) {
             let comments = placement.below[id] ?? []
             let threads = (sent.below[id] ?? []).compactMap { comment in rounds[comment.id].map { ($0, comment) } }
             views[id] = AnyView(VStack(alignment: .leading, spacing: 8) {
@@ -1747,7 +1757,7 @@ struct ChangesView: View {
     }
 
     private func pickLine(_ anchor: DiffAnchor, extending: Bool) {
-        guard let file = selected else { return }
+        guard let file = shownFile else { return }
         if let id = reattaching {
             moveUnplaced(id, to: anchor)
             return
@@ -1768,7 +1778,7 @@ struct ChangesView: View {
 
     // A drag down the numbers picks the whole run at once.
     private func pickRange(_ anchor: DiffAnchor) {
-        guard let file = selected else { return }
+        guard let file = shownFile else { return }
         if let id = reattaching {
             moveUnplaced(id, to: anchor)
             return
@@ -1794,7 +1804,7 @@ struct ChangesView: View {
     // A diff read again under a note being written can have moved its lines. The note
     // follows its code there, so it is still saved against the lines it was written for.
     private func followDraft() {
-        guard let draft = commentDraft, draft.editing == nil, draft.path == selected?.path,
+        guard let draft = commentDraft, draft.editing == nil, draft.path == shownFile?.path,
               let lines = diff?.lines,
               let found = ReviewPlacement.locate(draft.anchor, excerpt: draft.excerpt,
                                                  excerptOffsets: draft.excerptOffsets,
