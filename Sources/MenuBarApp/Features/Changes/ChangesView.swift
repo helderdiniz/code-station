@@ -627,9 +627,11 @@ struct ChangesView: View {
         .background(Theme.card)
     }
 
+    // Before the first comment every control on the strip is disabled, so it only takes
+    // room from the diff. The coach mark covers how to start a review.
     private var showsReviewStrip: Bool {
         guard let review, mode == .changes else { return false }
-        return !files.isEmpty || !review.reviews.comments(review.sessionID).isEmpty
+        return !review.reviews.comments(review.sessionID).isEmpty
             || !review.reviews.rounds(review.sessionID).isEmpty
     }
 
