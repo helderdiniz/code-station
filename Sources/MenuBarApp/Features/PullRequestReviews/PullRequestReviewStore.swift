@@ -22,6 +22,8 @@ final class PullRequestReviewStore {
     // Pull requests with a reply or a resolve in flight, so a second click waits for the first.
     private(set) var busy: Set<String> = []
 
+    // Quick enough to feel live, slow enough to be nothing against GitHub's hourly allowance.
+    static let pollInterval: Duration = .seconds(120)
 
     // Opening a session: find the pull request each checkout's branch is on, remember it
     // on the session the way `gh pr create` would have, then read every pull request the
@@ -37,6 +39,17 @@ final class PullRequestReviewStore {
             }
         }
         await read(sessionID, store: store)
+    }
+
+    // The sessions on the rail that carry a pull request, on a slow beat, so a comment on
+    // any of them shows on its card without the session being opened.
+    func keepReading(store: ProjectStore) async {
+        while !Task.isCancelled {
+            for session in store.sidebarSessions where !session.pullRequests.isEmpty {
+                await read(session.id, store: store)
+            }
+            try? await Task.sleep(for: Self.pollInterval)
+        }
     }
 
     // One reading that fails keeps the last good one, so a hiccup in gh does not empty the

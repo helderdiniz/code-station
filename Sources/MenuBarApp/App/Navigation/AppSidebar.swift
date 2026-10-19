@@ -1962,6 +1962,7 @@ struct PinnedMark: View {
 // shows on its project and on Home, so it reads the same wherever it is met.
 private struct SessionCard: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(PullRequestReviewStore.self) private var pullRequestReviews
     let session: ChatSession
     let worktrees: WorktreeCoverage
     let selected: Bool
@@ -2085,6 +2086,10 @@ private struct SessionCard: View {
                 }
                 if uncommitted { UncommittedMark() }
                 if connected { MobileConnectionMark() }
+                // Review threads on this session's pull request still waiting for an answer.
+                if pullRequestReviews.waitingCount(session.id) > 0 {
+                    MonoChip(text: "\(pullRequestReviews.waitingCount(session.id)) REVIEW", size: 8.5, tint: Theme.attentionText)
+                }
                 Spacer(minLength: 4)
                 Text(RelativeTime.short(waiting ? waitingSince ?? session.lastActivity
                                                 : session.lastActivity))
