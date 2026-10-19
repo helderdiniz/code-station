@@ -87,6 +87,20 @@ final class AppSettings {
         }
     }
 
+    private var hiddenHeaderButtons: Set<HeaderButton> {
+        didSet { Preferences.setHiddenHeaderButtons(hiddenHeaderButtons, in: preferences) }
+    }
+
+    func shows(_ button: HeaderButton) -> Bool { !hiddenHeaderButtons.contains(button) }
+
+    func setShows(_ shown: Bool, _ button: HeaderButton) {
+        if shown {
+            hiddenHeaderButtons.remove(button)
+        } else {
+            hiddenHeaderButtons.insert(button)
+        }
+    }
+
     var diceBearAvatarStyle: DiceBearAvatarStyle {
         didSet {
             Preferences.setDiceBearAvatarStyle(diceBearAvatarStyle, in: preferences)
@@ -158,6 +172,7 @@ final class AppSettings {
         appearance = Preferences.appearance(in: preferences)
         sidebarIconSet = Preferences.sidebarIconSet(in: preferences)
         opensWorkingSetByDefault = Preferences.opensWorkingSetByDefault(in: preferences)
+        hiddenHeaderButtons = Preferences.hiddenHeaderButtons(in: preferences)
         diceBearAvatarStyle = Preferences.diceBearAvatarStyle(in: preferences)
         textSize = Preferences.textSize(in: preferences)
         messageColour = Preferences.messageColour(in: preferences)

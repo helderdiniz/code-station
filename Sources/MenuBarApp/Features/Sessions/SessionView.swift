@@ -740,7 +740,7 @@ struct SessionView: View {
     // faint until there is an app to show.
     @ViewBuilder
     private func previewSeat(_ session: ChatSession, showsWord: Bool) -> some View {
-        if !session.isActivelyDesigning {
+        if !session.isActivelyDesigning && appSettings.shows(.preview) {
             let address = previews.selected.flatMap { $0.isBlank ? nil : $0.address }
                 ?? linkedApp.address
             let isOpen = tab == .conversation && previews.isOpen

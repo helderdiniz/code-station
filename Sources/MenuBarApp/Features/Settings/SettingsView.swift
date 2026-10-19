@@ -284,6 +284,7 @@ struct SettingsView: View {
             VStack(alignment: .leading, spacing: 20) {
                 appearance.id(SettingsSearchTarget.appearanceTheme.id)
                 workingSet.id(SettingsSearchTarget.appearanceWorkingSet.id)
+                headerButtons.id(SettingsSearchTarget.appearanceHeaderButtons.id)
                 BotSettingsEntry {
                     show { bots.isPresented = true }
                 }
@@ -691,6 +692,31 @@ struct SettingsView: View {
                     isOn: $settings.opensWorkingSetByDefault)
                     .padding(.horizontal, 14)
                     .padding(.vertical, 13)
+            }
+        }
+    }
+
+    private var headerButtons: some View {
+        ChoiceBlock("HEADER BUTTONS") {
+            SettingsCard {
+                ForEach(Array(HeaderButton.allCases.enumerated()), id: \.element) { index, button in
+                    if index > 0 { SettingsRowDivider() }
+                    HStack(spacing: 12) {
+                        Image(systemName: button.icon)
+                            .font(.system(size: 13, weight: .medium))
+                            .foregroundStyle(.secondary)
+                            .frame(width: 28, height: 28)
+                            .surface(Theme.sunken, cornerRadius: 7, border: Theme.settingsHairline)
+                            .accessibilityHidden(true)
+                        SettingsToggleRow(
+                            button.title,
+                            detail: button.detail,
+                            isOn: Binding(get: { settings.shows(button) },
+                                          set: { settings.setShows($0, button) }))
+                    }
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 13)
+                }
             }
         }
     }

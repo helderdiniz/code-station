@@ -112,6 +112,18 @@ enum Preferences {
         store.set(opens, forKey: "opensWorkingSetByDefault")
     }
 
+    // The hidden buttons are saved rather than the shown ones, so a button added in a
+    // later release appears until the person turns it off.
+    static func hiddenHeaderButtons(in store: UserDefaults = .standard) -> Set<HeaderButton> {
+        Set((store.stringArray(forKey: "hiddenHeaderButtons") ?? [])
+            .compactMap(HeaderButton.init(rawValue:)))
+    }
+
+    static func setHiddenHeaderButtons(_ hidden: Set<HeaderButton>,
+                                       in store: UserDefaults = .standard) {
+        store.set(hidden.map(\.rawValue).sorted(), forKey: "hiddenHeaderButtons")
+    }
+
     // Which agent runs the sessions. Everything else about an agent lives in its own
     // config; this is only the app's choice between them.
     static var agent: AgentKind {

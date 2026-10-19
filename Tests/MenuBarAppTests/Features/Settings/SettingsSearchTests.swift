@@ -61,6 +61,13 @@ struct SettingsSearchTests {
         #expect(result.target == .appearanceWorkingSet)
     }
 
+    @Test func findsTheHeaderButtons() throws {
+        let result = try #require(SettingsSearchIndex.results(for: "hide preview").first)
+
+        #expect(result.tab == .appearance)
+        #expect(result.target == .appearanceHeaderButtons)
+    }
+
     @Test func findsEnvironmentCredentials() throws {
         let result = try #require(SettingsSearchIndex.results(for: "environment credentials").first)
 

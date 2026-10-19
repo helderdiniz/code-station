@@ -394,6 +394,34 @@ struct AppPathsTests {
             .opensWorkingSetByDefault)
     }
 
+    @Test @MainActor func headerButtonsShowUntilHiddenAndTheChoicePersists() throws {
+        let suite = "code-station-header-buttons-tests-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let avatar = root.appendingPathComponent("avatar.png")
+        let settings = AppSettings(agentAvatarURL: avatar, preferences: defaults)
+
+        #expect(settings.shows(.preview))
+
+        settings.setShows(false, .preview)
+
+        #expect(Preferences.hiddenHeaderButtons(in: defaults) == [.preview])
+        #expect(!AppSettings(agentAvatarURL: avatar, preferences: defaults).shows(.preview))
+
+        settings.setShows(true, .preview)
+
+        #expect(AppSettings(agentAvatarURL: avatar, preferences: defaults).shows(.preview))
+    }
+
+    @Test func unknownHiddenHeaderButtonsAreIgnored() throws {
+        let suite = "code-station-header-buttons-unknown-tests-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set(["preview", "retired"], forKey: "hiddenHeaderButtons")
+
+        #expect(Preferences.hiddenHeaderButtons(in: defaults) == [.preview])
+    }
+
     @Test func storesAndResetsAnExternalSiteConfigurationPath() throws {
         let suite = "code-station-site-defaults-tests-\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suite))

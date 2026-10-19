@@ -14,6 +14,7 @@ enum SettingsSearchTarget: String, Hashable {
     case generalSystem
     case appearanceTheme
     case appearanceWorkingSet
+    case appearanceHeaderButtons
     case appearanceSidebarIcons
     case appearanceDefaultBot
     case keyboardShortcuts
@@ -81,6 +82,8 @@ enum SettingsSearchIndex {
                "appearance colour color bubble prompt sent project icon stone paper lemon leaf ink"),
         result("Open working set automatically", .appearance, .appearanceWorkingSet,
                "appearance session layout panel sidebar default first turn agent closed open"),
+        result("Header buttons", .appearance, .appearanceHeaderButtons,
+               "appearance session toolbar rail dock show hide preview globe running app browser"),
         result("Sidebar icons", .appearance, .appearanceSidebarIcons,
                "appearance style monogram dicebear motion still animated"),
         result("Your bots", .appearance, .appearanceDefaultBot,
