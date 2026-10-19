@@ -199,7 +199,7 @@ struct BranchBrowserView: View {
                                     .font(.system(size: 12)).foregroundStyle(.secondary)
                                 actionRow("Merge into " + current, detail: "Preview changes before merging", icon: "arrow.triangle.merge", id: "merge", emphasis: true) { open(.merge) }
                                 actionRow("Compare with current branch", detail: "See commits and file differences", icon: "square.split.2x1", id: "compare") { open(.compare) }
-                                actionRow("Switch to " + selected.name, detail: "Make this your working branch", icon: "arrow.left.arrow.right", id: "switch") { open(.switchBranch) }
+                                actionRow("Switch to " + selected.name, detail: selected.worktree.isEmpty ? "Make this your working branch" : "Open in another worktree", icon: "arrow.left.arrow.right", id: "switch") { open(.switchBranch) }
                                     .disabled(!selected.worktree.isEmpty)
                                 Divider()
                                 actionRow("Rebase current branch onto this", detail: "Replay your commits on " + selected.name, icon: "arrow.triangle.branch", id: "rebase") { open(.rebase) }
