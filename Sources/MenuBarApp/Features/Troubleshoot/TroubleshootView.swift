@@ -1,0 +1,710 @@
+import AppKit
+import SwiftUI
+
+// One of the deployments the site file names, as a diagnosis sees it.
+struct TroubleshootEnvironment: Identifiable, Equatable, Sendable {
+    let name: String
+    let title: String
+    let isDangerous: Bool
+
+    init(name: String, title: String, isDangerous: Bool = false) {
+        self.name = name
+        self.title = title
+        self.isDangerous = isDangerous
+    }
+
+    init(_ environment: SiteDefaults.Environment) {
+        self.init(name: environment.name,
+                  title: environment.label,
+                  isDangerous: environment.isDangerous)
+    }
+
+    var id: String { name }
+
+    // The prompt gets the name the deployment goes by as well as its label, since "prd"
+    // is what the agent will meet in URLs and namespaces while "Prod" is only on screen.
+    var promptTitle: String {
+        title.lowercased() == name.lowercased() ? name : "\(title) (\(name))"
+    }
+
+    // A server tagged with an environment the site file no longer names is left in rather
+    // than hidden everywhere, the same way a server nobody has tagged is.
+    func includes(_ server: Server, in defaults: SiteDefaults = .current) -> Bool {
+        guard let tag = server.deployEnvironment else { return true }
+        guard defaults.deployEnvironment(named: tag) != nil else { return true }
+        return tag == name
+    }
+
+    static func all(in defaults: SiteDefaults = .current) -> [TroubleshootEnvironment] {
+        defaults.deployEnvironments.map(TroubleshootEnvironment.init)
+    }
+
+    // Never nil: a file that names no environment leaves the app on its own two.
+    static func first(in defaults: SiteDefaults = .current) -> TroubleshootEnvironment {
+        all(in: defaults).first ?? TroubleshootEnvironment(name: "production",
+                                                           title: "Production",
+                                                           isDangerous: true)
+    }
+}
+
+struct TroubleshootRequest {
+    let problem: String
+    let incidentTime: String
+    let environment: TroubleshootEnvironment
+    let projects: [String]
+    let skills: [String]
+    let mcpServersEnabled: Bool
+    let mcpServerNames: [String]
+    let agent: AgentKind
+
+    init(problem: String, incidentTime: String = "", environment: TroubleshootEnvironment, projects: [String],
+         skills: [String] = [], mcpServersEnabled: Bool, mcpServerNames: [String] = [],
+         agent: AgentKind) {
+        self.problem = problem
+        self.incidentTime = incidentTime
+        self.environment = environment
+        self.projects = projects
+        self.skills = skills
+        self.mcpServersEnabled = mcpServersEnabled
+        self.mcpServerNames = mcpServerNames
+        self.agent = agent
+    }
+
+    var userInput: String {
+        let description = problem.isBlank
+            ? "Troubleshoot the problem shown in the attached files."
+            : problem.trimmed
+        guard !incidentTime.isBlank else { return description }
+        return description + "\n\nIncident time window (as supplied): " + incidentTime.trimmed
+    }
+
+    var customInstructions: String {
+        let projectText = projects.joined(separator: ", ")
+        let mcpText: String
+        if !mcpServersEnabled {
+            mcpText = "MCP servers are disabled for this diagnosis."
+        } else if mcpServerNames.isEmpty {
+            mcpText = "MCP servers are enabled. Use them when they provide relevant logs, metrics, or service context."
+        } else {
+            let names = mcpServerNames.sorted().joined(separator: ", ")
+            mcpText = """
+            MCP servers are enabled: \(names). Their tools may be deferred from the initial tool list. Search the available tool catalogue for these server names before concluding that a server or tool is unavailable.
+            """
+        }
+        let skillText: String
+        if skills.isEmpty {
+            skillText = "No skills were picked for this diagnosis."
+        } else {
+            let names = skills.sorted().map { "`\($0)`" }.joined(separator: ", ")
+            skillText = """
+            Skills to use: \(names). Load each one before the first step it covers, whatever the agent calls skills.
+            """
+        }
+        // Claude is told how to draw a chart in its system prompt. The others have no
+        // such channel, and a diagnosis is where a chart earns its place most often, so
+        // the shape travels with the brief instead.
+        let chartText = agent == .claudeCode
+            ? ""
+            : "\n\n\(TranscriptChartSpec.agentInstructions)"
+        let dangerText = environment.isDangerous
+            ? " Treat this environment as live: do not mutate data, configuration, deployments, or running services."
+            : ""
+
+        return """
+        Troubleshooting context:
+        - Environment: \(environment.promptTitle)
+        - Projects: \(projectText)
+        - \(skillText)
+        - \(mcpText)
+
+        Investigate the problem and use read-only checks first. Do not change code or configuration.\(dangerText) Explain the likely root cause, cite the evidence you found, and give concrete next steps. If a fix is needed, propose it and wait for a follow-up before applying it. Chart the measurements the root cause rests on.\(chartText)
+        """
+    }
+}
+
+struct TroubleshootMCPConfiguration: Equatable {
+    let missing: [String]
+    let disabled: [String]
+
+    init(requiredNames: [String], registeredNames: Set<String>,
+         disabledNames: Set<String> = []) {
+        let required = Set(requiredNames)
+        missing = required.subtracting(registeredNames).sorted()
+        disabled = required.intersection(registeredNames).intersection(disabledNames).sorted()
+    }
+
+    var isAvailable: Bool { missing.isEmpty && disabled.isEmpty }
+}
+
+// A focused front door for incident investigation. Submitting creates a regular session,
+// so the evidence, answer, and any follow-up questions stay with the selected projects.
+struct TroubleshootView: View {
+    @Environment(\.dismiss) private var dismiss
+    @Environment(ProjectStore.self) private var store
+    @Environment(SessionRunner.self) private var runner
+    @Environment(ClaudeCodeManager.self) private var claude
+    @Environment(CodexCodeManager.self) private var codex
+    @Environment(CopilotCodeManager.self) private var copilot
+    @Environment(ConfigStore.self) private var configs
+    @Environment(DialogPresenter.self) private var dialogs
+    @Environment(AppSettings.self) private var appSettings
+
+    let skills: SkillsManager
+    let initialWorkspaceID: UUID?
+
+    @State private var problem = ""
+    @State private var attachments: [Attachment] = []
+    @State private var selectedProjects: Set<UUID> = []
+    @State private var projectFilter = ""
+    @State private var environment = TroubleshootEnvironment.first()
+    @State private var selectedSkills = Preferences.troubleshootSkills()
+    @State private var mcpServersEnabled = true
+    @State private var agent: AgentKind?
+    @State private var selectedAvatarName = AgentAvatarSelection.defaultName
+    @State private var sessionID = UUID()
+    @State private var skillsExpanded = false
+    @State private var isStarting = false
+    @State private var showingSkills = false
+    @State private var showingNewWorkspace = false
+    @State private var hasStartedMCPConfigurationCheck = false
+    @State private var problemFocused = false
+
+    private var selectedAgent: AgentKind { agent ?? runner.agent }
+
+    init(skills: SkillsManager, initialProjectIDs: [UUID] = [],
+         initialWorkspaceID: UUID? = nil) {
+        self.skills = skills
+        self.initialWorkspaceID = initialWorkspaceID
+        _selectedProjects = State(initialValue: Set(initialProjectIDs))
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            header
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
+                    problemSection
+                    optionsSection
+                    if environment.isDangerous { dangerNotice }
+                    projectsSection
+                    skillsSection
+                }
+                .padding(.horizontal, 20)
+                .padding(.vertical, 20)
+            }
+            .frame(maxHeight: 560)
+            footer
+        }
+        .frame(width: 760)
+        .disabled(isStarting)
+        .interactiveDismissDisabled(isStarting)
+        .background(Theme.background)
+        .onAppear {
+            selectedAvatarName = appSettings.defaultAgentAvatarName
+            refreshMCPConfiguration()
+            problemFocused = true
+        }
+        .task { await skills.refresh() }
+        .onChange(of: selectedSkills) { _, chosen in
+            Preferences.setTroubleshootSkills(chosen)
+        }
+        .sheet(isPresented: $showingSkills, onDismiss: { problemFocused = true }) {
+            SkillsView(manager: skills).appOverlays()
+        }
+        .sheet(isPresented: $showingNewWorkspace, onDismiss: { problemFocused = true }) {
+            NewWorkspaceView(initialProjectIDs: orderedSelectedProjects.map(\.id)) { workspace in
+                showingNewWorkspace = false
+                startDiagnosis(in: workspace)
+            }
+            .appOverlays()
+        }
+    }
+
+    private var header: some View {
+        VStack(spacing: 0) {
+            HStack(alignment: .top, spacing: 20) {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Troubleshoot")
+                        .font(.serif(22, .semibold))
+                    Text("Investigate a problem with evidence and project context.")
+                        .font(.system(size: 13))
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 0)
+                VStack(alignment: .trailing, spacing: 8) {
+                    actions
+                    Text(readinessText)
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.trailing)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .accessibilityAddTraits(.updatesFrequently)
+                }
+                .frame(width: 320, alignment: .trailing)
+            }
+            .padding(20)
+            Divider().overlay(Theme.hairline)
+        }
+        .onChange(of: readinessText) { _, message in
+            guard let window = NSApp?.keyWindow else { return }
+            NSAccessibility.post(element: window, notification: .announcementRequested,
+                                 userInfo: [.announcement: message,
+                                            .priority: NSAccessibilityPriorityLevel.low.rawValue])
+        }
+    }
+
+    private var readinessText: String {
+        if isStarting { return "Preparing diagnosis…" }
+        if problem.isBlank && attachments.isEmpty {
+            return selectedProjects.isEmpty
+                ? "Describe the problem or attach evidence, and select a project."
+                : "Describe the problem or attach evidence to continue."
+        }
+        if selectedProjects.isEmpty { return "Select a project to continue." }
+        if !runner.isAvailable(selectedAgent) {
+            return "\(selectedAgent.title) CLI was not found on PATH."
+        }
+        if mcpConfigurationState == .checking {
+            return "Checking \(selectedAgent.title) MCP configuration…"
+        }
+        if let message = mcpConfigurationState.message(for: selectedAgent) { return message }
+        return "Ready in \(environment.title). " + diagnosisDestinationText
+    }
+
+    // Named after the environment rather than after production, since a file can mark
+    // anything a mistake would be felt in.
+    private var dangerNotice: some View {
+        HStack(spacing: 9) {
+            Circle().fill(Theme.attentionText).frame(width: 7, height: 7)
+            Text(environment.title.uppercased())
+                .font(.mono(10.5, .bold))
+                .kerning(0.8)
+                .foregroundStyle(Theme.attentionText)
+            Text("The agent is told to keep all checks read-only.")
+                .font(.system(size: 12))
+            Spacer()
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .surface(Theme.attention.opacity(0.10), cornerRadius: 10, border: Theme.attention.opacity(0.45))
+    }
+
+    private var skillsSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            DisclosureHeader(isExpanded: $skillsExpanded, show: "Show skills", hide: "Hide skills") {
+                Text("Skills")
+                Text(chosenSkills.isEmpty ? "None selected" : "\(chosenSkills.count) selected")
+            }
+            .font(.system(size: 12))
+            .foregroundStyle(.secondary)
+            .accessibilityValue(skillsExpanded ? "Expanded" : "Collapsed")
+            if skillsExpanded {
+                TroubleshootSkillsBar(skills: skills, agent: selectedAgent,
+                                      selected: $selectedSkills, showingSkills: $showingSkills)
+            }
+        }
+    }
+
+    private var chosenSkills: [String] {
+        TroubleshootSkills.chosen(skills, for: selectedAgent, selected: selectedSkills)
+    }
+
+    private var problemSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Problem and evidence").font(.system(size: 13, weight: .semibold))
+            TroubleshootProblemEditor(problem: $problem, attachments: $attachments,
+                                      focused: $problemFocused)
+                .accessibilityHint("Describe the problem or attach evidence, then select at least one project.")
+        }
+    }
+
+    private var optionsSection: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(alignment: .top, spacing: 22) {
+                environmentSection
+                Rectangle().fill(Theme.border).frame(width: 1, height: 86)
+                mcpSection
+            }
+            .frame(minWidth: 710)
+            VStack(alignment: .leading, spacing: 18) {
+                environmentSection
+                mcpSection
+            }
+        }
+    }
+
+    private var environmentSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Environment").font(.system(size: 13, weight: .semibold))
+            TroubleshootEnvironmentPills(environment: $environment)
+                .fixedSize(horizontal: true, vertical: false)
+                .frame(height: 39, alignment: .leading)
+            Text("Choose where the problem is happening.")
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var mcpSection: some View {
+        TroubleshootMCPOptions(agent: selectedAgent,
+                               environment: environment,
+                               managedServers: configs.servers,
+                               environmentServers: environmentMCPServers,
+                               state: mcpConfigurationState,
+                               enabled: $mcpServersEnabled,
+                               usesSetupLayout: true)
+            .frame(minWidth: 250, maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var projectsSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("Projects").font(.system(size: 13, weight: .semibold))
+                Spacer()
+                Group {
+                    Text(selectedProjects.isEmpty ? "Select at least one" : "\(selectedProjects.count) selected")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            if store.regularProjects.isEmpty {
+                Text("Create a workspace and add projects to it to start the diagnosis.")
+                    .font(.system(size: 13))
+                    .foregroundStyle(.secondary)
+                    .padding(14)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .cardSurface(cornerRadius: 10)
+            } else {
+                projectFilterField
+
+                Group {
+                    if filteredProjects.isEmpty {
+                        Text("No project matches \"\(projectFilter.trimmed)\".")
+                            .font(.system(size: 13))
+                            .foregroundStyle(.secondary)
+                            .padding(14)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    } else {
+                        ScrollView {
+                            VStack(spacing: 0) {
+                                ForEach(filteredProjects) { project in
+                                    Toggle(isOn: projectSelection(project.id)) {
+                                        VStack(alignment: .leading, spacing: 2) {
+                                            Text(project.name)
+                                                .font(.system(size: 13, weight: .medium))
+                                            Text(project.collapsedPath)
+                                                .font(.mono(10.5))
+                                                .foregroundStyle(.secondary)
+                                                .lineLimit(1)
+                                                .truncationMode(.middle)
+                                        }
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                    }
+                                    .toggleStyle(.appCheckbox)
+                                    .padding(.horizontal, 12)
+                                    .padding(.vertical, 9)
+                                    .background(selectedProjects.contains(project.id)
+                                                ? Theme.accent.opacity(0.07) : .clear)
+
+                                    if project.id != filteredProjects.last?.id {
+                                        Divider().overlay(Theme.hairline).padding(.leading, 36)
+                                    }
+                                }
+                            }
+                        }
+                        .frame(maxHeight: 170)
+                    }
+                }
+                .cardSurface(cornerRadius: 10)
+            }
+        }
+    }
+
+    private var projectFilterField: some View {
+        HStack(spacing: 7) {
+            Image(systemName: "magnifyingglass")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(.tertiary)
+            TextField("Filter projects by name or path", text: $projectFilter)
+                .textFieldStyle(.plain)
+                .font(.system(size: 12.5))
+                .accessibilityLabel("Search projects by name or path")
+            if !projectFilter.isEmpty {
+                Button { projectFilter = "" } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.tertiary)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .hoverLift(amount: Motion.smallLift)
+                .appTooltip("Clear filter")
+                .accessibilityLabel("Clear project filter")
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 7)
+        .fieldSurface(cornerRadius: 8)
+    }
+
+    private var filteredProjects: [Project] {
+        Self.projects(store.regularProjects, matching: projectFilter)
+    }
+
+    private var environmentMCPServers: [Server] {
+        configs.servers.filter { environment.includes($0) }
+    }
+
+    private var mcpConfigurationState: TroubleshootMCPState {
+        .resolve(agent: selectedAgent, enabled: mcpServersEnabled,
+                 servers: environmentMCPServers,
+                 hasStartedCheck: hasStartedMCPConfigurationCheck,
+                 claude: claude, codex: codex, copilot: copilot)
+    }
+
+    static func projects(_ projects: [Project], matching filter: String) -> [Project] {
+        let query = filter.trimmed
+        guard !query.isEmpty else { return projects }
+        return projects.filter {
+            $0.name.localizedCaseInsensitiveContains(query)
+                || $0.path.localizedCaseInsensitiveContains(query)
+        }
+    }
+
+    private var footer: some View {
+        VStack(spacing: 0) {
+            Divider().overlay(Theme.hairline)
+            HStack(spacing: 10) {
+                Text("Run with")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+                selectors
+                Spacer(minLength: 8)
+                Text("Diagnosis starts with read-only checks.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 20)
+            .padding(.vertical, 10)
+            .background(Theme.card)
+        }
+    }
+
+    private var selectors: some View {
+        AgentAndBotPicker(avatars: appSettings.agentAvatars,
+                          selectedAvatarName: $selectedAvatarName, sessionID: sessionID,
+                          agentTitle: selectedAgent.title, agentMenu: agentMenu)
+    }
+
+    private var actions: some View {
+        HStack(spacing: 9) {
+            ActionButton(title: "Cancel", tone: .outlined, height: 38, size: 13,
+                         keyboardShortcut: .cancelAction) { dismiss() }
+            ActionButton(title: isStarting ? "Preparing diagnosis" : "Start diagnosis",
+                         tone: .green, height: 38, size: 13,
+                         keyboardShortcut: .defaultAction) { diagnose() }
+                .disabled(!canDiagnose)
+                .accessibilityHint(readinessText)
+        }
+    }
+
+    private var diagnosisDestinationText: String {
+        if let selectedWorkspace {
+            return "The diagnosis opens as a session in \(selectedWorkspace.name)."
+        }
+        return switch selectedProjects.count {
+        case 0:
+            "Select a project for the diagnosis."
+        case 1:
+            "The diagnosis opens as a session in \(orderedSelectedProjects.first?.name ?? "the selected project")."
+        default:
+            "Create a workspace for the selected projects before the diagnosis starts."
+        }
+    }
+
+    private var canDiagnose: Bool {
+        !isStarting
+            && mcpConfigurationState == .ready
+            && !selectedProjects.isEmpty
+            && (!problem.isBlank || !attachments.isEmpty)
+            && runner.isAvailable(selectedAgent)
+    }
+
+    private var agentMenu: [MenuEntry] {
+        AgentKind.allCases.map { option in
+            .item(option.title,
+                  checked: selectedAgent == option,
+                  subtitle: option.blurb) {
+                agent = option
+            }
+        }
+    }
+
+    private func projectSelection(_ id: UUID) -> Binding<Bool> {
+        Binding(get: { selectedProjects.contains(id) },
+                set: { selected in
+                    if selected {
+                        selectedProjects.insert(id)
+                    } else {
+                        selectedProjects.remove(id)
+                    }
+                })
+    }
+
+    private func refreshMCPConfiguration() {
+        claude.refresh()
+        codex.refresh(configs.servers)
+        copilot.refresh(configs.servers)
+        hasStartedMCPConfigurationCheck = true
+    }
+
+    private func diagnose() {
+        guard canDiagnose else { return }
+        let projects = orderedSelectedProjects
+        guard projects.count == selectedProjects.count else {
+            dialogs.show(.notice("Could not start the diagnosis",
+                                 message: "One of the selected projects is no longer available."))
+            return
+        }
+        if let selectedWorkspace {
+            startDiagnosis(in: selectedWorkspace)
+            return
+        }
+        guard let project = Self.projectSessionTarget(projects) else {
+            showingNewWorkspace = true
+            return
+        }
+        startDiagnosis(in: project)
+    }
+
+    static func projectSessionTarget(_ projects: [Project]) -> Project? {
+        projects.count == 1 ? projects[0] : nil
+    }
+
+    static func workspaceSessionTarget(_ workspace: ProjectWorkspace?,
+                                       selectedProjectIDs: Set<UUID>) -> ProjectWorkspace? {
+        guard let workspace, Set(workspace.projectIDs) == selectedProjectIDs else { return nil }
+        return workspace
+    }
+
+    private var selectedWorkspace: ProjectWorkspace? {
+        let workspace = initialWorkspaceID.flatMap(store.workspace)
+        return Self.workspaceSessionTarget(workspace, selectedProjectIDs: selectedProjects)
+    }
+
+    private func startDiagnosis(in project: Project) {
+        startDiagnosis(projects: [project], workspace: nil)
+    }
+
+    private func startDiagnosis(in workspace: ProjectWorkspace) {
+        let projects = workspace.projectIDs.compactMap(store.project)
+        guard projects.count == workspace.projectIDs.count else {
+            dialogs.show(.notice("Could not start the diagnosis",
+                                 message: "One of the workspace projects is no longer available."))
+            return
+        }
+        startDiagnosis(projects: projects, workspace: workspace)
+    }
+
+    // Four steps, each of which can stop the start: work out which servers to hide,
+    // create the session, save its settings, then send the first prompt.
+    private func startDiagnosis(projects: [Project], workspace: ProjectWorkspace?) {
+        guard let lead = projects.first else { return }
+        isStarting = true
+        let chosenAgent = selectedAgent
+        let chosenAvatarName = selectedAvatarName
+        let chosenEnvironment = environment
+        let chosenSkillNames = chosenSkills
+        let enableMCPServers = mcpServersEnabled
+
+        Task {
+            let managedServers = configs.servers
+            let selectedServers = managedServers.filter { chosenEnvironment.includes($0) }
+            var disabledServers: [DisabledMCPServer] = []
+            if chosenAgent != .claudeCode, !enableMCPServers || !managedServers.isEmpty {
+                do {
+                    disabledServers = try await serversToDisable(
+                        for: chosenAgent, in: lead.path, keeping: selectedServers,
+                        mcpEnabled: enableMCPServers)
+                } catch {
+                    abandonStart("Could not filter MCP servers", message: error.localizedDescription)
+                    return
+                }
+            }
+
+            let seed = ProjectStore.SessionSeed(id: sessionID, agent: chosenAgent,
+                                                model: runner.defaults(for: chosenAgent).model,
+                                                agentAvatarName: chosenAvatarName,
+                                                isTroubleshooting: true)
+            let sessionResult: Result<ChatSession, PersistenceFailure>
+            if let workspace {
+                let checkouts = projects.map {
+                    SessionProject(projectID: $0.id, worktreePath: nil, worktreeBranch: nil)
+                }
+                sessionResult = store.insertSession(in: workspace.id, projects: checkouts, seed: seed)
+            } else {
+                sessionResult = store.insertSession(in: lead.id, seed: seed)
+            }
+            let session: ChatSession
+            switch sessionResult {
+            case .success(let created):
+                session = created
+            case .failure(let failure):
+                abandonStart("Could not start the diagnosis", message: failure.message)
+                return
+            }
+
+            var settings = session.settings ?? SessionSettings()
+            settings.mcpServersEnabled = enableMCPServers
+            settings.allowedMCPServerNames = enableMCPServers && !managedServers.isEmpty
+                ? selectedServers.map(\.name)
+                : nil
+            settings.disabledMCPServers = disabledServers.isEmpty ? nil : disabledServers
+            settings.disabledMCPServerNames = nil
+            store.setSettings(settings, for: session.id)
+
+            let request = TroubleshootRequest(
+                problem: problem,
+                environment: chosenEnvironment,
+                projects: projects.map(\.name),
+                skills: chosenSkillNames,
+                mcpServersEnabled: enableMCPServers,
+                mcpServerNames: enableMCPServers ? selectedServers.map(\.name) : [],
+                agent: chosenAgent)
+            runner.send(request.userInput,
+                        attachments: attachments,
+                        customInstructions: request.customInstructions,
+                        sessionID: session.id, store: store)
+            dismiss()
+        }
+    }
+
+    // The servers the agent has switched on that the diagnosis must not see: all of them
+    // while MCP is off, otherwise the ones outside the chosen environment. Claude Code
+    // is handed a filtered configuration instead, so it never comes through here.
+    private func serversToDisable(for agent: AgentKind, in directory: String,
+                                  keeping selected: [Server],
+                                  mcpEnabled: Bool) async throws -> [DisabledMCPServer] {
+        let enabled = agent == .copilot
+            ? try await copilot.enabledServers(in: directory)
+            : try await codex.enabledServers(in: directory)
+        guard mcpEnabled else { return enabled }
+        let selectedNames = Set(selected.map(\.name))
+        return enabled.filter { !selectedNames.contains($0.name) }
+    }
+
+    private func abandonStart(_ title: String, message: String) {
+        isStarting = false
+        dialogs.show(.notice(title, message: message))
+    }
+
+    private var orderedSelectedProjects: [Project] {
+        let selected = store.regularProjects.filter { selectedProjects.contains($0.id) }
+        guard let current = store.selectedProjectID,
+              let lead = selected.first(where: { $0.id == current }) else { return selected }
+        return [lead] + selected.filter { $0.id != current }
+    }
+}
