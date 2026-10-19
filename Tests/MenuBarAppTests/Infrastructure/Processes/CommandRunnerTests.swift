@@ -197,6 +197,59 @@ struct CommandRunnerTests {
         #expect(!inherited.contains("\(marker)"), "child holds \(inherited)")
     }
 
+    // Once anything in the app closes descriptor 0, 1 or 2, the next pipe can be given
+    // that number. The child must still get the streams it was handed.
+    @Test(.serialized, arguments: [Lowered.outputReadEnd, .outputWriteEnd])
+    func wiresTheChildWhenAPipeHoldsAStandardDescriptorNumber(_ lowered: Lowered) throws {
+        let input = Pipe()
+        let output = Pipe()
+        _ = fcntl(input.fileHandleForWriting.fileDescriptor, F_SETNOSIGPIPE, 1)
+        let moved = lowered == .outputReadEnd
+            ? output.fileHandleForReading.fileDescriptor
+            : output.fileHandleForWriting.fileDescriptor
+
+        let savedStandardInput = dup(STDIN_FILENO)
+        try #require(savedStandardInput >= 0)
+        try #require(dup2(moved, STDIN_FILENO) == STDIN_FILENO)
+        defer {
+            dup2(savedStandardInput, STDIN_FILENO)
+            Darwin.close(savedStandardInput)
+        }
+        let outputRead = lowered == .outputReadEnd ? STDIN_FILENO : output.fileHandleForReading.fileDescriptor
+        let outputWrite = lowered == .outputWriteEnd ? STDIN_FILENO : output.fileHandleForWriting.fileDescriptor
+
+        let processID = try CommandRunner.spawnIsolatedProcess(
+            executable: "/bin/cat",
+            arguments: [],
+            currentDirectory: nil,
+            environment: [:],
+            standardInput: input.fileHandleForReading.fileDescriptor,
+            standardOutput: outputWrite,
+            standardError: outputWrite,
+            descriptorsToClose: [input.fileHandleForWriting.fileDescriptor, outputRead])
+        try? input.fileHandleForReading.close()
+        try? output.fileHandleForWriting.close()
+        if lowered == .outputWriteEnd { dup2(savedStandardInput, STDIN_FILENO) }
+
+        let message = Data("handed over\n".utf8)
+        let written = Result { try input.fileHandleForWriting.write(contentsOf: message) }
+        try? input.fileHandleForWriting.close()
+        var received = Data()
+        var buffer = [UInt8](repeating: 0, count: 256)
+        while true {
+            let count = Darwin.read(outputRead, &buffer, buffer.count)
+            if count <= 0 { break }
+            received.append(contentsOf: buffer.prefix(count))
+        }
+        let status = CommandRunner.waitForExit(of: processID)
+
+        #expect((try? written.get()) != nil)
+        #expect(received == message)
+        #expect(status == 0)
+    }
+
+    enum Lowered { case outputReadEnd, outputWriteEnd }
+
     @Test func timeoutKillsADescendantThatInheritedThePipes() async throws {
         let pidFile = scratch.path("child.pid")
         let started = ContinuousClock.now

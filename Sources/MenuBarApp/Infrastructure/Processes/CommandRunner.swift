@@ -284,15 +284,29 @@ enum CommandRunner {
             posix_spawnattr_destroy(&attributes)
         }
 
-        let duplicates = [(standardInput, STDIN_FILENO),
-                          (standardOutput, STDOUT_FILENO),
-                          (standardError, STDERR_FILENO)]
+        // Once anything in the app closes 0, 1 or 2, a new pipe can be given that number.
+        // In the child, the dup2 onto one stream would then wipe out the source of another,
+        // and closing the parent's spare ends would close a stream the child was just
+        // given. Lifting every source above 2 first means neither can happen.
+        var lifted: [Int32] = []
+        defer { for descriptor in lifted { Darwin.close(descriptor) } }
+        func liftAboveStandardStreams(_ descriptor: Int32) throws -> Int32 {
+            guard descriptor <= STDERR_FILENO else { return descriptor }
+            let copy = fcntl(descriptor, F_DUPFD_CLOEXEC, STDERR_FILENO + 1)
+            guard copy >= 0 else {
+                throw RunError.launch("Could not connect the child process streams.")
+            }
+            lifted.append(copy)
+            return copy
+        }
+        let duplicates = [(try liftAboveStandardStreams(standardInput), STDIN_FILENO),
+                          (try liftAboveStandardStreams(standardOutput), STDOUT_FILENO),
+                          (try liftAboveStandardStreams(standardError), STDERR_FILENO)]
         var actionResults = duplicates.map {
             posix_spawn_file_actions_adddup2(&actions, $0.0, $0.1)
         }
-        let closeDescriptors = Set(descriptorsToClose + duplicates.compactMap {
-            $0.0 == $0.1 ? nil : $0.0
-        })
+        let closeDescriptors = Set(descriptorsToClose.filter { $0 > STDERR_FILENO }
+            + duplicates.map(\.0))
         actionResults += closeDescriptors.map {
             posix_spawn_file_actions_addclose(&actions, $0)
         }
