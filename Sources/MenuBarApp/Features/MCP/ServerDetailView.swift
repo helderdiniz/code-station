@@ -209,13 +209,17 @@ struct ServerDetailView: View {
             registered: claude.isRegistered(server.name),
             outOfSync: claude.isOutOfSync(server),
             busy: claude.isBusy(server.name),
-            error: claude.errors[server.name],
+            error: claude.errors[server.name] ?? claude.serverWork.errors[server.name],
             unsupported: nil,
             registeredCaption: "Registered as a user-scope MCP server.",
             reloadNote: "Restart your Claude Code session to load the change.",
             toggle: { claude.isRegistered(server.name) ? claude.remove(server.name) : claude.add(server) },
             update: { claude.reregister(server) },
-            command: { claude.addCommand(for: server) })
+            command: { claude.addCommand(for: server) },
+            reach: claude.registration(of: server.name),
+            signIn: { claude.signIn(server.name) },
+            cancelSignIn: { claude.serverWork.cancel(server.name) },
+            checkAgain: { claude.checkHealth(of: server.name) })
     }
 
     private func codexStanding(_ server: Server) -> AgentStanding {
@@ -501,6 +505,12 @@ private struct AgentStanding {
     let toggle: () -> Void
     let update: () -> Void
     let command: () -> String?
+    // What the agent last said about reaching the server. Only Claude Code checks, so
+    // the others leave it out and show the config match alone.
+    var reach: AgentConfiguredServer.Registration? = nil
+    var signIn: () -> Void = {}
+    var cancelSignIn: () -> Void = {}
+    var checkAgain: () -> Void = {}
 }
 
 // One agent the server can be registered with.
@@ -523,12 +533,30 @@ private struct AgentCard: View {
         return standing.outOfSync ? .outOfSync : .inSync
     }
 
+    // A matching config is not enough when the agent cannot reach the server, so once
+    // the entry is in sync the card speaks for what the agent last saw. A plain "on"
+    // says nothing new, so the card stays on "in sync".
+    private var reachStatus: AgentConfiguredServer.Status? {
+        guard tone == .inSync, let status = standing.reach?.status, status != .on else { return nil }
+        return status
+    }
+
     private var caption: String {
         switch tone {
         case .unsupported: standing.unsupported ?? ""
         case .notRegistered: "Not registered - \(standing.title) can't see this server yet."
         case .outOfSync: "The token or URL here differs from the registered one."
-        case .inSync: standing.registeredCaption
+        case .inSync: reachCaption ?? standing.registeredCaption
+        }
+    }
+
+    private var reachCaption: String? {
+        switch reachStatus {
+        case .needsSignIn: "\(standing.title) can't use this server until you sign in."
+        case .cantConnect: "\(standing.title) could not reach this server. Check the connection below."
+        case .working(.signingIn):
+            "Finish signing in in your browser. This card updates when \(standing.title) hears back."
+        default: nil
         }
     }
 
@@ -554,11 +582,15 @@ private struct AgentCard: View {
         HStack(alignment: .top, spacing: 16) {
             VStack(alignment: .leading, spacing: 6) {
                 HStack(spacing: 8) {
-                    Circle().fill(dot).frame(width: 8, height: 8)
+                    if let reachStatus {
+                        AgentStatusDot(status: reachStatus)
+                    } else {
+                        Circle().fill(dot).frame(width: 8, height: 8)
+                    }
                     Text(standing.title).font(.system(size: 14, weight: .semibold))
-                    Text(stateText)
+                    Text(reachStatus?.word ?? stateText)
                         .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(stateTint)
+                        .foregroundStyle(reachStatus?.tint ?? stateTint)
                     if standing.busy { ProgressView().controlSize(.small) }
                 }
 
@@ -578,6 +610,7 @@ private struct AgentCard: View {
 
             if tone != .unsupported {
                 HStack(spacing: 10) {
+                    reachAction
                     if let command = standing.command() {
                         CopyButton("Copy", size: 12.5) { command }
                             .appTooltip("Copy the \(standing.title) command for this server")
@@ -598,6 +631,21 @@ private struct AgentCard: View {
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
         .cardSurface(cornerRadius: 12)
+    }
+
+    @ViewBuilder private var reachAction: some View {
+        switch reachStatus {
+        case .working(.signingIn):
+            InlineLink(title: "Cancel", action: standing.cancelSignIn)
+        case .needsSignIn where standing.reach?.offersSignIn == true:
+            ActionButton(title: "Sign in", tone: .green, height: 28, size: 12,
+                         action: standing.signIn)
+        case .cantConnect:
+            ActionButton(title: "Check again", tone: .outlined, height: 28, size: 12,
+                         action: standing.checkAgain)
+        default:
+            EmptyView()
+        }
     }
 
     private var dot: Color {

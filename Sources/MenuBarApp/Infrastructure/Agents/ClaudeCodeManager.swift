@@ -84,6 +84,11 @@ final class ClaudeCodeManager {
 
     // MARK: - Servers Claude Code owns
 
+    // What Claude Code last said about a server it holds, whoever registered it.
+    func registration(of name: String) -> AgentConfiguredServer.Registration? {
+        entries[name].map { .claudeCode($0, health: health[name], work: work(on: name)) }
+    }
+
     func work(on name: String) -> AgentConfiguredServer.Work? {
         serverWork.work[name] ?? (isCheckingAll ? .checking : nil)
     }

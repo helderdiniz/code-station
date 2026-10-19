@@ -319,7 +319,8 @@ struct ConfigManagerView: View {
     private func row(for server: Server) -> some View {
         ServerRow(server: server,
                   selected: selectedAgentConfigured == nil && server.id == store.selectedID,
-                  running: processes.state(server.id).isActive)
+                  running: processes.state(server.id).isActive,
+                  claudeStatus: claude.registration(of: server.name)?.status)
             .contentShape(Rectangle())
             .onTapGesture {
                 selectedAgentConfigured = nil
@@ -501,12 +502,19 @@ private struct ServerRow: View {
     let server: Server
     let selected: Bool
     let running: Bool
+    let claudeStatus: AgentConfiguredServer.Status?
 
     var body: some View {
         HStack(spacing: 10) {
-            Circle()
-                .fill(running ? Theme.dotOn : Theme.dotOff)
-                .frame(width: 8, height: 8)
+            // A remote server has no process here, so the only state worth a dot is
+            // whether Claude Code can reach it.
+            if server.isRemote, let claudeStatus {
+                AgentStatusDot(status: claudeStatus)
+            } else {
+                Circle()
+                    .fill(running ? Theme.dotOn : Theme.dotOff)
+                    .frame(width: 8, height: 8)
+            }
             VStack(alignment: .leading, spacing: 1) {
                 Text(server.name)
                     .font(.system(size: 13, weight: .semibold))
@@ -515,6 +523,14 @@ private struct ServerRow: View {
                 Text(server.transport).font(.mono(11)).foregroundStyle(.secondary)
             }
             Spacer()
+            if let claudeStatus, claudeStatus.needsLook {
+                Text(claudeStatus.word)
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(claudeStatus.tint)
+                    .lineLimit(1)
+                    .fixedSize()
+                    .appTooltip("What Claude Code says about this server")
+            }
             if let environment = server.deployEnvironment {
                 Text(environment)
                     .font(.mono(11))

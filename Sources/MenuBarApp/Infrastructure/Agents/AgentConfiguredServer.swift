@@ -174,6 +174,22 @@ struct AgentConfiguredServer: Identifiable, Equatable {
             }
         }
 
+        // Claude Code has no per-server switch outside a session, so its registrations
+        // are always on.
+        static func claudeCode(_ entry: ClaudeCodeManager.Entry, health: Health?,
+                               work: Work?) -> Self {
+            Registration(source: .claudeCode,
+                         command: entry.command,
+                         args: entry.args,
+                         env: entry.env,
+                         url: entry.url,
+                         type: entry.type,
+                         headers: entry.headers,
+                         enabled: true,
+                         health: health,
+                         work: work)
+        }
+
         fileprivate var connection: Connection {
             Connection(command: command, args: args, env: env, url: url,
                        type: transport, headers: headers)
@@ -222,17 +238,8 @@ struct AgentConfiguredServer: Identifiable, Equatable {
         return discoveredNames.sorted().map { name in
             var registrations: [Registration] = []
             if let entry = claudeEntries[name] {
-                registrations.append(Registration(
-                    source: .claudeCode,
-                    command: entry.command,
-                    args: entry.args,
-                    env: entry.env,
-                    url: entry.url,
-                    type: entry.type,
-                    headers: entry.headers,
-                    enabled: true,
-                    health: claudeHealth[name],
-                    work: work(.claudeCode, name)))
+                registrations.append(.claudeCode(entry, health: claudeHealth[name],
+                                                 work: work(.claudeCode, name)))
             }
             if let entry = codexEntries[name] {
                 registrations.append(Registration(

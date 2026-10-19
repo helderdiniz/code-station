@@ -145,6 +145,21 @@ struct AgentConfiguredServerTests {
         #expect(server.worstStatus == .working(.signingIn))
     }
 
+    @Test func readsClaudeHealthForAServerCodeStationManagesToo() {
+        let entry = ClaudeCodeManager.Entry(url: "https://teya-be.glean.com/mcp/default", type: "http")
+
+        let signedOut = AgentConfiguredServer.Registration.claudeCode(entry, health: .needsSignIn, work: nil)
+        #expect(signedOut.status == .needsSignIn)
+        #expect(signedOut.offersSignIn)
+
+        let signingIn = AgentConfiguredServer.Registration.claudeCode(
+            entry, health: .needsSignIn, work: .signingIn)
+        #expect(signingIn.status == .working(.signingIn))
+
+        let unchecked = AgentConfiguredServer.Registration.claudeCode(entry, health: nil, work: nil)
+        #expect(unchecked.status == .on)
+    }
+
     // MARK: - Claude Code health
 
     @Test func readsHealthFromClaudeMcpList() {
