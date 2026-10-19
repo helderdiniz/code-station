@@ -57,7 +57,7 @@ struct ChangesView: View {
     @State private var reattaching: UUID?
     // Bumped to scroll the diff to the focused comment again, even when it has not moved.
     @State private var revealSerial = 0
-    @State private var reviewKeys = WindowKeyHandler()
+    @State private var reviewKeys = WindowKeyHandler(handlesTyping: true)
     @AppStorage("changes.reviewCoachSeen") private var coachSeen = false
     private var showingReview: Bool {
         get { navigation.showingReview }
@@ -90,15 +90,23 @@ struct ChangesView: View {
         get { navigation.showingHistory ? .history : .changes }
         nonmutating set { navigation.showingHistory = newValue == .history }
     }
-    @State private var committing = false
-    @State private var commitMessage = ""
+    @State private var commitDraft: ChangesCommitDraft
+    private var commitMessage: String {
+        get { commitDraft.message }
+        nonmutating set { commitDraft.message = newValue }
+    }
     @FocusState private var commitFocused: Bool
     @FocusState private var pushFocused: Bool
     // Files the next commit leaves out. Tracking the exclusions rather than the picks
     // means a file that appears between refreshes starts selected, like everything else.
-    @State private var excluded: Set<GitChange.ID> = []
-    @State private var amend = false
-    @State private var messageBeforeAmend = ""
+    private var excluded: Set<GitChange.ID> {
+        get { commitDraft.excluded }
+        nonmutating set { commitDraft.excluded = newValue }
+    }
+    private var amend: Bool {
+        get { commitDraft.amend }
+        nonmutating set { commitDraft.setAmend(newValue, lastMessage: snapshot?.lastCommitSubject) }
+    }
     private var fileSelection: ChangeFileSelection {
         get { navigation.selections[root] ?? ChangeFileSelection() }
         nonmutating set { navigation.selections[root] = newValue }
@@ -143,6 +151,7 @@ struct ChangesView: View {
         let memory = navigation ?? ChangesNavigationMemory()
         _ = memory.history(for: root)
         _navigation = State(initialValue: memory)
+        _commitDraft = State(initialValue: memory.commitDraft(for: root))
         isWorkspace = navigation != nil
         _appliedInitialSelection = State(initialValue: navigation?.selections[root] != nil
             && initiallySelectedPath == nil && requestedPath == nil)
@@ -173,7 +182,6 @@ struct ChangesView: View {
                 VStack(spacing: 0) {
                     if !isWorkspace {
                         header(compact: geometry.size.width < 700, namesProject: !navigatorVisible)
-                        if committing && mode == .changes { commitBar }
                     }
                     HStack(spacing: 0) {
                         if navigatorVisible {
@@ -186,9 +194,10 @@ struct ChangesView: View {
                         VStack(spacing: 0) {
                             if isWorkspace {
                                 header(compact: headerWidth < 600, namesProject: false)
-                                if committing && mode == .changes { commitBar }
                             }
+                            if !navigatorVisible { modeChoices }
                             content(narrowHistory: narrowHistory)
+                            if !navigatorVisible && mode == .changes && !files.isEmpty { commitBar }
                         }.frame(maxWidth: .infinity).clipped()
                     }
                     .overlay(alignment: .leading) {
@@ -273,16 +282,6 @@ struct ChangesView: View {
             if commentDraft?.path != path { commentDraft = nil }
         }
         .onChange(of: diff) { _, _ in followDraft() }
-        // Amending reuses the last message as the starting point; the typed one comes
-        // back if the box is unticked.
-        .onChange(of: amend) { _, on in
-            if on {
-                messageBeforeAmend = commitMessage
-                if let subject = snapshot?.lastCommitSubject { commitMessage = subject }
-            } else {
-                commitMessage = messageBeforeAmend
-            }
-        }
     }
 
     private var syncStatus: String {
@@ -373,7 +372,7 @@ struct ChangesView: View {
     // A session's navigator is always there, and so is the history's, since the commits
     // live in it. A single project's changes only show the navigator where it fits.
     private func showsNavigator(width: CGFloat) -> Bool {
-        isWorkspace || mode == .history || width >= 650 || committing
+        isWorkspace || mode == .history || width >= 650 || !files.isEmpty
     }
 
     private var workspaceBand: some View {
@@ -390,33 +389,64 @@ struct ChangesView: View {
     // The header names the project only while the navigator is hidden, so the name is
     // never shown twice.
     private func header(compact: Bool, namesProject: Bool) -> some View {
-        HStack(spacing: compact ? 8 : 12) {
-            if namesProject { projectLabel }
-            HStack(spacing: 4) {
-                ChoicePill(title: "Changes \(files.count)", selected: mode == .changes) { mode = .changes }
-                ChoicePill(title: "History", selected: mode == .history) { mode = .history }
-            }
-            Spacer(minLength: 0)
+        VStack(spacing: 6) {
             if let snapshot, snapshot.state == .ready {
-                if !compact {
-                    Text(snapshot.branch).font(.mono(11)).foregroundStyle(.secondary)
-                        .lineLimit(1).truncationMode(.middle).frame(maxWidth: 140, alignment: .trailing)
-                        .accessibilityHint(syncStatus)
+                HStack(spacing: 8) {
+                    if namesProject && !compact { projectLabel }
+                    branchControl(snapshot)
+                    ActionButton(title: "Merge…", tone: .outlined, height: 30, size: 12,
+                                 icon: "arrow.triangle.merge") { showBranches(merging: true) }
+                        .disabled(busy || !snapshot.onBranch || !snapshot.hasCommits)
+                    if !compact {
+                        Spacer(minLength: 0)
+                        ViewThatFits(in: .horizontal) {
+                            Text(syncStatus).font(.system(size: 11)).foregroundStyle(.secondary).fixedSize()
+                            Color.clear.frame(width: 0, height: 0)
+                        }.layoutPriority(-1)
+                        remoteControls(snapshot, compact: false)
+                    }
                 }
-                Image(systemName: "ellipsis").padding(8).contentShape(Rectangle())
-                    .appMenu { repositoryMenu(snapshot) }
-                    .accessibilityLabel("Repository actions for \(repositories.first { $0.root == root }?.name ?? root)")
-                    .disabled(busy)
-                pushButton(snapshot, compact: compact)
-                if !files.isEmpty && mode == .changes {
-                    ActionButton(title: compact ? "Commit" : "Commit…", height: 30, size: 12) {
-                        if committing { committing = false } else { beginCommit() }
-                    }.disabled(busy)
+                if compact {
+                    HStack(spacing: 8) {
+                        if namesProject { projectLabel }
+                        Spacer(minLength: 0)
+                        remoteControls(snapshot, compact: true)
+                    }
                 }
             }
         }
         .padding(.horizontal, compact ? 12 : 20)
-        .headerBand()
+        .headerBand(height: compact ? 82 : Theme.headerHeight)
+    }
+
+    private func branchControl(_ snapshot: GitSnapshot) -> some View {
+        Button { showBranches() } label: {
+            HStack(spacing: 7) {
+                Image(systemName: "point.topleft.down.to.point.bottomright.curvepath")
+                Text(snapshot.branch).font(.mono(12, .medium)).lineLimit(1).truncationMode(.middle)
+                Image(systemName: "chevron.down").font(.system(size: 9, weight: .semibold))
+            }
+            .padding(8).background(Theme.field, in: RoundedRectangle(cornerRadius: 8))
+            .contentShape(Rectangle())
+        }.buttonStyle(.plain)
+            .appTooltip("Branches and actions: " + snapshot.branch + " (⌘B)")
+            .accessibilityLabel("Branches and actions, current branch " + snapshot.branch)
+            .disabled(busy)
+    }
+
+    private func remoteControls(_ snapshot: GitSnapshot, compact: Bool) -> some View {
+        HStack(spacing: 6) {
+            pushButton(snapshot, compact: compact)
+            Button {
+                Task { await reload(fetchOrigin: true) }
+            } label: {
+                Image(systemName: "arrow.clockwise").padding(8).contentShape(Rectangle())
+            }.buttonStyle(.plain).disabled(busy)
+                .appTooltip("Fetch from origin").accessibilityLabel("Fetch from origin")
+            Image(systemName: "ellipsis").padding(8).contentShape(Rectangle())
+                .appMenu { repositoryMenu(snapshot) }
+                .accessibilityLabel("Repository actions for " + repositoryName).disabled(busy)
+        }
     }
 
     // A menu when there is a choice to make, a plain name when there is not.
@@ -448,13 +478,13 @@ struct ChangesView: View {
         let title: String
         switch action {
         case .push(let count): title = compact ? "Push \(count)" : "Push \(counted(count, "commit"))"
-        case .publish: title = "Publish branch"
+        case .publish: title = compact ? "Publish" : "Publish branch"
         default:
             if !snapshot.hasCommits { title = "No commits" }
             else if snapshot.upstream != nil && !snapshot.trackingKnown { title = "Status unknown" }
             else { title = "Up to date" }
         }
-        return ActionButton(title: working ?? title, tone: action == nil ? .outlined : .green,
+        return ActionButton(title: working ?? title, tone: .outlined,
                             height: 30, size: 12, icon: action == nil ? "checkmark" : "arrow.up") {
             pushFocused = true
             confirmPush(snapshot)
@@ -474,7 +504,7 @@ struct ChangesView: View {
             return .item("Pull \(counted(count, "commit"))", icon: "arrow.down") { pull() }
         }
         if !entries.isEmpty { entries.append(.separator) }
-        entries.append(contentsOf: branchMenu(snapshot))
+        entries.append(.item("Branches and actions", icon: "point.topleft.down.to.point.bottomright.curvepath") { showBranches() })
         return entries
     }
 
@@ -527,8 +557,17 @@ struct ChangesView: View {
         }
     }
 
+    private var modeChoices: some View {
+        HStack(spacing: 4) {
+            ChoicePill(title: "Changes \(files.count)", selected: mode == .changes) { mode = .changes }
+            ChoicePill(title: "History", selected: mode == .history) { mode = .history }
+            Spacer(minLength: 0)
+        }.padding(12)
+    }
+
     private var workspaceNavigator: some View {
         VStack(spacing: 0) {
+            modeChoices
             if mode == .history { historyFilterField }
             if mode == .changes, let review {
                 let open = review.reviews.threads(review.sessionID).count { !$0.round.resolved.contains($0.comment.id) }
@@ -558,6 +597,7 @@ struct ChangesView: View {
             } else {
                 filesNavigator
             }
+            if mode == .changes && !files.isEmpty { commitBar }
         }
         .background(Theme.card)
     }
@@ -881,146 +921,68 @@ struct ChangesView: View {
         .accessibilityLabel("Refresh Git status")
     }
 
-    private func branchMenu(_ snapshot: GitSnapshot) -> [MenuEntry] {
-        guard !busy else { return [] }
-        var entries: [MenuEntry] = [
-            .item("Create new branch", icon: "plus") {
-                showCreateBranchDialog(from: snapshot.branch)
-            },
-            .separator
-        ]
-        let local = snapshot.branches.map { branch in
-            let current = snapshot.onBranch && branch == snapshot.branch
-            return MenuItem(label: branch, checked: current, handler: {
-                guard !current else { return }
-                perform("Switching to \(branch)…", failure: "Could not switch branch") {
-                    await GitActions.switchBranch(branch, at: repoRoot)
-                }
-            })
-        }
-        let remote = snapshot.remoteBranches.map { branch in
-            // A remote branch that already has a local one of the same name opens that,
-            // rather than making a second copy.
-            let hasLocal = snapshot.branches.contains(branch.name)
-            return MenuItem(label: branch.ref, handler: {
-                perform("Switching to \(branch.name)…", failure: "Could not switch branch") {
-                    if hasLocal {
-                        return await GitActions.switchBranch(branch.name, at: repoRoot)
-                    }
-                    return await GitActions.checkoutRemoteBranch(branch, at: repoRoot)
-                }
-            })
-        }
-        if remote.isEmpty && local.count <= 6 {
-            // A handful of branches read faster as plain rows than behind a field to type in.
-            entries.append(contentsOf: local.map { MenuEntry.item($0) })
-        } else {
-            let groups = [
-                MenuItemGroup(title: "Local", items: local),
-                MenuItemGroup(title: "Remote", items: remote, startsExpanded: false)
-            ]
-            entries.append(.searchable(groups: groups.filter { !$0.items.isEmpty },
-                                       prompt: "Filter branches by name",
-                                       noResults: "No branch matches this filter."))
-        }
-        return entries
+    private func showBranches(merging: Bool = false) {
+        guard !busy else { return }
+        let operationRoot = repoRoot
+        dialogs.show(Dialog(title: "Branches", content: AnyView(
+            BranchBrowserView(root: operationRoot, repository: repositoryName, mergeInitially: merging) {
+                await reload()
+            }), actions: [], width: 780, isModal: true, framesItself: true, fitsWindow: true))
     }
 
-    private func showCreateBranchDialog(from branch: String) {
-        let draft = BranchDraft()
-        dialogs.show(Dialog(
-            title: "Create new branch",
-            message: "Create it from \(branch) and switch to it.",
-            content: AnyView(BranchNameEditor(draft: draft)),
-            actions: [
-                .init(label: "Create branch", kind: .primary, handler: {
-                    createBranch(draft.name.trimmed)
-                }, isEnabled: { !draft.name.isBlank }),
-                .init(label: "Cancel", kind: .cancel)
-            ]))
-    }
-
-    private func createBranch(_ branch: String) {
-        perform("Creating \(branch)…", failure: "Could not create branch") {
-            await GitActions.createBranch(branch, at: repoRoot)
-        }
-    }
     // MARK: - Commit
 
     private var commitBar: some View {
-        let blocked = busy || commitMessage.isBlank || selectedFiles.isEmpty
-        return VStack(spacing: 8) {
-            HStack(spacing: 10) {
-                TextField("Commit message", text: $commitMessage)
-                    .appTextField()
-                    .focused($commitFocused)
-                    .onSubmit { commit() }
-
-                ActionButton(title: amend ? "Amend" : "Commit", height: 30, size: 12) { commit() }
-                    .disabled(blocked)
-
-                InlineLink(title: "Cancel", tint: Color.secondary) {
-                    committing = false
-                    if amend { amend = false }
-                }
-            }
-
-            HStack(spacing: 16) {
-                Toggle(isOn: Binding(
-                    get: { excluded.isEmpty },
-                    set: { on in excluded = on ? [] : Set(files.map(\.id)) }
-                )) {
-                    Text(excluded.isEmpty
-                         ? "All \(counted(files.count, "file")) selected"
-                         : "\(selectedFiles.count) of \(files.count) files selected")
-                        .font(.system(size: 12))
-                        .foregroundStyle(.secondary)
-                }
-                .toggleStyle(.appCheckbox)
-
+        VStack(alignment: .leading, spacing: 10) {
+            Toggle(isOn: Binding(
+                get: { selectedFiles.count == files.count },
+                set: { on in excluded = on ? [] : Set(files.map(\.id)) }
+            )) {
+                Text(selectedFiles.count == files.count
+                     ? "All \(counted(files.count, "file")) selected"
+                     : "\(selectedFiles.count) of \(files.count) files selected")
+                    .font(.system(size: 12, weight: .medium))
+            }.toggleStyle(.appCheckbox)
+            TextField("Write a commit message…", text: Binding(get: { commitMessage }, set: { commitMessage = $0 }), axis: .vertical)
+                .lineLimit(3...5).appTextField().focused($commitFocused)
+                .accessibilityLabel("Commit message for " + repositoryName)
+            HStack(spacing: 6) {
                 if canAmend {
-                    Toggle(isOn: $amend) {
-                        Text("Amend last commit")
-                            .font(.system(size: 12))
-                            .foregroundStyle(.secondary)
-                    }
-                    .toggleStyle(.appCheckbox)
-                    .appTooltip("Fold these changes into the last commit instead of making a new one")
+                    Toggle(isOn: Binding(get: { amend }, set: { amend = $0 })) {
+                        Text("Amend last commit").font(.system(size: 11))
+                    }.toggleStyle(.appCheckbox)
                 }
-
-                Spacer()
+                Spacer(minLength: 0)
+                Text(snapshot?.branch ?? "").font(.mono(10)).foregroundStyle(.secondary)
+                    .lineLimit(1).truncationMode(.middle).appTooltip(snapshot?.branch ?? "")
             }
+            ActionButton(title: "\(amend ? "Amend" : "Commit") \(counted(selectedFiles.count, "file"))",
+                         tone: .green, height: 34, shortcut: "⌘ ↵", fills: true) { commit() }
+                .disabled(busy || commitMessage.isBlank || selectedFiles.isEmpty || files.contains { $0.kind == .conflicted })
+            Text("Commits stay local until you push.").font(.system(size: 10)).foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity)
         }
-        .padding(.horizontal, 20)
-        .padding(.vertical, 8)
-        .background(Theme.card)
-        .overlay(alignment: .bottom) { Rectangle().fill(Theme.hairline).frame(height: 1) }
-        .onAppear { commitFocused = true }
+        .padding(14).background(Theme.card).disabled(busy)
+        .overlay(alignment: .top) { Rectangle().fill(Theme.hairline).frame(height: 1) }
     }
 
     private func commit() {
         let message = commitMessage.trimmed
         let chosen = selectedFiles
-        guard !message.isEmpty, !busy, !chosen.isEmpty else { return }
-        let everything = excluded.isEmpty
+        guard !message.isEmpty, !busy, !chosen.isEmpty, !files.contains(where: { $0.kind == .conflicted }) else { return }
         let fold = amend
+        working = fold ? "Amending…" : "Committing…"
         Task {
-            working = fold ? "Amending…" : "Committing…"
-            let error = everything
-                ? await GitActions.commitAll(message: message, amend: fold, at: repoRoot)
-                : await GitActions.commitSelected(message: message, files: chosen,
-                                                  amend: fold, at: repoRoot)
+            let error = await GitActions.commitSelected(message: message, files: chosen,
+                                                        amend: fold, at: repoRoot)
             working = nil
             if let error {
                 dialogs.show(.notice(fold ? "Could not amend" : "Could not commit", message: error))
             } else {
                 // The message only clears once it is safely in a commit, so a failed
                 // attempt can be fixed and retried without retyping it.
-                messageBeforeAmend = ""
-                amend = false
-                commitMessage = ""
-                excluded = []
-                committing = false
+                commitDraft.didCommit()
+                announce(fold ? "Commit amended" : "Committed \(counted(chosen.count, "file"))")
             }
             await reload()
         }
@@ -1081,9 +1043,7 @@ struct ChangesView: View {
             select(file)
         } label: {
             HStack(spacing: 10) {
-                // The pick only matters to a commit, so the box appears with the
-                // commit bar and the list stays plain the rest of the time.
-                if committing {
+                if mode == .changes {
                     Toggle(isOn: Binding(
                         get: { !excluded.contains(file.id) },
                         set: { on in
@@ -1092,6 +1052,8 @@ struct ChangesView: View {
                     )) { EmptyView() }
                     .toggleStyle(.appCheckbox)
                     .appTooltip("Include in the commit")
+                    .accessibilityLabel("Include " + file.path + " in commit")
+                    .disabled(busy)
                 }
 
                 StatusChip(kind: file.kind)
@@ -1159,7 +1121,7 @@ struct ChangesView: View {
         if let chosen {
             excluded = Set(files.map(\.id)).subtracting(chosen.map(\.id))
         }
-        committing = true
+        mode = .changes
         commitFocused = true
     }
 
@@ -2072,8 +2034,17 @@ struct ChangesView: View {
     // The keys that move through a review and sort what is in it. Single letters only
     // count while a finding is in focus and nothing is being typed.
     private func handleReviewKey(_ event: NSEvent) -> Bool {
-        guard let review, mode == .changes, dialogs.current == nil else { return false }
+        guard dialogs.current == nil else { return false }
         let flags = event.modifierFlags.intersection([.command, .option, .control, .shift])
+        if flags == .command, event.charactersIgnoringModifiers?.lowercased() == "b" {
+            showBranches()
+            return true
+        }
+        if flags == .command, event.keyCode == 36, mode == .changes {
+            commit()
+            return true
+        }
+        guard !WindowKeyHandler.isTyping(event.window?.firstResponder), let review, mode == .changes else { return false }
         if flags == .option, event.keyCode == 125 || event.keyCode == 126 {
             step(event.keyCode == 125 ? 1 : -1)
             return true

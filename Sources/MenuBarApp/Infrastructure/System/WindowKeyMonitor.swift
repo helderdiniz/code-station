@@ -89,6 +89,10 @@ struct WindowAnchor: NSViewRepresentable {
 final class WindowKeyHandler {
     weak var anchor: NSView?
 
+    private let handlesTyping: Bool
+
+    init(handlesTyping: Bool = false) { self.handlesTyping = handlesTyping }
+
     private var token: Any?
     private var handle: ((NSEvent) -> Bool)?
 
@@ -111,7 +115,7 @@ final class WindowKeyHandler {
         guard let handle, let window = anchor?.window,
               WindowKeyMonitor.routes(to: window, frontmost: WindowKeyMonitor.frontmostWindow),
               event.window === window,
-              !Self.isTyping(window.firstResponder) else { return false }
+              handlesTyping || !Self.isTyping(window.firstResponder) else { return false }
         return handle(event)
     }
 

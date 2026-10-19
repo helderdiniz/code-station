@@ -58,6 +58,7 @@ struct Dialog: Identifiable {
     // whose header or footer follows what happens inside it. The title is still what a
     // screen reader hears.
     var framesItself = false
+    var fitsWindow = false
 }
 
 extension Dialog {
@@ -152,6 +153,18 @@ struct DialogHost: View {
                         GeometryReader { geometry in
                             ImpactDialogCard(dialog: dialog, maxHeight: max(0, geometry.size.height - 32))
                                 .frame(width: min(dialog.width, max(0, geometry.size.width - 32)))
+                                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        }
+                    } else if dialog.framesItself, dialog.fitsWindow, let content = dialog.content {
+                        GeometryReader { geometry in
+                            content
+                                .frame(width: min(dialog.width, max(0, geometry.size.width - 32)),
+                                       height: min(680, max(0, geometry.size.height - 32)))
+                                .clipShape(RoundedRectangle(cornerRadius: 14))
+                                .floatingCard(cornerRadius: 14)
+                                .accessibilityElement(children: .contain)
+                                .accessibilityAddTraits(.isModal)
+                                .accessibilityLabel(dialog.title)
                                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                         }
                     } else if dialog.framesItself, let content = dialog.content {

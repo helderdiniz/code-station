@@ -67,6 +67,12 @@ enum KeyboardShortcutsReference {
             KeyboardShortcutHelp(keys: "Esc", title: "Throw away the take",
                                  detail: "Put the prompt back as it was before you spoke.")
         ]),
+        KeyboardShortcutGroup(title: "Changes", shortcuts: [
+            KeyboardShortcutHelp(keys: "⌘ B", title: "Branches and actions",
+                                 detail: "Browse branches in the selected repository and preview a merge."),
+            KeyboardShortcutHelp(keys: "⌘ ⏎", title: "Commit selected files",
+                                 detail: "Commit the checked files with the message in the Changes composer.")
+        ]),
         KeyboardShortcutGroup(title: "Files", shortcuts: [
             KeyboardShortcutHelp(keys: "⌘ S", title: "Save the file",
                                  detail: "Save the file being edited in the Explorer."),

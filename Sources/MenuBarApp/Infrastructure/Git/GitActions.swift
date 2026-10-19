@@ -90,25 +90,28 @@ enum GitActions {
     // leaves a way back.
     static func discard(_ files: [GitChange], at root: String) async -> String? {
         guard !files.isEmpty else { return "No files are selected." }
-        let paths = pathspec(for: files.filter { !$0.isUntracked })
-        if !paths.isEmpty {
-            let error = await perform(at: root) { tool, url in
-                GitInspector.run(
-                    tool, ["restore", "--staged", "--worktree", "--source=HEAD", "--"] + paths,
-                    in: url)
-            }
-            if let error { return error }
-        }
+        guard let tool = await GitInspector.tool() else { return "Could not find git on PATH." }
         let url = URL(fileURLWithPath: root)
-        for file in files where file.isUntracked {
-            do {
-                try FileManager.default.trashItem(
-                    at: url.appendingPathComponent(file.path), resultingItemURL: nil)
-            } catch {
-                return "\(file.path): \(error.localizedDescription)"
+        return await GitInspector.offMain {
+            guard !GitBranches.blocksOtherActions(tool, url) else {
+                return "Finish or abort the current operation in Branches before discarding files."
             }
+            let paths = pathspec(for: files.filter { !$0.isUntracked })
+            if !paths.isEmpty {
+                let restored = GitInspector.run(
+                    tool, ["restore", "--staged", "--worktree", "--source=HEAD", "--"] + paths, in: url)
+                guard restored.ok else { return restored.failureMessage }
+            }
+            for file in files where file.isUntracked {
+                do {
+                    try FileManager.default.trashItem(
+                        at: url.appendingPathComponent(file.path), resultingItemURL: nil)
+                } catch {
+                    return "\(file.path): \(error.localizedDescription)"
+                }
+            }
+            return nil
         }
-        return nil
     }
 
     // Commits just the chosen files and leaves the rest of the tree alone, index
@@ -179,6 +182,9 @@ enum GitActions {
         }
         let url = URL(fileURLWithPath: root)
         return await GitInspector.offMain {
+            guard !GitBranches.blocksOtherActions(tool, url) else {
+                return "Finish or abort the current operation in Branches before switching branches."
+            }
             let originalBranch = GitInspector.run(
                 tool, ["symbolic-ref", "--quiet", "--short", "HEAD"], in: url)
             let originalHead = GitInspector.run(tool, ["rev-parse", "--verify", "HEAD"], in: url)
@@ -293,6 +299,9 @@ enum GitActions {
         }
         let url = URL(fileURLWithPath: root)
         return await GitInspector.offMain {
+            guard !GitBranches.blocksOtherActions(tool, url) else {
+                return "Finish or abort the current operation in Branches before starting another Git action."
+            }
             let output = work(tool, url)
             return output.ok ? nil : output.failureMessage
         }
@@ -300,6 +309,9 @@ enum GitActions {
 
     private static func reconcile(_ tool: GitInspector.GitTool, in url: URL,
                                   with target: String) -> GitPullOutcome {
+        guard !GitBranches.blocksOtherActions(tool, url) else {
+            return .failed("Finish or abort the current operation in Branches before pulling.")
+        }
         let fetch = GitInspector.run(tool, ["fetch", "--quiet", "origin"], in: url,
                                      timeout: networkTimeout)
         guard fetch.ok else { return .failed(fetch.failureMessage) }

@@ -89,6 +89,14 @@ struct ChangesNavigatorItem: Hashable {
 @Observable
 final class ChangesNavigationMemory {
     var selections: [String: ChangeFileSelection] = [:]
+    var commitDrafts: [String: ChangesCommitDraft] = [:]
+
+    func commitDraft(for root: String) -> ChangesCommitDraft {
+        if let draft = commitDrafts[root] { return draft }
+        let draft = ChangesCommitDraft()
+        commitDrafts[root] = draft
+        return draft
+    }
     var collapsed: Set<String> = []
     var treeWidth = ExplorerSplitLayout.defaultTreeWidth
     var showingHistory = false
@@ -199,4 +207,30 @@ struct CommentDraft: Equatable {
     var kind = ReviewComment.Kind.question
     // The comment being edited, or nil for a new one.
     var editing: UUID?
+}
+
+@MainActor
+@Observable
+final class ChangesCommitDraft {
+    var message = ""
+    var excluded: Set<GitChange.ID> = []
+    var amend = false
+    var messageBeforeAmend = ""
+
+    func setAmend(_ enabled: Bool, lastMessage: String?) {
+        guard amend != enabled else { return }
+        if enabled {
+            messageBeforeAmend = message
+            if let lastMessage { message = lastMessage }
+        } else {
+            message = messageBeforeAmend
+        }
+        amend = enabled
+    }
+
+    func didCommit() {
+        message = ""
+        messageBeforeAmend = ""
+        amend = false
+    }
 }
