@@ -16,13 +16,17 @@ enum SidebarNotices {
     // Reads each session's state but never the tool it is running. A tool starts and
     // ends many times a turn, and this list is built with the whole rail, so reading it
     // here would redraw the rail on every call.
+    // A recap starts the moment a turn ends unseen and keeps the session busy for as long
+    // as the agent takes to write it. The work is already done by then and the finish
+    // sound has played, so the recap does not count as running.
     static func all(store: ProjectStore, runner: SessionRunner) -> [NoticedSession] {
         store.sidebarSessions.compactMap { session in
             guard let project = store.project(session.projectID) else { return nil }
             let live = LiveConversation.id(of: session.id, store: store, runner: runner)
             let question = runner.question(live)
+            let working = runner.state(live).isBusy && !runner.isRecapping(live)
             guard let notice = SessionNotice(
-                isBusy: runner.state(live).isBusy || runner.isAskingSecondOpinion(session.id),
+                isBusy: working || runner.isAskingSecondOpinion(session.id),
                 needsInput: question != nil,
                 finishedUnseen: store.hasFinished(session.id)) else { return nil }
             return NoticedSession(session: session, project: project, notice: notice,

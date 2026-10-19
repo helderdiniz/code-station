@@ -102,6 +102,45 @@ struct SessionRecapRunnerTests {
             == ["Make the change", "Initial response"])
     }
 
+    // The finish sound plays as the turn ends, so the rail has to say so at the same time
+    // rather than once the recap that follows has been written.
+    @Test func aTurnThatEndedUnseenNeedsYouWhileItsRecapIsWritten() async throws {
+        let harness = try RunnerHarness(agent: .codex, script: """
+        input=$(cat)
+        count_file="$folder/count"
+        count=0
+        if [ -f "$count_file" ]; then count=$(cat "$count_file"); fi
+        count=$((count + 1))
+        printf '%s' "$count" > "$count_file"
+        printf '%s\n' '{"type":"thread.started","thread_id":"thread-1"}'
+        if [ "$count" -eq 1 ]; then
+            printf '%s\n' '{"type":"item.completed","item":{"id":"answer-1","item_type":"agent_message","text":"Initial response"}}'
+        else
+            while [ ! -f "$folder/release-recap" ]; do sleep 0.01; done
+            printf '%s\n' '{"type":"item.completed","item":{"id":"answer-2","item_type":"agent_message","text":"All done."}}'
+        fi
+        printf '%s\n' '{"type":"turn.completed","usage":{"input_tokens":10,"output_tokens":2}}'
+        """)
+        defer { harness.tearDown() }
+        harness.store.selection = .home
+
+        harness.runner.send("Make the change", sessionID: harness.session.id,
+                            store: harness.store)
+        #expect(await waitUntil { harness.store.hasFinished(harness.session.id) })
+        _ = harness.runner.recap(harness.session.id, store: harness.store)
+        #expect(await waitUntil {
+            harness.runner.isRecapping(harness.session.id)
+                && harness.runner.state(harness.session.id).isBusy
+        })
+
+        let notice = SidebarNotices.all(store: harness.store, runner: harness.runner)
+            .first { $0.session.id == harness.session.id }?.notice
+        #expect(notice == .finished)
+
+        try Data().write(to: harness.scratch.path("release-recap"))
+        #expect(await waitUntil { harness.store.recap(for: harness.session.id) != nil })
+    }
+
     @Test func usesClaudeCodesNativeRecapWithoutAddingItToTheTranscript() async throws {
         let harness = try RunnerHarness(agent: .claudeCode, script: """
         IFS= read -r input
