@@ -792,10 +792,12 @@ struct SessionView: View {
                            recap: SessionRecap?, showsWords: Bool) -> some View {
         HStack(spacing: 6) {
             if showsSecondOpinion(session) {
-                HeaderRailButton(icon: "eyes",
-                                 label: "Ask for a second opinion",
-                                 hint: "Other agents review these changes",
-                                 action: askForChangesOpinion)
+                SecondOpinionLineupButton(author: session.agent,
+                                          installed: AgentKind.allCases.filter { runner.executable(for: $0) != nil },
+                                          runs: runner.reviews.runs(session.id),
+                                          status: SecondOpinionStatus(reviews: runner.reviews, sessionID: session.id),
+                                          ask: askForChangesOpinion,
+                                          open: { changesNavigation.secondOpinionOpens += 1 })
             }
             if let worktreePath = session.worktreePath, let app = WorktreeOpener.current {
                 openInButton(path: worktreePath, app: app, showsWord: showsWords)
@@ -1720,6 +1722,8 @@ struct SessionView: View {
                                    loadEarlier: @escaping () -> Void) -> some View {
         let bubble = appSettings.userMessageStyle(for: session, in: store)
         let reviewRounds = sentReviews(in: session)
+        let lineup = SecondOpinionLineup.reviewers(installed: AgentKind.allCases.filter { runner.executable(for: $0) != nil },
+                                                   author: session.agent)
         return VStack(alignment: .leading, spacing: 18) {
             // Only for a session that has nothing to say yet, never for one whose
             // conversation is still being read in.
@@ -1862,6 +1866,7 @@ struct SessionView: View {
 
             TurnEndActions(sessionID: sessionID, agent: session.agent, state: state)
         }
+        .environment(\.secondOpinionLineup, lineup)
         .modifier(SentPromptCommands(agent: session.agent,
                                      workingDirectories: store.workingDirectories(for: session),
                                      latestPromptID: session.messages.last(where: { $0.role == .user })?.id))

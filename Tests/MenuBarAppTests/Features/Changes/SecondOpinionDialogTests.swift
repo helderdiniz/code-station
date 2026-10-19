@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import MenuBarApp
 
-// The second opinion's control in the review bar says where things stand, and its
+// The second opinion's control in the header says where things stand, and its
 // findings dialog goes through what came back in a fixed order and remembers what was
 // dismissed until the next ask.
 @MainActor

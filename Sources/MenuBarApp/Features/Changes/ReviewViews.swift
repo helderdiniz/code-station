@@ -8,14 +8,22 @@ struct ReviewAvatar: View {
     // Nil for you.
     let agent: AgentKind?
     var size: CGFloat = 20
+    // Amber while the reviewer has findings waiting to be looked at.
+    var hasFindings = false
+    // Counts up each time the reviewer's symbol should play its own move.
+    var move = 0
 
     var body: some View {
         Image(systemName: agent?.symbol ?? "person.fill")
             .font(.system(size: size * 0.5, weight: .semibold))
-            .foregroundStyle(agent == nil ? Theme.accent : Color.secondary)
+            .foregroundStyle(hasFindings ? Theme.attentionText : agent == nil ? Theme.accent : Color.secondary)
+            .modifier(SymbolMove(agent: agent, size: size, trigger: move))
             .frame(width: size, height: size)
-            .background(RoundedRectangle(cornerRadius: size * 0.3).fill(agent == nil ? Theme.userMessage : Theme.field))
-            .overlay(RoundedRectangle(cornerRadius: size * 0.3).stroke(Theme.border))
+            // A symbol that flies out of its tile leaves through the edge, not over its neighbour.
+            .clipped()
+            .background(RoundedRectangle(cornerRadius: size * 0.3)
+                .fill(hasFindings ? Theme.attention.opacity(0.16) : agent == nil ? Theme.userMessage : Theme.field))
+            .overlay(RoundedRectangle(cornerRadius: size * 0.3).stroke(hasFindings ? Theme.attention : Theme.border))
             .accessibilityHidden(true)
     }
 }
@@ -864,24 +872,26 @@ struct SeatPill<Content: View>: View {
     }
 }
 
-// The way into a second opinion on a plan or a design. It shows the usual reviewers'
-// avatars, so the lineup the dialog will start from is visible before it opens.
+// The way into a second opinion on a plan or a design. It leads with the usual
+// reviewers' tiles, so the lineup the dialog will start from is the button's mark.
 struct SecondOpinionButton: View {
     let usual: [AgentKind]
     let action: () -> Void
 
     @State private var hovering = false
+    @State private var deals = 0
 
     var body: some View {
-        Button(action: action) {
+        Button {
+            deals += 1
+            action()
+        } label: {
             HStack(spacing: 7) {
-                Image(systemName: "person.2").font(.system(size: 11, weight: .semibold))
-                Text("Second opinion").font(.system(size: 12, weight: .semibold))
                 if !usual.isEmpty {
-                    HStack(spacing: -5) {
-                        ForEach(Array(usual.enumerated()), id: \.offset) { ReviewAvatar(agent: $0.element, size: 16) }
-                    }
+                    LineupTiles(agents: usual, fanned: hovering, deals: deals)
+                        .animation(HeaderMotion.grow, value: hovering)
                 }
+                Text("Second opinion").font(.system(size: 12, weight: .semibold))
             }
             .padding(.horizontal, 10).frame(height: 28)
             .background(RoundedRectangle(cornerRadius: 8).fill(hovering ? Theme.field : .clear))

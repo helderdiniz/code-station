@@ -2,21 +2,28 @@ import AppKit
 import SwiftUI
 
 // The second opinion lives in three dialogs: asking, opened from the session header, and
-// watching the reviewers work and going through what they found, opened from one control
-// in the review bar. The bar itself only ever says what will be sent.
+// watching the reviewers work and going through what they found, opened from the same
+// control in the header once it has been asked. The review bar only says what will be sent.
 
 // What a second opinion is asked to read.
 enum SecondOpinionScopeChoice: Hashable {
     case all, file, sinceReview
 }
 
-// Where the second opinion stands, which is what the bar's control says and opens.
+// Where the second opinion stands, which is what the header's control says and opens.
 enum SecondOpinionStatus: Equatable {
     case ask
     case reviewing(agents: [AgentKind], started: Date, pending: Int)
     case failed(AgentKind)
     case ready(agents: [AgentKind], pending: Int)
     case settled(kept: Int, dismissed: Int)
+
+    @MainActor
+    init(reviews: ReviewCommentStore, sessionID: UUID) {
+        self.init(runs: reviews.runs(sessionID),
+                  findings: reviews.comments(sessionID).filter { $0.reviewer != nil },
+                  dismissed: reviews.dismissedFindings(sessionID).count)
+    }
 
     init(runs: [SecondOpinionRun], findings: [ReviewComment], dismissed: Int) {
         let pending = findings.filter(\.isPending)
@@ -89,7 +96,7 @@ private func announce(_ text: String) {
                          userInfo: [.announcement: text, .priority: NSAccessibilityPriorityLevel.medium.rawValue])
 }
 
-private func clock(from start: Date, to end: Date) -> String {
+func clock(from start: Date, to end: Date) -> String {
     let seconds = max(0, Int(end.timeIntervalSince(start)))
     return "\(seconds / 60):" + String(format: "%02d", seconds % 60)
 }
@@ -146,91 +153,6 @@ private struct BadgedAvatar: View {
                     EmptyView()
                 }
             }
-    }
-}
-
-// MARK: - The bar's control
-
-// One control for the whole second opinion. Its words carry the state, so it reads the
-// same without its colours.
-struct SecondOpinionChip: View {
-    let status: SecondOpinionStatus
-    let open: () -> Void
-
-    @State private var hovering = false
-
-    var body: some View {
-        switch status {
-        case .ask:
-            EmptyView()
-        case .reviewing(let agents, let started, let pending):
-            chip(fill: Theme.card, border: Theme.border, ink: .primary) {
-                HStack(spacing: -5) {
-                    ForEach(agents, id: \.self) { BadgedAvatar(agent: $0, badge: .working) }
-                }
-                .padding(.trailing, 3)
-                Text(agents.count == 1 ? "\(agents[0].title) is reviewing" : "\(agents.count) reviewing")
-                TimelineView(.periodic(from: .now, by: 1)) { context in
-                    Text(clock(from: started, to: context.date)).font(.mono(11)).foregroundStyle(.tertiary)
-                }
-                if pending > 0 {
-                    Text("\(counted(pending, "finding")) so far").fontWeight(.medium).foregroundStyle(.secondary)
-                }
-            }
-            .accessibilityLabel("\(names(agents)) reviewing, open details")
-        case .failed(let agent):
-            chip(fill: Theme.warningBackground, border: Theme.warningText.opacity(0.3), ink: Theme.warningText) {
-                Image(systemName: "exclamationmark.triangle.fill")
-                Text("\(agent.title) could not finish")
-            }
-            .accessibilityLabel("\(agent.title) could not finish the review, open details")
-        case .ready(let agents, let pending):
-            chip(fill: Theme.attention.opacity(hovering ? 0.16 : 0.10), border: Theme.attention.opacity(0.5),
-                 ink: Theme.attentionText) {
-                HStack(spacing: -5) {
-                    ForEach(agents, id: \.self) { ReviewAvatar(agent: $0, size: 20) }
-                }
-                Text("\(pending)").font(.system(size: 11, weight: .bold)).foregroundStyle(.white)
-                    .padding(.horizontal, 5).frame(minWidth: 18, minHeight: 18)
-                    .background(Capsule().fill(Theme.attention))
-                Text(pending == 1 ? "finding to look at" : "findings to look at")
-            }
-            .accessibilityLabel("\(counted(pending, "finding")) to look at, open them")
-        case .settled(let kept, let dismissed):
-            Button(action: open) {
-                Label(kept + dismissed == 0 ? "Second opinion: nothing to raise"
-                      : "Second opinion: \(kept) kept, \(dismissed) dismissed", systemImage: "checkmark")
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(hovering ? Color.primary : Color.secondary)
-                    .lineLimit(1).fixedSize()
-                    .padding(.horizontal, 8).frame(height: 28)
-                    .background(RoundedRectangle(cornerRadius: 9).fill(hovering ? Theme.field : .clear))
-                    .contentShape(RoundedRectangle(cornerRadius: 9))
-            }
-            .buttonStyle(.plain)
-            .onHover { hovering = $0 }
-            .appTooltip(kept + dismissed == 0 ? "See what the reviewers did" : "Open the findings")
-        }
-    }
-
-    private func chip<Content: View>(fill: Color, border: Color, ink: Color,
-                                     @ViewBuilder content: () -> Content) -> some View {
-        Button(action: open) {
-            HStack(spacing: 7) {
-                content()
-                Image(systemName: "chevron.up").font(.system(size: 10, weight: .semibold)).foregroundStyle(.tertiary)
-            }
-            .font(.system(size: 12, weight: .semibold))
-            .foregroundStyle(ink)
-            .lineLimit(1).fixedSize()
-            .padding(.leading, 7).padding(.trailing, 9).frame(height: 30)
-            .surface(fill, cornerRadius: 9, border: border)
-            .contentShape(RoundedRectangle(cornerRadius: 9))
-        }
-        .buttonStyle(.plain)
-        .onHover { hovering = $0 }
-        .accessibilityElement(children: .ignore)
-        .accessibilityAddTraits(.isButton)
     }
 }
 

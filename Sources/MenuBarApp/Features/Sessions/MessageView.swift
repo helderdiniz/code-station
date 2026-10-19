@@ -325,26 +325,6 @@ private struct ThinkingBlock: View {
 // The transcript's copy affordance, shared by whole messages and by single code blocks:
 // the copy button on a small card lifted off the page, since it floats over text rather
 // than sitting in a row of its own.
-// Beside the copy pill on an answer: ask other agents what they make of it.
-private struct SecondOpinionPill: View {
-    let action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            Image(systemName: "person.2")
-                .font(.system(size: 10.5, weight: .semibold))
-                .foregroundStyle(.secondary)
-                .frame(width: 24, height: 24)
-                .cardSurface(cornerRadius: 6)
-                .shadow(color: .black.opacity(0.08), radius: 2, y: 1)
-                .contentShape(RoundedRectangle(cornerRadius: 6))
-        }
-        .buttonStyle(.plain)
-        .appTooltip("Get a second opinion on this answer")
-        .accessibilityLabel("Get a second opinion on this answer")
-    }
-}
-
 private struct CopyPill: View {
     let text: String
     let tooltip: String
@@ -389,9 +369,21 @@ private struct TranscriptCopyButton: ViewModifier {
             .onPreferenceChange(DescendantCopyHoverKey.self) { descendantHovering = $0 }
             .overlay(alignment: .topTrailing) {
                 if hovering && !descendantHovering && !text.isEmpty {
-                    HStack(spacing: 4) {
-                        if let secondOpinion { SecondOpinionPill(action: secondOpinion) }
-                        CopyPill(text: text, tooltip: tooltip)
+                    Group {
+                        if let secondOpinion {
+                            // Asking and copying share one card, the reviewers first.
+                            HStack(spacing: 0) {
+                                AnswerLineupButton(action: secondOpinion)
+                                Rectangle().fill(Theme.hairline).frame(width: 1, height: 14)
+                                CopyButton(size: 11) { text }
+                                    .frame(width: 24, height: 24)
+                                    .appTooltip(tooltip)
+                            }
+                            .cardSurface(cornerRadius: 6)
+                            .shadow(color: .black.opacity(0.08), radius: 2, y: 1)
+                        } else {
+                            CopyPill(text: text, tooltip: tooltip)
+                        }
                     }
                     .padding(inset)
                     .transition(.fadeIn)

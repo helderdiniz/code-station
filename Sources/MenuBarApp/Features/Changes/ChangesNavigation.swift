@@ -112,9 +112,10 @@ final class ChangesNavigationMemory {
     var reviewFilter = ReviewFilter.all
     var focusedComment: UUID?
     var secondOpinionFocus = Set(SecondOpinion.Focus.standard)
-    // Counts asks from the session header, which sits outside the screen that opens the
-    // dialog.
+    // Count asks, and clicks on a run under way, from the session header, which sits
+    // outside the screen that opens the dialogs.
     var secondOpinionAsks = 0
+    var secondOpinionOpens = 0
 
     var showingReview: Bool {
         get { list == .review }

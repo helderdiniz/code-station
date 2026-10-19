@@ -259,6 +259,11 @@ struct ChangesView: View {
             mode = .changes
             openAsk(review)
         }
+        .onChange(of: navigation.secondOpinionOpens) { _, _ in
+            guard let review else { return }
+            mode = .changes
+            openSecondOpinion(review)
+        }
         // The screen opens on the last snapshot taken of this tree while a fresh one
         // is fetched, so the file list is there at first glance instead of after git.
         .task(id: root) {
@@ -2117,11 +2122,6 @@ struct ChangesView: View {
                 .appTooltip("Open the next reply")
             }
             Spacer(minLength: 8)
-            let opinion = secondOpinionStatus(review)
-            if opinion != .ask {
-                SecondOpinionChip(status: opinion, open: { openSecondOpinion(review) })
-                Rectangle().fill(Theme.hairline).frame(width: 1, height: 20)
-            }
             if !all.isEmpty {
                 InlineLink(title: "Clear", tint: Color.secondary) { confirmClear(review, kept: kept.count, pending: pending) }
             }
@@ -2190,15 +2190,9 @@ struct ChangesView: View {
 
     // MARK: Second opinion
 
-    private func secondOpinionStatus(_ review: ReviewTarget) -> SecondOpinionStatus {
-        SecondOpinionStatus(runs: review.reviews.runs(review.sessionID),
-                            findings: review.reviews.comments(review.sessionID).filter { $0.reviewer != nil },
-                            dismissed: review.reviews.dismissedFindings(review.sessionID).count)
-    }
-
-    // The bar's control opens whichever dialog its state is about.
+    // The header's control opens whichever dialog its state is about.
     private func openSecondOpinion(_ review: ReviewTarget) {
-        switch secondOpinionStatus(review) {
+        switch SecondOpinionStatus(reviews: review.reviews, sessionID: review.sessionID) {
         case .ask: openAsk(review)
         case .reviewing, .failed: openProgress(review)
         case .ready: openFindings(review)
