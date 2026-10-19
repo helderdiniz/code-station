@@ -417,7 +417,10 @@ private final class ConvertingFeed: AudioFeed, @unchecked Sendable {
         let ratio = format.sampleRate / buffer.format.sampleRate
         let capacity = AVAudioFrameCount((Double(buffer.frameLength) * ratio).rounded(.up)) + 1
         guard let converted = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: capacity) else { return }
-        var consumed = false
+        // The input block is marked @Sendable, but convert calls it synchronously on this
+        // thread before returning, so sharing the buffer and the flag with it is safe.
+        nonisolated(unsafe) let buffer = buffer
+        nonisolated(unsafe) var consumed = false
         var error: NSError?
         converter.convert(to: converted, error: &error) { _, status in
             if consumed {
