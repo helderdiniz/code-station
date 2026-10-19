@@ -10,9 +10,6 @@ struct HeaderTab: Identifiable {
     let label: String
     let icon: String
     let selected: Bool
-    // Counts the destination carries for itself. They sit on the tab that opens them,
-    // where they say what has changed rather than only that something has.
-    var diff: Diff?
     // Nil leaves ordinary tabs unchanged; false keeps the content indicator slot empty.
     var hasContent: Bool?
     // One number the destination carries for itself: how much is waiting there.
@@ -20,11 +17,6 @@ struct HeaderTab: Identifiable {
     let activate: () -> Void
 
     var id: String { label }
-
-    struct Diff: Equatable {
-        let added: Int
-        let removed: Int
-    }
 }
 
 // The header's destinations, each with its word beside its icon and a line under the one
@@ -184,7 +176,7 @@ private struct HeaderTabDeckItem: View {
 
     var body: some View {
         if let hasContent = tab.hasContent {
-            button.appTooltip(hasContent ? "\(tab.label) has content" : "No design content",
+            button.appTooltip(hasContent ? "\(tab.label) has content" : "Nothing in \(tab.label) yet",
                               isFocused: focused)
         } else {
             button
@@ -210,11 +202,6 @@ private struct HeaderTabDeckItem: View {
                         .padding(.leading, 1)
                         .accessibilityHidden(true)
                         .transaction { $0.animation = nil }
-                }
-                if let diff = tab.diff {
-                    DiffPair(added: diff.added, removed: diff.removed,
-                             size: Self.countSize, spacing: Self.countSpacing)
-                        .frame(width: Self.width(of: diff), alignment: .leading)
                 }
                 if let count = tab.count {
                     Text(verbatim: "\(count)")
@@ -253,13 +240,10 @@ private struct HeaderTabDeckItem: View {
 
     private var showsHint: Bool { hovering && !tab.selected }
 
-    // The counts are read out with the destination rather than left as two numbers beside
-    // it, so the tab says the same thing whether it is seen or heard.
     private var accessibilityLabel: String {
         var label = tab.hasContent == true ? "\(tab.label), has content" : tab.label
         if let count = tab.count { label += ", \(count) waiting" }
-        guard let diff = tab.diff else { return label }
-        return "\(label), \(diff.added) added, \(diff.removed) removed"
+        return label
     }
 
     private static let wordSize: CGFloat = 12.5
@@ -276,11 +260,7 @@ private struct HeaderTabDeckItem: View {
         return ceil(NSAttributedString(string: text, attributes: [.font: font]).size().width)
     }
 
-    // The counts, measured the same way and for the same reason as the word beside them.
-    static func width(of diff: HeaderTab.Diff) -> CGFloat {
-        width(ofCounts: "+\(diff.added)−\(diff.removed)")
-    }
-
+    // The count, measured the same way and for the same reason as the word beside it.
     private static func width(ofCounts text: String) -> CGFloat {
         let font = NSFont.monospacedSystemFont(ofSize: countSize, weight: .semibold)
         return ceil(NSAttributedString(string: text, attributes: [.font: font]).size().width + countSpacing)

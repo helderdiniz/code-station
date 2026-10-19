@@ -887,10 +887,14 @@ struct SessionView: View {
         tabs.append(destination("Troubleshoot", icon: "stethoscope", value: .troubleshoot))
         tabs.append(changesTab(session))
         tabs.append(destination("Explorer", icon: "folder", value: .explorer))
-        var reviewsTab = destination("Reviews", icon: "text.bubble", value: .reviews)
-        let waiting = pullRequestReviews.waitingCount(session.id)
-        reviewsTab.count = waiting > 0 ? waiting : nil
-        tabs.append(reviewsTab)
+        // Reviews come from a pull request, so without one there is nothing to go to. A
+        // tab already open stays, so the pane is never left without its tab.
+        if !session.pullRequests.isEmpty || tab == .reviews {
+            var reviewsTab = destination("Reviews", icon: "text.bubble", value: .reviews)
+            let waiting = pullRequestReviews.waitingCount(session.id)
+            reviewsTab.count = waiting > 0 ? waiting : nil
+            tabs.append(reviewsTab)
+        }
         return tabs
     }
 
@@ -927,15 +931,10 @@ struct SessionView: View {
         }
     }
 
-    // The counts ride on the tab that opens them. A mark beside the word could only say
-    // that the working tree had moved; the numbers say how far, and they say it in the
-    // one place someone would click to go and look.
     private func changesTab(_ session: ChatSession) -> HeaderTab {
         let label = store.isDesignMode(session) ? "Project Changes" : "Changes"
         var changes = destination(label, icon: "plusminus", value: .changes)
-        changes.diff = workingTreeChanges(session).map {
-            HeaderTab.Diff(added: $0.added, removed: $0.removed)
-        }
+        changes.hasContent = workingTreeChanges(session) != nil
         return changes
     }
 

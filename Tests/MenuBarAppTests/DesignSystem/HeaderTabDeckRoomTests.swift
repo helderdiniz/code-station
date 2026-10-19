@@ -11,20 +11,22 @@ import Testing
 @MainActor
 struct HeaderTabDeckRoomTests {
     private func tabs(selecting selected: String,
-                      diffOnChanges: HeaderTab.Diff? = nil) -> [HeaderTab] {
+                      changesHaveContent: Bool? = nil) -> [HeaderTab] {
         [("Chat", "bubble.left.and.bubble.right"), ("Design", "paintbrush.pointed"),
          ("Troubleshoot", "stethoscope"), ("Project Changes", "plusminus"),
          ("Explorer", "folder")].map { label, icon in
-            HeaderTab(label: label, icon: icon, selected: label == selected,
-                      diff: label == "Project Changes" ? diffOnChanges : nil,
-                      activate: {})
+            var tab = HeaderTab(label: label, icon: icon, selected: label == selected,
+                                activate: {})
+            if label == "Project Changes" { tab.hasContent = changesHaveContent }
+            return tab
         }
     }
 
     @Test func theDeckAsksForOneWidthBeforeAndAfterItIsDrawn() {
-        for diff in [nil, HeaderTab.Diff(added: 412, removed: 86)] {
+        for hasContent in [nil, false, true] {
             let deck = NSHostingView(rootView: HeaderTabDeck(
-                tabs: tabs(selecting: "Chat", diffOnChanges: diff)))
+                tabs: tabs(selecting: "Chat", changesHaveContent: hasContent))
+                .environment(TooltipPresenter()))
             let asked = deck.fittingSize.width
             #expect(asked > 0)
 
@@ -43,22 +45,10 @@ struct HeaderTabDeckRoomTests {
         #expect(chat.fittingSize.width == explorer.fittingSize.width)
     }
 
-    // Counts arriving on the Changes tab are the one thing that does widen the deck, and
-    // they widen it once: the tab keeps its word either way.
-    @Test func countsWidenOnlyTheTabTheyBelongTo() {
-        let bare = NSHostingView(rootView: HeaderTabDeck(tabs: tabs(selecting: "Chat")))
-        let counted = NSHostingView(rootView: HeaderTabDeck(
-            tabs: tabs(selecting: "Chat", diffOnChanges: .init(added: 412, removed: 86))))
-        draw(bare)
-        draw(counted)
-        #expect(counted.fittingSize.width > bare.fittingSize.width)
-    }
-
-    @Test func designContentAndSelectionKeepTheSameWidth() {
+    @Test func contentAndSelectionKeepTheSameWidth() {
         let widths = [false, true].flatMap { hasContent in
             ["Chat", "Design"].map { selected in
-                var destinations = tabs(selecting: selected,
-                                        diffOnChanges: .init(added: 258, removed: 89))
+                var destinations = tabs(selecting: selected, changesHaveContent: hasContent)
                 destinations[1].hasContent = hasContent
                 let deck = NSHostingView(rootView: HeaderTabDeck(tabs: destinations)
                     .environment(TooltipPresenter()))
