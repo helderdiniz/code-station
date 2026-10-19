@@ -285,6 +285,28 @@ struct CommandRunnerTests {
         #expect(!processExists(pid))
     }
 
+    @Test func aProcessThatLeftTheGroupCannotHoldTheOutputOpen() async throws {
+        let pidFile = scratch.path("escaped.pid")
+        let escape = "exit if fork; POSIX::setsid(); "
+            + "open my $f, '>', $ARGV[0]; print $f $$; close $f; sleep 30"
+        let started = ContinuousClock.now
+
+        let output = try await CommandRunner.run(
+            executable: "/bin/sh",
+            arguments: ["-c", "echo done; /usr/bin/perl -MPOSIX -e \"$1\" \"$2\"",
+                        "command-runner-test", escape, pidFile.path],
+            timeout: .seconds(20)
+        )
+
+        try #require(await waitUntil { descendantPID(in: pidFile) != nil })
+        let pid = try #require(descendantPID(in: pidFile))
+        defer { Darwin.kill(pid, SIGKILL) }
+        #expect(processExists(pid))
+        #expect(output.succeeded)
+        #expect(output.output == "done\n")
+        #expect(started.duration(to: .now) < .seconds(10))
+    }
+
     @Test func cancellationKillsADescendantThatInheritedThePipes() async throws {
         let pidFile = scratch.path("child.pid")
         let arguments = backgroundChildArguments(pidFile: pidFile,

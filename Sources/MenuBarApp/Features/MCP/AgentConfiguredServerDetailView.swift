@@ -43,6 +43,7 @@ struct AgentConfiguredServerDetailView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
+        .onAppear { claude.checkHealthIfIdle(of: server.name) }
     }
 
     private var orderedRegistrations: [Registration] {

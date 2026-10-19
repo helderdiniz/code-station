@@ -36,6 +36,7 @@ struct ServerDetailView: View {
                 }
             }
             .sheet(isPresented: $showingRawJSON) { RawJSONView() }
+            .onAppear { claude.checkHealthIfIdle(of: server.name) }
         }
     }
 

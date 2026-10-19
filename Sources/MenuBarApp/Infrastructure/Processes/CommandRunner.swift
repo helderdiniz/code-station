@@ -241,7 +241,14 @@ enum CommandRunner {
         // pipes. A busy executor must not turn that scheduling delay into a timeout after
         // the command itself completed successfully.
         timeoutItem?.cancel()
-        drains.wait()
+        // A process that left the group, such as a daemon that called setsid, can keep a
+        // copy of the write end, and then the pipe never reaches end of file. The command
+        // itself is done and its output is already in the pipe, so after a short wait the
+        // readers keep what they have rather than wait for a close that may never come.
+        if drains.wait(timeout: .now() + outputDrainLimit) == .timedOut {
+            controller.stopReading()
+            drains.wait()
+        }
         if !groupStopped {
             throw RunError.termination("the process group is still running after SIGKILL")
         }
@@ -442,6 +449,9 @@ enum CommandRunner {
     // clean-up, short enough that a stop still feels like one.
     static let stopGrace: TimeInterval = 0.5
 
+    // How long the pipes may stay open once the command and its group are gone.
+    static let outputDrainLimit: TimeInterval = 2
+
     static func signalProcessGroup(_ processGroup: pid_t, signal: Int32) {
         guard processGroup > 1, processGroup != getpgrp() else { return }
         Darwin.kill(-processGroup, signal)
@@ -484,7 +494,7 @@ enum CommandRunner {
         var buffer = [UInt8](repeating: 0, count: 16_384)
         let descriptor = handle.fileDescriptor
         while true {
-            if controller?.error != nil {
+            if controller?.error != nil || controller?.readingStopped == true {
                 try? handle.close()
                 break
             }
@@ -501,7 +511,9 @@ enum CommandRunner {
                     _ = Darwin.poll(&pollDescriptor, 1, 50)
                     continue
                 }
-                if errno == EBADF, controller?.error != nil { break }
+                if errno == EBADF, controller?.error != nil || controller?.readingStopped == true {
+                    break
+                }
                 return Capture(data: data, truncated: truncated,
                                error: String(cString: strerror(errno)))
             }
@@ -599,8 +611,15 @@ enum CommandRunner {
         private let lock = NSLock()
         private var processGroup: pid_t?
         private var failure: RunError?
+        private var readersStopped = false
 
         var error: RunError? { lock.withLock { failure } }
+        var readingStopped: Bool { lock.withLock { readersStopped } }
+
+        // Unlike a stop, this is not a failure and sends no signal: the command is over.
+        func stopReading() {
+            lock.withLock { readersStopped = true }
+        }
 
         func started(processGroup: pid_t) {
             let shouldStop = lock.withLock {

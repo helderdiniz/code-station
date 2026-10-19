@@ -26,7 +26,7 @@ final class ClaudeCodeManager {
     // What `claude mcp list` last said about each server it reached for. Kept between
     // sheet openings, since a full check takes a few seconds.
     private(set) var health: [String: AgentConfiguredServer.Health] = [:]
-    private(set) var isCheckingAll = false
+    private var isCheckingAll = false
     private(set) var checkedAt: Date?
     let serverWork = AgentServerWork()
 
@@ -89,12 +89,15 @@ final class ClaudeCodeManager {
         entries[name].map { .claudeCode($0, health: health[name], work: work(on: name)) }
     }
 
+    // The full list is not counted as work on each server: it waits for the slowest one,
+    // so a quick server would read "checking" for as long as the slowest takes.
     func work(on name: String) -> AgentConfiguredServer.Work? {
-        serverWork.work[name] ?? (isCheckingAll ? .checking : nil)
+        serverWork.work[name]
     }
 
     // `claude mcp list` connects to every server to report on it, which is the only
-    // way to learn whether one needs a sign-in.
+    // way to learn whether one needs a sign-in. It takes as long as the slowest server,
+    // so the server on screen is also checked by itself.
     func checkHealth() {
         guard available, !isCheckingAll else { return }
         isCheckingAll = true
@@ -106,6 +109,13 @@ final class ClaudeCodeManager {
             health = Self.health(inList: output)
             checkedAt = .now
         }
+    }
+
+    // For a server coming into view. Work already running on it, such as a sign-in
+    // waiting on the browser, is left alone rather than replaced.
+    func checkHealthIfIdle(of name: String) {
+        guard available, isRegistered(name), serverWork.work[name] == nil else { return }
+        checkHealth(of: name)
     }
 
     func checkHealth(of name: String) {
