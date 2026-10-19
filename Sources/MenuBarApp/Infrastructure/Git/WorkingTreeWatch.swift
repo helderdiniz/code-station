@@ -13,7 +13,9 @@ import SwiftUI
 // Most trees in the sidebar sit untouched for hours, so git only runs again for a tree
 // the file system says has changed. A linked worktree keeps its index and HEAD in the
 // main repository's git folder, outside the tree, so that folder is watched as well, or
-// a commit made in a terminal would go unseen.
+// a commit made in a terminal would go unseen. Events can still go missing, so a tree is
+// also read again whenever its watch starts over, and whenever an agent ends a turn in it,
+// since that is when agents commit.
 @MainActor
 @Observable
 final class WorkingTreeWatch {
@@ -103,8 +105,19 @@ final class WorkingTreeWatch {
         }
     }
 
+    // Reads the trees again now rather than on the next pass. Only trees a caller already
+    // asked about are read: the rest have nothing on screen to update.
+    func noteChanged(_ paths: some Collection<String>) {
+        let watched = paths.map(Self.normalized).filter { trees[$0] != nil }
+        for path in watched { trees[path]?.changed = true }
+        if !watched.isEmpty { refresh(watched) }
+    }
+
     private func restartEvents() {
         events = nil
+        // A stream drops the events it has not handed over yet when it is released, and
+        // the new one only sees what happens after it starts.
+        for path in trees.keys { trees[path]?.changed = true }
         let paths = trees.values.flatMap(\.realPaths)
         guard !paths.isEmpty else { return }
         events = FileEvents(paths: paths) { [weak self] changed, rescan in

@@ -131,6 +131,8 @@ final class SessionRunner {
     @ObservationIgnored private var waitWatchdogs: [UUID: Task<Void, Never>] = [:]
     @ObservationIgnored private let memoryLimit: () -> UInt64
     let followUps: SessionFollowUps
+    // Called once for every turn that ends, however it ended.
+    @ObservationIgnored var onTurnEnded: (UUID) -> Void = { _ in }
 
     // How a CLI says it no longer holds the conversation we asked to resume. Codex has
     // no such message: a thread it cannot find is a failed turn like any other.
@@ -2482,6 +2484,7 @@ final class SessionRunner {
         records[sessionID]?.startedGroups = carried
         cleanUp(turn)
         restorePreviousConversation(turn, status: status, sessionID: sessionID, store: store)
+        onTurnEnded(sessionID)
         // A review sent to the session is judged against the files as this turn left them,
         // and what the agent wrote is split into answers to its comments.
         if turn.summary == nil {

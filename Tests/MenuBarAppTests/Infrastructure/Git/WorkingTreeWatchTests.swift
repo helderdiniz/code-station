@@ -46,6 +46,47 @@ struct WorkingTreeWatchTests {
         }
     }
 
+    // Restarting the stream throws away events it had not handed over yet, so a tree
+    // already read is read again rather than trusted.
+    @Test func readsEveryTreeAgainWhenTheWatchStartsOver() async throws {
+        let first = ScratchDirectory(prefix: "working-tree-watch")
+        let second = ScratchDirectory(prefix: "working-tree-watch")
+        let inspections = InspectionCount(result: 0)
+        let watch = WorkingTreeWatch { path in
+            await inspections.inspect(path)
+        }
+
+        watch.refresh([first.url.path])
+        try await eventually {
+            inspections.count(of: first.url.path) == 1 && watch.hasInspected(first.url.path)
+        }
+
+        watch.refresh([first.url.path, second.url.path])
+        try await eventually {
+            inspections.count(of: first.url.path) == 2 && inspections.count(of: second.url.path) == 1
+        }
+    }
+
+    @Test func readsAWatchedTreeAgainAsSoonAsItIsMarkedChanged() async throws {
+        let watched = ScratchDirectory(prefix: "working-tree-watch")
+        let unwatched = ScratchDirectory(prefix: "working-tree-watch")
+        let inspections = InspectionCount(result: 0)
+        let watch = WorkingTreeWatch { path in
+            await inspections.inspect(path)
+        }
+
+        watch.refresh([watched.url.path])
+        try await eventually {
+            inspections.count(of: watched.url.path) == 1 && watch.hasInspected(watched.url.path)
+        }
+
+        watch.noteChanged([watched.url.path, unwatched.url.path])
+        try await eventually { inspections.count(of: watched.url.path) == 2 }
+        try await Task.sleep(for: .milliseconds(200))
+        #expect(inspections.count(of: unwatched.url.path) == 0)
+        #expect(!watch.hasInspected(unwatched.url.path))
+    }
+
     @Test func noticesLinkedWorktreeEditsStagingCommitsAndDeletion() async throws {
         let repo = try GitRepo()
         let scratch = ScratchDirectory(prefix: "working-tree-watch")
@@ -112,6 +153,7 @@ struct WorkingTreeWatchTests {
     private final class InspectionCount: @unchecked Sendable {
         private let lock = NSLock()
         private var count = 0
+        private var counts: [String: Int] = [:]
         let result: Int
         let delay: Duration
 
@@ -122,8 +164,16 @@ struct WorkingTreeWatchTests {
 
         var value: Int { lock.withLock { count } }
 
+        func count(of path: String) -> Int {
+            let key = URL(fileURLWithPath: path).standardizedFileURL.path
+            return lock.withLock { counts[key, default: 0] }
+        }
+
         func inspect(_ path: String) async -> Int {
-            lock.withLock { count += 1 }
+            lock.withLock {
+                count += 1
+                counts[path, default: 0] += 1
+            }
             try? await Task.sleep(for: delay)
             return result
         }

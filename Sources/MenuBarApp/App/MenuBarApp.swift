@@ -31,7 +31,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private let codex = CodexCodeManager()
     private let copilot = CopilotCodeManager()
     private let projects = ProjectStore()
-    private lazy var runner = SessionRunner(configs: store)
+    private lazy var runner: SessionRunner = {
+        let runner = SessionRunner(configs: store)
+        // Agents usually commit at the end of a turn, so the sidebar reads the session's
+        // folders again then instead of waiting for the file system to report it.
+        runner.onTurnEnded = { [projects, workingTrees] sessionID in
+            guard let session = projects.session(sessionID) else { return }
+            workingTrees.noteChanged(projects.workingDirectories(for: session))
+        }
+        return runner
+    }()
     private lazy var scheduledTasks = ScheduledTaskService(
         store: projects, runner: runner, agentAvatarName: { [appSettings] in appSettings.defaultAgentAvatarName })
     private let dictation = Dictation()
