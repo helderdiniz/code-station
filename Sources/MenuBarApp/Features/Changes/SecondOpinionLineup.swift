@@ -433,7 +433,8 @@ struct SecondOpinionLineupButton: View {
     @ViewBuilder
     private var words: some View {
         switch status {
-        case .ask, _ where shown == .rest:
+        case .ask,
+             _ where shown == .rest:
             if hovering && canAsk {
                 Text("Ask \(SecondOpinionLineup.names(lineup))").transition(wordsTransition)
             }
@@ -509,7 +510,8 @@ struct SecondOpinionLineupButton: View {
 
     private var accessibilityWords: String {
         switch status {
-        case .ask, _ where shown == .rest:
+        case .ask,
+             _ where shown == .rest:
             canAsk ? SecondOpinionLineup.names(lineup) : SecondOpinionLineup.installHint(author: author)
         case .reviewing(_, _, let pending):
             SecondOpinionLineup.readingWords(runs: runs) + (pending > 0 ? ", \(counted(pending, "finding")) so far" : "")
