@@ -327,14 +327,14 @@ private struct ThinkingBlock: View {
 // than sitting in a row of its own.
 private struct CopyPill: View {
     let text: String
-    let tooltip: String
+    let tooltip: Tooltip
 
     var body: some View {
-        CopyButton(size: 11) { text }
-            .frame(width: 24, height: 24)
-            .cardSurface(cornerRadius: 6)
+        CopyButton(size: TranscriptCopyButton.iconSize) { text }
+            .frame(width: TranscriptCopyButton.pillSize, height: TranscriptCopyButton.pillSize)
+            .cardSurface(cornerRadius: 7)
             .shadow(color: .black.opacity(0.08), radius: 2, y: 1)
-            .appTooltip(tooltip)
+            .appTooltip { tooltip }
     }
 }
 
@@ -359,6 +359,15 @@ private struct TranscriptCopyButton: ViewModifier {
     let inset: CGFloat
     var secondOpinion: (@MainActor () -> Void)?
 
+    static let pillSize: CGFloat = 28
+    static let iconSize: CGFloat = 13
+
+    private var copyTooltip: Tooltip {
+        Tooltip(title: tooltip,
+                subtitle: tooltip == "Copy code" ? "Puts this code block on the clipboard"
+                    : "Puts this message on the clipboard")
+    }
+
     func body(content: Content) -> some View {
         content
             // The pill can sit beyond the rendered text in a full-width frame. Keep the
@@ -374,15 +383,15 @@ private struct TranscriptCopyButton: ViewModifier {
                             // Asking and copying share one card, the reviewers first.
                             HStack(spacing: 0) {
                                 AnswerLineupButton(action: secondOpinion)
-                                Rectangle().fill(Theme.hairline).frame(width: 1, height: 14)
-                                CopyButton(size: 11) { text }
-                                    .frame(width: 24, height: 24)
-                                    .appTooltip(tooltip)
+                                Rectangle().fill(Theme.hairline).frame(width: 1, height: 16)
+                                CopyButton(size: Self.iconSize) { text }
+                                    .frame(width: Self.pillSize, height: Self.pillSize)
+                                    .appTooltip { copyTooltip }
                             }
-                            .cardSurface(cornerRadius: 6)
+                            .cardSurface(cornerRadius: 7)
                             .shadow(color: .black.opacity(0.08), radius: 2, y: 1)
                         } else {
-                            CopyPill(text: text, tooltip: tooltip)
+                            CopyPill(text: text, tooltip: copyTooltip)
                         }
                     }
                     .padding(inset)

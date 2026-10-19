@@ -538,16 +538,19 @@ struct AnswerLineupButton: View {
             deals += 1
             action()
         } label: {
-            LineupTiles(agents: lineup, size: 15, fanned: hovering, deals: deals)
-                .padding(.horizontal, 6)
-                .frame(minWidth: 24, minHeight: 24)
+            LineupTiles(agents: lineup, size: 18, fanned: hovering, deals: deals)
+                .padding(.horizontal, 7)
+                .frame(minWidth: 28, minHeight: 28)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
         .animation(HeaderMotion.grow, value: hovering)
-        .appTooltip(lineup.isEmpty ? "Get a second opinion on this answer"
-                    : "Ask \(SecondOpinionLineup.names(lineup)) about this answer")
+        .appTooltip {
+            Tooltip(title: "Get a second opinion",
+                    subtitle: lineup.isEmpty ? "Other agents review this answer"
+                        : "\(SecondOpinionLineup.names(lineup)) review this answer")
+        }
         .accessibilityLabel("Get a second opinion on this answer")
     }
 }
