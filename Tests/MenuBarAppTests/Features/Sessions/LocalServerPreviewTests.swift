@@ -814,9 +814,17 @@ struct LocalServerPreviewPageTests {
         for link in links {
             let pages = pane.previews.pages.count
             try pane.click(page.convert(CGPoint(x: 100, y: link.y), to: nil), holding: link.holding)
-            #expect(await waitUntil { pane.previews.pages.count == pages + 1 })
-            #expect(pane.previews.selected?.address.path == link.path)
+            try #require(await waitUntil { pane.previews.pages.count == pages + 1 })
+            let openedPage = try #require(pane.previews.selected)
+            #expect(openedPage.address.path == link.path)
+            // Adding the tab happens before SwiftUI mounts it and WebKit loads it.
+            // Let that finish before switching back to the page the next click targets.
+            try #require(await waitUntil {
+                openedPage.webView.window === pane.window
+                    && openedPage.phase == .showing && !openedPage.webView.isLoading
+            })
             pane.previews.select(pane.preview)
+            try #require(await waitUntil { page.window === pane.window })
             try await pane.settle()
         }
         try pane.click(page: CGPoint(x: 100, y: 440))
