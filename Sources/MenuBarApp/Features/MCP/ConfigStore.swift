@@ -224,9 +224,9 @@ final class ConfigStore {
         save()
     }
 
-    // Import one or more servers pasted as JSON. Accepts either the full
-    // { "mcpServers": { ... } } shape or a bare { "<name>": { ... } } map. The chosen
-    // environment covers every server in the paste that does not name one itself.
+    // Import one or more servers pasted as JSON, either as a bare { "<name>": { ... } } map
+    // or nested the way another tool keeps it. The chosen environment covers every server
+    // in the paste that does not name one itself.
     @discardableResult
     func importJSON(_ text: String, environment: String? = nil) throws -> Int {
         let trimmed = text.trimmed
@@ -234,10 +234,10 @@ final class ConfigStore {
         guard let root = try? JSONSerialization.jsonObject(with: Data(trimmed.utf8)) else {
             throw ImportError("That is not valid JSON.")
         }
-        guard var map = root as? [String: Any] else {
+        guard let object = root as? [String: Any] else {
             throw ImportError("Expected a JSON object, like { \"my-server\": { ... } }.")
         }
-        if map.count == 1, let inner = map["mcpServers"] as? [String: Any] { map = inner }
+        let map = Self.serverMap(in: object)
         guard !map.isEmpty else { throw ImportError("No servers found in the JSON.") }
 
         let entries: [String: ConfigFile.Entry]
@@ -263,6 +263,24 @@ final class ConfigStore {
         selectedID = entries.keys.min()
         save()
         return entries.count
+    }
+
+    // Claude and Cursor keep servers under "mcpServers", VS Code's mcp.json under
+    // "servers", and VS Code's settings under "mcp" > "servers" or the older
+    // "github.copilot.chat.mcp.servers". Whatever sits next to that key, such as VS Code's
+    // "inputs" or the rest of a settings file, is left behind. A value that is itself a
+    // server is a server that happens to share the key's name, so it is not unwrapped.
+    private static func serverMap(in root: [String: Any]) -> [String: Any] {
+        let paths = [["mcpServers"], ["servers"], ["mcp", "servers"],
+                     ["github.copilot.chat.mcp.servers"]]
+        for path in paths {
+            var node: Any? = root
+            for key in path { node = (node as? [String: Any])?[key] }
+            if let map = node as? [String: Any], map["command"] == nil, map["url"] == nil {
+                return map
+            }
+        }
+        return root
     }
 
     func remove(_ id: Server.ID) {

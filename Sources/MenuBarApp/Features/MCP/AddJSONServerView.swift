@@ -22,7 +22,7 @@ struct AddJSONServerView: View {
         VStack(spacing: 0) {
             VStack(alignment: .leading, spacing: 18) {
                 Text("Add MCP server").font(.serif(26, .semibold))
-                Text("Paste a server as JSON. Accepts a full \"mcpServers\" block or a bare \"name\": { … } map, for stdio or remote (url) servers.")
+                Text("Paste a server as JSON, for stdio or remote (url) servers. Accepts a bare \"name\": { … } map, or the setup snippet for Claude, Cursor or VS Code.")
                     .font(.system(size: 13))
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
