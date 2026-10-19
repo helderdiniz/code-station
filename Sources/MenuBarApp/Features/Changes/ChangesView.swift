@@ -75,9 +75,7 @@ struct ChangesView: View {
 
     @State private var copied: GitInspector.CopyVersion?
     @State private var copiedPath: String?
-    private var checkedAt: Date? { model.checkedAt }
     private var refreshFailed: Bool { model.refreshFailed }
-    @State private var feedback = ""
     private var latestCommit: GitCommitSummary? { model.latestCommit }
     @State private var openLatestCommit = false
     private var snapshot: GitSnapshot? { model.snapshot }
@@ -229,18 +227,6 @@ struct ChangesView: View {
                         .alignmentGuide(.top) { $0[.bottom] + 10 }
                     }
                     .zIndex(1)
-            }
-            if let checkedAt {
-                HStack {
-                    Text(feedback.isEmpty ? (mode == .changes ? "Last commit → Working tree" : "Commit history") : feedback)
-                    Spacer()
-                    if let working { Text(working) }
-                    Text(checkedAt, style: .relative)
-                    refreshButton
-                }
-                .font(.system(size: 11)).foregroundStyle(.secondary)
-                .padding(.horizontal, 20).padding(.vertical, 8)
-                .overlay(alignment: .top) { Rectangle().fill(Theme.hairline).frame(height: 1) }
             }
         }
         .background(Theme.background)
@@ -914,32 +900,6 @@ struct ChangesView: View {
         .appTooltip(file.path)
     }
 
-    private var refreshButton: some View {
-        Button {
-            Task {
-                await reload(fetchOrigin: true)
-                feedback = snapshot?.state != .ready ? "Could not read Git status. Try Refresh again."
-                    : refreshFailed ? "Remote refresh failed. Try Refresh again." : "Git status refreshed."
-                announce(feedback)
-            }
-        } label: {
-            Group {
-                if loading || loadingHistory {
-                    ChangesProgressLabel(title: "Refreshing…", compact: true)
-                } else {
-                    Image(systemName: "arrow.clockwise").font(.system(size: 11, weight: .semibold))
-                }
-            }
-            .foregroundStyle(.secondary)
-            .padding(9)
-            .fixedSize(horizontal: true, vertical: false)
-        }
-        .buttonStyle(.plain)
-        .disabled(busy)
-        .appTooltip("Refresh Git status")
-        .accessibilityLabel("Refresh Git status")
-    }
-
     private func showBranches(merging: Bool = false) {
         guard !busy else { return }
         let operationRoot = repoRoot
@@ -1005,8 +965,7 @@ struct ChangesView: View {
             if error == nil {
                 draft.didCommit()
                 commitSucceeded = true
-                feedback = fold ? "Commit amended locally. Ready to push." : "Committed locally. Ready to push."
-                announce(feedback)
+                announce(fold ? "Commit amended locally. Ready to push." : "Committed locally. Ready to push.")
             }
             await reload()
             working = nil
