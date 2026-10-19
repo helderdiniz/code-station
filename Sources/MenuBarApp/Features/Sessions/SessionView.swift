@@ -590,7 +590,7 @@ struct SessionView: View {
             case .conversation:
                 panelDock(session: session, project: project, showsWords: fit == .wide)
                     .transition(.opacity)
-            case .design, .changes:
+            case .design, .troubleshoot, .changes:
                 terminalDock(session: session, project: project, showsWord: fit == .wide)
                     .transition(.opacity)
             case .explorer:
@@ -598,7 +598,7 @@ struct SessionView: View {
                     .transition(.opacity)
                 terminalDock(session: session, project: project, showsWord: fit == .wide)
                     .transition(.opacity)
-            case .troubleshoot, .reviews:
+            case .reviews:
                 EmptyView()
             }
             if hasUtilities(session: session) {
@@ -644,8 +644,8 @@ struct SessionView: View {
 
     private var hasDock: Bool {
         switch tab {
-        case .conversation, .design, .changes, .explorer: true
-        case .troubleshoot, .reviews: false
+        case .conversation, .design, .troubleshoot, .changes, .explorer: true
+        case .reviews: false
         }
     }
 
