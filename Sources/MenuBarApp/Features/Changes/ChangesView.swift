@@ -89,12 +89,7 @@ struct ChangesView: View {
         nonmutating set { navigation.showingHistory = newValue == .history }
     }
     @State private var commitDraft: ChangesCommitDraft
-    private var commitMessage: String {
-        get { commitDraft.message }
-        nonmutating set { commitDraft.message = newValue }
-    }
     @FocusState private var commitFocused: Bool
-    @State private var committing = false
     @State private var commitSucceeded = false
     @FocusState private var pushFocused: Bool
     // Files the next commit leaves out. Tracking the exclusions rather than the picks
@@ -210,9 +205,7 @@ struct ChangesView: View {
                     }
                 }
             }
-            if let review, mode == .changes,
-               !files.isEmpty || !review.reviews.comments(review.sessionID).isEmpty
-                || !review.reviews.rounds(review.sessionID).isEmpty {
+            if let review, showsReviewStrip {
                 // The toast sits in a ZStack that is always there. When an overlay's
                 // content is a bare `if`, SwiftUI drops the overlay's alignment and the
                 // alignment guide, and the toast hangs down from the bar, off the screen.
@@ -231,6 +224,17 @@ struct ChangesView: View {
             }
         }
         .background(Theme.background)
+        // Without a review strip to hang from, the toast floats over the bottom of the pane.
+        .overlay(alignment: .bottom) {
+            ZStack {
+                if !showsReviewStrip, let toast {
+                    ReviewToastView(toast: toast) { self.toast = nil }
+                        .transition(.opacity)
+                        .id(toast.id)
+                }
+            }
+            .padding(.bottom, 16)
+        }
         .overlay(alignment: .top) {
             if loading && snapshot != nil {
                 Breathing { Rectangle().fill(Theme.accent) }
@@ -613,6 +617,12 @@ struct ChangesView: View {
         .background(Theme.card)
     }
 
+    private var showsReviewStrip: Bool {
+        guard let review, mode == .changes else { return false }
+        return !files.isEmpty || !review.reviews.comments(review.sessionID).isEmpty
+            || !review.reviews.rounds(review.sessionID).isEmpty
+    }
+
     private var navigatorFileCount: Int {
         repositories.reduce(0) { total, repository in
             total + ((repository.root == root ? snapshot : gitStats.snapshot(at: repository.root))?.files.count ?? 0)
@@ -917,75 +927,78 @@ struct ChangesView: View {
 
     // MARK: - Commit
 
+    private var commitBlocker: String? {
+        if files.contains(where: { $0.kind == .conflicted }) { return "Resolve conflicts to commit" }
+        return selectedFiles.isEmpty ? "Pick at least one file" : nil
+    }
+
     private var commitBar: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        HStack(spacing: 10) {
             Toggle(isOn: Binding(
                 get: { selectedFiles.count == files.count },
                 set: { on in excluded = on ? [] : Set(files.map(\.id)) }
             )) {
                 Text(selectedFiles.count == files.count
-                     ? "All \(counted(files.count, "file")) selected"
-                     : "\(selectedFiles.count) of \(files.count) files selected")
+                     ? "All \(counted(files.count, "file"))"
+                     : "\(selectedFiles.count) of \(files.count) files")
                     .font(.system(size: 12, weight: .medium))
             }.toggleStyle(.appCheckbox)
-            TextField("Write a commit message…", text: Binding(get: { commitMessage }, set: { commitMessage = $0 }), axis: .vertical)
-                .lineLimit(3...5).appTextField().focused($commitFocused)
-                .accessibilityLabel("Commit message for " + repositoryName)
-            HStack(spacing: 6) {
-                if canAmend {
-                    Toggle(isOn: Binding(get: { amend }, set: { amend = $0 })) {
-                        Text("Amend last commit").font(.system(size: 11))
-                    }.toggleStyle(.appCheckbox)
-                }
-                Spacer(minLength: 0)
-                Text(snapshot?.branch ?? "").font(.mono(10)).foregroundStyle(.secondary)
-                    .lineLimit(1).truncationMode(.middle).appTooltip(snapshot?.branch ?? "")
-            }
-            ActionButton(title: committing ? (amend ? "Amending…" : "Committing…")
-                            : "\(amend ? "Amend" : "Commit") \(counted(selectedFiles.count, "file"))",
-                         tone: .green, height: 34, icon: committing ? "hourglass" : nil,
-                         shortcut: committing ? nil : "⌘ ↵", fills: true) { commit() }
-                .disabled(busy || commitMessage.isBlank || selectedFiles.isEmpty || files.contains { $0.kind == .conflicted })
-                .motion(Motion.reveal, value: committing)
-            Text("Commits stay local until you push.").font(.system(size: 10)).foregroundStyle(.secondary)
-                .frame(maxWidth: .infinity)
+            Spacer(minLength: 0)
+            let conflicted = files.contains { $0.kind == .conflicted }
+            ActionButton(title: conflicted ? "Resolve conflicts to commit"
+                            : selectedFiles.isEmpty ? "Commit…" : "Commit \(counted(selectedFiles.count, "file"))…",
+                         tone: .green, height: 34) { openCommitDialog() }
+                .disabled(busy || commitBlocker != nil)
+                .focused($commitFocused)
+                .overlay(RoundedRectangle(cornerRadius: 8)
+                    .stroke(commitFocused ? Theme.accent : .clear, lineWidth: 2))
+                .appTooltip(commitBlocker ?? "Commit (⌘↵)")
+                .layoutPriority(1)
         }
         .padding(14).background(Theme.card).disabled(busy)
         .overlay(alignment: .top) { Rectangle().fill(Theme.hairline).frame(height: 1) }
     }
 
-    private func commit() {
-        let message = commitMessage.trimmed
+    private func openCommitDialog() {
         let chosen = selectedFiles
-        guard !message.isEmpty, !busy, !chosen.isEmpty, !files.contains(where: { $0.kind == .conflicted }) else { return }
-        let fold = amend
+        guard !busy, commitBlocker == nil, let snapshot else { return }
+        mode = .changes
         let operationRoot = repoRoot
-        let draft = commitDraft
-        committing = true
-        commitSucceeded = false
-        working = fold ? "Amending…" : "Committing…"
-        announce(working ?? "Committing…")
-        Task {
-            let error = await GitActions.commitSelected(message: message, files: chosen,
-                                                        amend: fold, at: operationRoot)
-            if error == nil {
-                draft.didCommit()
-                commitSucceeded = true
-                announce(fold ? "Commit amended locally. Ready to push." : "Committed locally. Ready to push.")
-            }
+        let dialog = CommitDialogModel(draft: commitDraft, files: chosen, canAmend: canAmend,
+                                       lastSubject: snapshot.lastCommitSubject) { message, files, amend in
+            working = amend ? "Amending…" : "Committing…"
+            announce(working ?? "Committing…")
+            let error = await GitActions.commitSelected(message: message, files: files,
+                                                        amend: amend, at: operationRoot)
             await reload()
             working = nil
-            committing = false
-            if let error {
-                dialogs.show(Dialog(
-                    title: fold ? "Could not amend" : "Could not create the commit",
-                    message: "Your message and selected files have been kept.\n\n" + error,
-                    actions: [
-                        .init(label: "Try again", kind: .primary, handler: { commit() }, isEnabled: { !busy }),
-                        .init(label: "Back to changes", kind: .cancel) { commitFocused = true }
-                    ], onCancel: { commitFocused = true }, width: 500, isModal: true, fitsWindow: true))
-                announce("Could not create the commit. Your draft and selection have been kept.")
+            if error != nil { announce("Could not create the commit. Your message has been kept.") }
+            return error
+        }
+        dialogs.show(Dialog(title: dialog.title, content: AnyView(
+            CommitDialogView(model: dialog, repository: repositoryName, branch: snapshot.branch) { amended in
+                didCommit(amended: amended)
+            }), actions: [], onCancel: { commitFocused = true },
+            width: 520, isModal: true, framesItself: true, fitsWindow: true, hugsContent: true,
+            canDismiss: { !dialog.isCommitting }))
+    }
+
+    private func didCommit(amended: Bool) {
+        commitSucceeded = true
+        let done = amended ? "Commit amended locally" : "Committed locally"
+        let push = snapshot?.remoteActions.first {
+            switch $0 {
+            case .push, .publish: true
+            case .pull: false
             }
+        }
+        switch push {
+        case .push(let count):
+            showToast(done, action: "Push \(counted(count, "commit"))") { if let snapshot { confirmPush(snapshot) } }
+        case .publish:
+            showToast(done, action: "Publish branch") { if let snapshot { confirmPush(snapshot) } }
+        default:
+            showToast(done)
         }
     }
 
@@ -1118,12 +1131,9 @@ struct ChangesView: View {
         }
     }
 
-    private func beginCommit(with chosen: [GitChange]? = nil) {
-        if let chosen {
-            excluded = Set(files.map(\.id)).subtracting(chosen.map(\.id))
-        }
-        mode = .changes
-        commitFocused = true
+    private func beginCommit(with chosen: [GitChange]) {
+        excluded = Set(files.map(\.id)).subtracting(chosen.map(\.id))
+        openCommitDialog()
     }
 
     @ViewBuilder private func counts(_ file: GitChange) -> some View {
@@ -1944,7 +1954,7 @@ struct ChangesView: View {
             return true
         }
         if flags == .command, event.keyCode == 36, mode == .changes {
-            commit()
+            openCommitDialog()
             return true
         }
         guard !WindowKeyHandler.isTyping(event.window?.firstResponder), let review, mode == .changes else { return false }
