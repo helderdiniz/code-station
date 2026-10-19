@@ -91,6 +91,7 @@ struct SidebarNavigationTests {
         // What the command palette does: the row is chosen from a screen of its own, so
         // the rail has to travel to it.
         harness.store.selectWorkspace(workspace.id)
+        #expect(harness.store.navigation.sidebarHighlight == workspace.id)
         // Caught inside the blink, so the snapshot shows the row wearing its green.
         try? await Task.sleep(for: .milliseconds(120))
         harness.hosting?.view.layoutSubtreeIfNeeded()
@@ -101,8 +102,6 @@ struct SidebarNavigationTests {
         let document = try #require(scroll.documentView)
         // The workspace sorts last, so the rail has to travel to the bottom of the list.
         #expect(scroll.documentVisibleRect.maxY >= document.bounds.maxY - 14)
-        #expect(harness.store.navigation.sidebarHighlight == workspace.id)
-
         #expect(await waitUntil { harness.store.navigation.sidebarHighlight == nil })
     }
 
