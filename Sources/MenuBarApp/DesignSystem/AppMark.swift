@@ -6,6 +6,7 @@ import SwiftUI
 // Dock icon that make-icon.swift still builds from it is the same mark.
 struct AppMark: View {
     static let tile = Theme.brand
+    static let edge = Color(red: 182 / 255, green: 185 / 255, blue: 59 / 255)
     static let dot = Color(red: 0.647, green: 0.655, blue: 0.227)
     static let accent = Color(red: 0.082, green: 0.082, blue: 0.082)
 

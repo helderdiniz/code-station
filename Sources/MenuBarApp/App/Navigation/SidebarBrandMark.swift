@@ -21,7 +21,8 @@ struct SidebarBrandMark: NSViewRepresentable {
 // Finite keyframes run in the render server. Neither the mark nor its surrounding
 // SwiftUI header needs a display timer, including while the pointer rests on it.
 final class SidebarBrandMarkView: NSView {
-    private let drawing = CALayer()
+    private let drawing = CATransformLayer()
+    private let edge = CAShapeLayer()
     private let tile = CAShapeLayer()
     private let ring = CAShapeLayer()
     private let brackets = CAShapeLayer()
@@ -33,15 +34,21 @@ final class SidebarBrandMarkView: NSView {
     override init(frame: NSRect) {
         super.init(frame: frame)
         wantsLayer = true
+        clipsToBounds = false
         layerContentsRedrawPolicy = .never
         layer?.addSublayer(drawing)
         drawing.bounds = CGRect(x: 0, y: 0, width: 100, height: 100)
+        drawing.addSublayer(edge)
         drawing.addSublayer(tile)
         drawing.addSublayer(ring)
         drawing.addSublayer(brackets)
         let inset = AppMark.margin * 100
         tile.path = CGPath(roundedRect: CGRect(x: inset, y: inset, width: 100 - inset * 2, height: 100 - inset * 2),
                            cornerWidth: AppMark.corner * 100, cornerHeight: AppMark.corner * 100, transform: nil)
+        edge.path = tile.path
+        edge.zPosition = -2
+        edge.opacity = 0
+        edge.fillColor = AppMark.edge.resolve(in: EnvironmentValues()).cgColor
         ring.fillColor = nil
         ring.lineWidth = 1.2
         brackets.fillColor = nil
@@ -95,7 +102,7 @@ final class SidebarBrandMarkView: NSView {
     override func viewDidChangeBackingProperties() {
         super.viewDidChangeBackingProperties()
         let scale = window?.backingScaleFactor ?? 2
-        ([drawing] + [tile, ring, brackets] + dots).forEach { $0.contentsScale = scale }
+        ([drawing] + [edge, tile, ring, brackets] + dots).forEach { $0.contentsScale = scale }
     }
 
     @objc private func visibilityChanged() {
@@ -104,7 +111,8 @@ final class SidebarBrandMarkView: NSView {
         if motion.update(input, at: CACurrentMediaTime()) { render() }
     }
 
-    func update(_ input: AppMarkMotion.Input, tile: CGColor, dot: Color.Resolved, accent: CGColor) {
+    func update(_ input: AppMarkMotion.Input, tile: CGColor, dot: Color.Resolved, accent: CGColor,
+                choose: ([AppMarkGesture]) -> AppMarkGesture = { $0.randomElement()! }) {
         dotColour = dot
         accentColour = accent
         LayerLoop.still {
@@ -113,7 +121,7 @@ final class SidebarBrandMarkView: NSView {
         }
         var input = input
         input.visible = window?.occlusionState.contains(.visible) == true
-        if motion.update(input, at: CACurrentMediaTime()) { render() }
+        if motion.update(input, at: CACurrentMediaTime(), choose: choose) { render() }
         else if motion.playback == nil { paint(.rest) }
     }
 
@@ -123,7 +131,7 @@ final class SidebarBrandMarkView: NSView {
     }
 
     private func render() {
-        ([drawing] + [ring, brackets] + dots).forEach { $0.removeAllAnimations() }
+        ([drawing] + [edge, ring, brackets] + dots).forEach { $0.removeAllAnimations() }
         let now = CACurrentMediaTime()
         guard let playback = motion.playback else { paint(.rest); return }
         let remaining = max(0, playback.start + playback.duration - now)
@@ -134,6 +142,7 @@ final class SidebarBrandMarkView: NSView {
             index == count ? playback.finalPose : playback.pose(at: now + remaining * Double(index) / Double(count))
         }
         animate(drawing, "transform", frames.map { NSValue(caTransform3D: transform($0)) }, duration: remaining)
+        animate(edge, "opacity", frames.map { $0.edgeOpacity }, duration: remaining)
         animate(ring, "path", frames.map { ringPath($0) }, duration: remaining)
         animate(ring, "opacity", frames.map { $0.ringOpacity }, duration: remaining)
         animate(brackets, "opacity", frames.map { $0.bracketsOpacity }, duration: remaining)
@@ -147,6 +156,7 @@ final class SidebarBrandMarkView: NSView {
     private func paint(_ pose: AppMarkPose) {
         LayerLoop.still {
             drawing.transform = transform(pose)
+            edge.opacity = Float(pose.edgeOpacity)
             ring.path = ringPath(pose)
             ring.opacity = Float(pose.ringOpacity)
             brackets.opacity = Float(pose.bracketsOpacity)
@@ -166,7 +176,7 @@ final class SidebarBrandMarkView: NSView {
         transform = CATransform3DRotate(transform, pose.tiltX * .pi / 180, 1, 0, 0)
         transform = CATransform3DRotate(transform, pose.tiltY * .pi / 180, 0, 1, 0)
         let scale = side / 100 * pose.scale
-        return CATransform3DScale(transform, scale, scale, 1)
+        return CATransform3DScale(transform, scale * pose.scaleX, scale * pose.scaleY, 1)
     }
 
     private func dotTransform(_ dot: AppMarkPose.Dot) -> CATransform3D {

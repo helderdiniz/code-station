@@ -2,6 +2,7 @@ import Foundation
 
 enum AppMarkGesture: CaseIterable {
     case ripple, magnetic, orbit, bloom
+    case elasticHello, gridShuffle, flipSide, secretHandshake
 
     var duration: TimeInterval {
         switch self {
@@ -9,6 +10,10 @@ enum AppMarkGesture: CaseIterable {
         case .magnetic: 0.3
         case .orbit: 1.2
         case .bloom: 1.4
+        case .elasticHello: 1.1
+        case .gridShuffle: 1.2
+        case .flipSide: 1.3
+        case .secretHandshake: 1.4
         }
     }
 
@@ -72,6 +77,58 @@ enum AppMarkGesture: CaseIterable {
             pose.bracketsOpacity = min(1, max(0, (envelope - 0.6) * 2.5)) * 0.8
             pose.scale += 0.045 * wave
             pose.rotation = 1.4 * wave
+        case .elasticHello:
+            pose.y = Self.keyed(t, [(0, 0), (0.14, 0.04), (0.37, -0.16), (0.60, 0),
+                                    (0.69, 0.03), (0.81, -0.03), (1, 0)])
+            pose.scaleX = Self.keyed(t, [(0, 1), (0.14, 1.10), (0.28, 0.94), (0.48, 0.98),
+                                         (0.65, 1.075), (0.81, 0.98), (1, 1)])
+            pose.scaleY = Self.keyed(t, [(0, 1), (0.14, 0.86), (0.28, 1.08), (0.48, 1.02),
+                                         (0.65, 0.92), (0.81, 1.02), (1, 1)])
+            pose.rotation = Self.keyed(t, [(0, 0), (0.14, -5), (0.37, -8), (0.58, 4), (0.72, -2), (1, 0)])
+            for i in pose.dots.indices {
+                let delay = i == 2 ? 0.075 : Double(i) * 0.004
+                let lift = Self.keyed(max(0, t - delay), [(0, 0), (0.16, 0.01), (0.39, -0.038),
+                                                         (0.59, 0.02), (0.73, -0.02), (0.9, 0), (1, 0)])
+                pose.dots[i].y += lift * (i == 2 ? 1.8 : 0.6)
+                pose.dots[i].stretch = 1 - lift * 2.5
+            }
+        case .gridShuffle:
+            for i in pose.dots.indices {
+                let row = i / 3
+                let column = i % 3
+                let local = min(1, max(0, (t - Double(row) * 0.046) / 0.908))
+                let exchange = Self.keyed(local, [(0, 0), (0.40, 1), (0.49, 1), (0.93, 0), (1, 0)])
+                let target = (column + (row == 1 ? -1 : 1) + 3) % 3
+                let arc = sin(.pi * exchange)
+                pose.dots[i].x += (AppMark.centres[target] - AppMark.centres[column]) * exchange
+                pose.dots[i].y += arc * (abs(target - column) > 1 ? -0.10 : 0.03) * (row == 1 ? -1 : 1)
+                pose.dots[i].shade = sin(.pi * local) * 0.18
+                pose.dots[i].radius *= 1 + arc * (i == 2 ? 0.07 : -0.035)
+            }
+        case .flipSide:
+            pose.tiltY = Self.keyed(t, [(0, 0), (0.14, -22), (0.62, 374), (0.78, 353), (0.90, 362), (1, 360)])
+            pose.tiltX = Self.keyed(t, [(0, 0), (0.14, 8), (0.40, -14), (0.67, 5), (1, 0)])
+            pose.rotation = Self.keyed(t, [(0, 0), (0.14, -3), (0.45, 7), (0.72, -2), (1, 0)])
+            pose.y = Self.keyed(t, [(0, 0), (0.14, 0.01), (0.40, -0.07), (0.68, 0), (0.82, -0.01), (1, 0)])
+            pose.edgeOpacity = 1
+            for i in pose.dots.indices {
+                let settle = sin(.pi * min(1, max(0, (t - 0.58 - Double(i) * 0.012) / 0.35)))
+                pose.dots[i].radius *= 1 + settle * 0.13
+            }
+        case .secretHandshake:
+            let envelope = Self.keyed(t, [(0, 0), (0.28, 1), (0.73, 1), (1, 0)])
+            let face = [(0.355, 0.41), (0.29, 0.55), (0.645, 0.41), (0.35, 0.63), (0.42, 0.68),
+                        (0.50, 0.695), (0.58, 0.68), (0.65, 0.63), (0.71, 0.55)]
+            for i in pose.dots.indices {
+                pose.dots[i].x += (face[i].0 - pose.dots[i].x) * envelope
+                pose.dots[i].y += (face[i].1 - pose.dots[i].y) * envelope
+                pose.dots[i].radius += ((i == 0 || i == 2 ? 0.061 : 0.028) - pose.dots[i].radius) * envelope
+                pose.dots[i].shade = (i == 0 ? 0.8 : 0.32) * envelope
+            }
+            let wink = Self.keyed(t, [(0, 0), (0.44, 0), (0.49, 1), (0.54, 1), (0.60, 0), (1, 0)])
+            pose.dots[2].stretch = 1 - wink * 0.8
+            pose.rotation = Self.keyed(t, [(0, 0), (0.30, -5), (0.53, -8), (0.70, -3), (1, 0)])
+            pose.y = -0.02 * envelope
         }
         return pose
     }
@@ -83,6 +140,15 @@ enum AppMarkGesture: CaseIterable {
     private static func smooth(_ progress: Double) -> Double {
         let t = min(1, max(0, progress))
         return t * t * (3 - 2 * t)
+    }
+
+    private static func keyed(_ progress: Double, _ points: [(Double, Double)]) -> Double {
+        for index in 1..<points.count where progress <= points[index].0 {
+            let (start, from) = points[index - 1]
+            let (end, to) = points[index]
+            return from + (to - from) * smooth((progress - start) / (end - start))
+        }
+        return points[points.count - 1].1
     }
 }
 
@@ -99,6 +165,8 @@ struct AppMarkPose: Equatable {
 
     var dots: [Dot]
     var scale = 1.0
+    var scaleX = 1.0
+    var scaleY = 1.0
     var rotation = 0.0
     var tiltX = 0.0
     var tiltY = 0.0
@@ -107,6 +175,7 @@ struct AppMarkPose: Equatable {
     var ringRadius = 0.07
     var ringOpacity = 0.0
     var bracketsOpacity = 0.0
+    var edgeOpacity = 0.0
 
     static var rest: Self {
         Self(dots: (0..<9).map { i in
@@ -119,9 +188,16 @@ struct AppMarkPose: Equatable {
         if progress <= 0 { return self }
         if progress >= 1 { return target }
         var result = self
-        for key in [\Self.scale, \.rotation, \.tiltX, \.tiltY, \.x, \.y,
-                    \.ringRadius, \.ringOpacity, \.bracketsOpacity] {
+        for key in [\Self.scale, \.scaleX, \.scaleY, \.x, \.y,
+                    \.ringRadius, \.ringOpacity, \.bracketsOpacity, \.edgeOpacity] {
             result[keyPath: key] += (target[keyPath: key] - self[keyPath: key]) * progress
+        }
+        // A full turn has the same resting angle. Interruptions take the short way home.
+        for key in [\Self.rotation, \.tiltX, \.tiltY] {
+            var delta = (target[keyPath: key] - self[keyPath: key]).truncatingRemainder(dividingBy: 360)
+            if delta > 180 { delta -= 360 }
+            if delta < -180 { delta += 360 }
+            result[keyPath: key] += delta * progress
         }
         for i in dots.indices {
             for key in [\Dot.x, \.y, \.radius, \.stretch, \.shade] {

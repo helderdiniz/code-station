@@ -5,7 +5,8 @@ import Testing
 
 @MainActor
 struct SidebarBrandMarkTests {
-    @Test func reduceMotionAndOcclusionRemoveEveryAnimation() throws {
+    @Test(arguments: AppMarkGesture.allCases)
+    func reduceMotionAndOcclusionRemoveEveryAnimation(_ gesture: AppMarkGesture) throws {
         let mark = SidebarBrandMarkView(frame: NSRect(x: 0, y: 0, width: 41, height: 41))
         let window = MarkVisibilityWindow(contentRect: NSRect(x: 0, y: 0, width: 100, height: 100),
                                           styleMask: [.borderless], backing: .buffered, defer: false)
@@ -15,12 +16,23 @@ struct SidebarBrandMarkTests {
         let environment = EnvironmentValues()
         func update(_ input: AppMarkMotion.Input) {
             mark.update(input, tile: AppMark.tile.resolve(in: environment).cgColor,
-                        dot: AppMark.dot.resolve(in: environment), accent: AppMark.accent.resolve(in: environment).cgColor)
+                        dot: AppMark.dot.resolve(in: environment), accent: AppMark.accent.resolve(in: environment).cgColor,
+                        choose: { _ in gesture })
         }
         let drawing = try #require(mark.layer?.sublayers?.first)
         let layers = [drawing] + (drawing.sublayers ?? [])
         update(.init(hovered: true))
         #expect(!(drawing.animationKeys() ?? []).isEmpty)
+        if gesture == .flipSide {
+            let edge = try #require(drawing.sublayers?.first)
+            #expect(edge.zPosition < 0)
+            let opacity = try #require(edge.animation(forKey: "opacity") as? CAKeyframeAnimation)
+            #expect(opacity.values?.contains { ($0 as? Double) == 1 } == true)
+            let turn = try #require(drawing.animation(forKey: "transform") as? CAKeyframeAnimation)
+            let transforms = try #require(turn.values as? [NSValue]).map(\.caTransform3DValue)
+            #expect(transforms.contains { $0.m11 < 0 })
+            #expect(transforms.last?.m11 == 0.41)
+        }
         for layer in layers {
             for key in layer.animationKeys() ?? [] {
                 let animation = try #require(layer.animation(forKey: key))
