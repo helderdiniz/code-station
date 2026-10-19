@@ -14,6 +14,7 @@ struct RootView: View {
     @Environment(SessionRunner.self) private var runner
     @Environment(MobileAccessController.self) private var mobileAccess
     @Environment(OrphanedWorktreeMonitor.self) private var orphanedWorktrees
+    @Environment(PullRequestReviewStore.self) private var pullRequestReviews
     @Environment(AppUpdateChecker.self) private var appUpdates
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var skills = SkillsManager()
@@ -138,6 +139,7 @@ struct RootView: View {
             .task(id: skillsRefreshRule) { await refreshSkillsAutomatically() }
             .task(id: sweepRule) { await deleteOldSessionsAutomatically() }
             .task(id: settings.autoPruneOrphanedWorktrees) { await monitorOrphanedWorktrees() }
+            .task { await pullRequestReviews.keepReading(store: store) }
     }
 
     // Keys the window answers wherever the focus is. They are drawn as buttons because a

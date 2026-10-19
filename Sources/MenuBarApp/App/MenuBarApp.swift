@@ -39,6 +39,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             guard let session = projects.session(sessionID) else { return }
             workingTrees.noteChanged(projects.workingDirectories(for: session))
         }
+        let afterTurn = runner.onTurnEnded
+        runner.onTurnEnded = { [pullRequestReviews] sessionID in
+            afterTurn(sessionID)
+            pullRequestReviews.turnEnded(sessionID)
+        }
         return runner
     }()
     private lazy var scheduledTasks = ScheduledTaskService(
@@ -53,6 +58,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         transcripts: projects.transcriptsURL,
         loaded: { [projects] in projects.loadedTranscript(of: $0) })
     private let orphanedWorktrees = OrphanedWorktreeMonitor()
+    private let pullRequestReviews = PullRequestReviewStore()
     private let gitStats = GitStatsCache()
     private let terminals = TerminalStore()
     private let explorerMemory = ExplorerMemory()
@@ -173,6 +179,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                     .environment(workingTrees)
                     .environment(sessionTimes)
                     .environment(orphanedWorktrees)
+                    .environment(pullRequestReviews)
                     .environment(gitStats)
                     .environment(terminals)
                     .environment(explorerMemory)

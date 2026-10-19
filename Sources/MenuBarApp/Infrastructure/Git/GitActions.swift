@@ -237,6 +237,53 @@ enum GitActions {
         }
     }
 
+    // Commits only the paths named. Nothing pending among them means the commit already
+    // went through on an earlier try, and whatever is owed is the push, not a second commit.
+    static func commitPaths(_ paths: [String], message: String, at root: String) async -> String? {
+        await perform(at: root) { tool, url in
+            let pending = GitInspector.run(tool, ["status", "--porcelain", "--"] + paths, in: url)
+            if pending.ok, pending.trimmedText.isEmpty { return pending }
+            let add = GitInspector.run(tool, ["add", "--"] + paths, in: url)
+            guard add.ok else { return add }
+            return GitInspector.run(tool, ["commit", "-m", message, "--"] + paths, in: url)
+        }
+    }
+
+    // Puts the paths named back the way HEAD has them. Tracked files are restored; a
+    // file that did not exist before is untracked and only clean removes it. Each
+    // command touches only the paths it is given.
+    static func restorePaths(_ paths: [String], at root: String) async -> String? {
+        await perform(at: root) { tool, url in
+            let restore = GitInspector.run(tool, ["restore", "--staged", "--worktree", "--"] + paths, in: url)
+            let clean = GitInspector.run(tool, ["clean", "-f", "--"] + paths, in: url)
+            return restore.ok || clean.ok ? clean : restore
+        }
+    }
+
+    static func originContains(_ repository: String, at root: String) async -> Bool {
+        guard let tool = await GitInspector.tool() else { return false }
+        let url = URL(fileURLWithPath: root)
+        let origin = await GitInspector.offMain { GitInspector.run(tool, ["remote", "get-url", "origin"], in: url) }
+        return origin.ok && origin.text.lowercased().contains(repository.lowercased())
+    }
+
+    // Keeps a folder out of `git status` without touching the repository's .gitignore.
+    // The exclude file is shared by every worktree of a repository.
+    static func excludeFromStatus(_ folder: String, at root: String) async {
+        guard let tool = await GitInspector.tool() else { return }
+        let url = URL(fileURLWithPath: root)
+        await GitInspector.offMain {
+            let path = GitInspector.run(tool, ["rev-parse", "--git-path", "info/exclude"], in: url)
+            guard path.ok else { return }
+            let exclude = URL(fileURLWithPath: path.trimmedText, relativeTo: url).standardizedFileURL
+            let existing = (try? String(contentsOf: exclude, encoding: .utf8)) ?? ""
+            guard !existing.split(whereSeparator: \.isNewline).contains(where: { $0 == folder }) else { return }
+            try? FileManager.default.createDirectory(at: exclude.deletingLastPathComponent(), withIntermediateDirectories: true)
+            let line = (existing.isEmpty || existing.hasSuffix("\n") ? "" : "\n") + folder + "\n"
+            try? (existing + line).write(to: exclude, atomically: true, encoding: .utf8)
+        }
+    }
+
     private static func perform(
         at root: String,
         _ work: @escaping @Sendable (GitInspector.GitTool, URL) -> GitInspector.CommandOutput

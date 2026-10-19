@@ -43,16 +43,20 @@ struct TerminalSessionTests {
         defer { session.stop() }
 
         session.send("exec \(shell)\r")
-        session.send("printf 'ready-%s\\n' 'for-paste'\r")
+        session.send("PS1='test-42> '; printf 'ready-%s\\n' 'for-paste'\r")
         #expect(await waitUntil { session.screenText().contains("ready-for-paste") })
+
+        func hasResult() -> Bool {
+            session.screenText().split(whereSeparator: \.isNewline).contains("42")
+        }
 
         session.paste("echo $((6 * 7))\necho pasted-tail")
         #expect(await waitUntil { session.screenText().contains("pasted-tail") },
                 "the whole command reaches the prompt")
-        #expect(!session.screenText().contains("42"), "nothing ran")
+        #expect(!hasResult(), "nothing ran")
 
         session.send("\r")
-        #expect(await waitUntil { session.screenText().contains("42") },
+        #expect(await waitUntil { hasResult() },
                 "Enter runs the pasted command")
     }
 

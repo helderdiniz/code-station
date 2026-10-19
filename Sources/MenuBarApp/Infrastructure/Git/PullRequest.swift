@@ -16,6 +16,15 @@ struct PullRequest: Codable, Equatable, Sendable {
         guard parts.count >= 3 else { return nil }
         return String(parts[parts.count - 3])
     }
+
+    // The pieces `gh api` wants: the host it is on and the account before the repository.
+    var host: String? { URL(string: url)?.host }
+
+    var owner: String? {
+        let parts = url.split(separator: "/")
+        guard parts.count >= 4 else { return nil }
+        return String(parts[parts.count - 4])
+    }
 }
 
 enum PullRequestScanner {
@@ -43,13 +52,20 @@ enum PullRequestScanner {
     // A session that opened pull requests before the app watched for them still has the
     // lines that say so in its transcript. One session can open several - one per
     // checkout of a workspace, or one per round of work - and they are all its work, so
-    // they are all kept, in the order they were opened.
+    // they are all kept, in the order they were opened. A pull request the person
+    // pointed the session at by its link is the session's work too: that is what they
+    // sat down to deal with.
     static func find(in session: ChatSession) -> [PullRequest] {
         var found: [PullRequest] = []
-        for tool in session.messages.flatMap(\.tools) {
-            guard tool.input.contains(opening), let result = tool.result else { continue }
-            guard let pullRequest = scan(result) else { continue }
-            found.append(pullRequest)
+        for message in session.messages {
+            if message.role == .user, let pointed = scan(message.text) {
+                found.append(pointed)
+            }
+            for tool in message.tools {
+                guard tool.input.contains(opening), let result = tool.result else { continue }
+                guard let pullRequest = scan(result) else { continue }
+                found.append(pullRequest)
+            }
         }
         return found.deduplicatedByURL()
     }
