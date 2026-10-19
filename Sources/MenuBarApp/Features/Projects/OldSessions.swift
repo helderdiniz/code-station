@@ -16,11 +16,16 @@ enum OldSessions {
     // sheet can leave it out and keep showing what a snooze has taken from the count.
     typealias SnoozeDeadline = (ChatSession) -> Date?
 
+    // A pinned session is never old: pinning is how a session is kept for good, so the
+    // sheet, the sidebar count and the sweep all leave it out.
     static func olderThan(_ days: Int, in sessions: [ChatSession], now: Date = Date(),
                           snoozedUntil: SnoozeDeadline = { _ in nil }) -> [ChatSession] {
         let cutoff = now.addingTimeInterval(-Double(days) * 86_400)
         return sessions
-            .filter { $0.lastActivity < cutoff && !ProjectSnooze.isActive(snoozedUntil($0), now: now) }
+            .filter {
+                !$0.isPinned && $0.lastActivity < cutoff
+                    && !ProjectSnooze.isActive(snoozedUntil($0), now: now)
+            }
             .sorted { $0.lastActivity < $1.lastActivity }
     }
 
@@ -38,7 +43,8 @@ enum OldSessions {
     static func nextOldAt(_ days: Int, in sessions: [ChatSession], now: Date = Date(),
                           snoozedUntil: SnoozeDeadline = { _ in nil }) -> Date? {
         let age = Double(days) * 86_400
-        let turningOld = sessions.map { $0.lastActivity.addingTimeInterval(age) }
+        let turningOld = sessions.filter { !$0.isPinned }
+            .map { $0.lastActivity.addingTimeInterval(age) }
         let waking = sessions.compactMap(snoozedUntil)
         return (turningOld + waking)
             .filter { $0 > now }

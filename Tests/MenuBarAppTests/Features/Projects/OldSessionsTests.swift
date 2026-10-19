@@ -41,6 +41,16 @@ struct OldSessionsTests {
         #expect(OldSessions.olderThan(1, in: [session(daysAgo: 24.01 / 24)], now: now).count == 1)
     }
 
+    @Test func aPinnedSessionIsNeverOld() {
+        var pinned = session(daysAgo: 30)
+        pinned.isPinned = true
+        #expect(OldSessions.olderThan(7, in: [pinned], now: now).isEmpty)
+
+        var turningOld = session(daysAgo: 6.5)
+        turningOld.isPinned = true
+        #expect(OldSessions.nextOldAt(7, in: [turningOld], now: now) == nil)
+    }
+
     @Test func findsWhenTheNextSessionBecomesOld() {
         let alreadyOld = session(daysAgo: 10)
         let next = session(daysAgo: 6.5)

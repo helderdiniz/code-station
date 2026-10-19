@@ -78,7 +78,7 @@ enum OldSessionSweep {
                     isBusy: (UUID) -> Bool, isOpen: (UUID) -> Bool,
                     snoozedUntil: OldSessions.SnoozeDeadline = { _ in nil }) -> [ChatSession] {
         OldSessions.olderThan(days, in: sessions, now: now, snoozedUntil: snoozedUntil)
-            .filter { !$0.isPinned && !isBusy($0.id) && !isOpen($0.id) }
+            .filter { !isBusy($0.id) && !isOpen($0.id) }
     }
 
     @discardableResult

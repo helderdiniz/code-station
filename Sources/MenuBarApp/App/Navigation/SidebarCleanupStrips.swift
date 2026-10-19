@@ -170,7 +170,6 @@ final class OldSessionsWatch {
         struct Session: Equatable {
             let id: UUID
             let isBusy: Bool
-            let isPinned: Bool
         }
 
         let days: Int
@@ -190,8 +189,7 @@ final class OldSessionsWatch {
                                                snoozedUntil: { store.snoozeDeadline(for: $0) })
                 .map {
                     RefreshRule.Session(id: $0.id,
-                                        isBusy: runner.isBusy($0.id, store: store),
-                                        isPinned: $0.isPinned)
+                                        isBusy: runner.isBusy($0.id, store: store))
                 },
             nextOldAt: OldSessions.nextOldAt(days, in: sessions,
                                              snoozedUntil: { store.snoozeDeadline(for: $0) }))
