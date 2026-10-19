@@ -23,6 +23,7 @@ struct SidebarBrandMark: NSViewRepresentable {
 final class SidebarBrandMarkView: NSView {
     private let drawing = CATransformLayer()
     private let edge = CAShapeLayer()
+    private let face = CALayer()
     private let tile = CAShapeLayer()
     private let ring = CAShapeLayer()
     private let brackets = CAShapeLayer()
@@ -39,9 +40,13 @@ final class SidebarBrandMarkView: NSView {
         layer?.addSublayer(drawing)
         drawing.bounds = CGRect(x: 0, y: 0, width: 100, height: 100)
         drawing.addSublayer(edge)
-        drawing.addSublayer(tile)
-        drawing.addSublayer(ring)
-        drawing.addSublayer(brackets)
+        // Keep the artwork on one flat face so 3D depth sorting cannot hide
+        // the dots behind the tile.
+        face.frame = drawing.bounds
+        drawing.addSublayer(face)
+        face.addSublayer(tile)
+        face.addSublayer(ring)
+        face.addSublayer(brackets)
         let inset = AppMark.margin * 100
         tile.path = CGPath(roundedRect: CGRect(x: inset, y: inset, width: 100 - inset * 2, height: 100 - inset * 2),
                            cornerWidth: AppMark.corner * 100, cornerHeight: AppMark.corner * 100, transform: nil)
@@ -64,7 +69,7 @@ final class SidebarBrandMarkView: NSView {
         brackets.path = path
         for dot in dots {
             dot.path = CGPath(ellipseIn: CGRect(x: -1, y: -1, width: 2, height: 2), transform: nil)
-            drawing.addSublayer(dot)
+            face.addSublayer(dot)
         }
         setAccessibilityElement(false)
     }
@@ -102,7 +107,7 @@ final class SidebarBrandMarkView: NSView {
     override func viewDidChangeBackingProperties() {
         super.viewDidChangeBackingProperties()
         let scale = window?.backingScaleFactor ?? 2
-        ([drawing] + [edge, tile, ring, brackets] + dots).forEach { $0.contentsScale = scale }
+        ([drawing, face] + [edge, tile, ring, brackets] + dots).forEach { $0.contentsScale = scale }
     }
 
     @objc private func visibilityChanged() {

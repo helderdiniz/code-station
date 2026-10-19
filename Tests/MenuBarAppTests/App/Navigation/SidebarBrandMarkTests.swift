@@ -20,7 +20,7 @@ struct SidebarBrandMarkTests {
                         choose: { _ in gesture })
         }
         let drawing = try #require(mark.layer?.sublayers?.first)
-        let layers = [drawing] + (drawing.sublayers ?? [])
+        let layers = descendants(of: drawing)
         update(.init(hovered: true))
         #expect(!(drawing.animationKeys() ?? []).isEmpty)
         if gesture == .flipSide {
@@ -59,6 +59,49 @@ struct SidebarBrandMarkTests {
         mark.removeFromSuperview()
         #expect(mark.motion.playback == nil)
         #expect(layers.allSatisfy { ($0.animationKeys() ?? []).isEmpty })
+    }
+
+    @Test(arguments: [AppMarkGesture.magnetic, .flipSide])
+    func tiltedArtworkStaysOnOneFaceAfterPlayback(_ gesture: AppMarkGesture) throws {
+        let mark = SidebarBrandMarkView(frame: NSRect(x: 0, y: 0, width: 41, height: 41))
+        let window = MarkVisibilityWindow(contentRect: NSRect(x: 0, y: 0, width: 100, height: 100),
+                                          styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView?.addSubview(mark)
+        defer { window.close() }
+        mark.layoutSubtreeIfNeeded()
+        let environment = EnvironmentValues()
+        let pointer = CGPoint(x: 1, y: -1)
+        mark.update(.init(hovered: true, pointer: pointer), tile: AppMark.tile.resolve(in: environment).cgColor,
+                    dot: AppMark.dot.resolve(in: environment), accent: AppMark.accent.resolve(in: environment).cgColor,
+                    choose: { _ in gesture })
+
+        let drawing = try #require(mark.layer?.sublayers?.first as? CATransformLayer)
+        let surfaces = try #require(drawing.sublayers)
+        #expect(surfaces.count == 2)
+        let edge = try #require(surfaces.first as? CAShapeLayer)
+        let face = try #require(surfaces.last)
+        #expect(!(face is CATransformLayer))
+        #expect(face.frame == drawing.bounds)
+        #expect(!face.masksToBounds)
+        #expect(edge.zPosition < face.zPosition)
+        let artwork = try #require(face.sublayers)
+        #expect(artwork.count == 12)
+        #expect(artwork.allSatisfy { $0.zPosition == 0 && $0.contentsScale == drawing.contentsScale })
+        let dots = try #require(Array(artwork.suffix(9)) as? [CAShapeLayer])
+        let finalPose = gesture.pose(at: 1, pointer: pointer)
+
+        // Completed keyframes are removed by Core Animation. The held artwork must
+        // come from the model layers, without relying on animation fill modes.
+        for layer in descendants(of: drawing) { layer.removeAllAnimations() }
+        for (dot, pose) in zip(dots, finalPose.dots) {
+            #expect(dot.position == CGPoint(x: pose.x * 100, y: pose.y * 100))
+            #expect(abs(dot.transform.m11 - pose.radius * 100) < 0.000001)
+            #expect(abs(dot.transform.m22 - pose.radius * pose.stretch * 100) < 0.000001)
+            #expect(dot.opacity == 1)
+            #expect(dot.fillColor != nil)
+        }
+        #expect(mark.motion.pose(at: CACurrentMediaTime() + 30) == finalPose)
     }
 
     @Test(arguments: [ColorScheme.light, .dark])
@@ -112,6 +155,10 @@ struct SidebarBrandMarkTests {
         #expect(!mark.isAccessibilityElement())
         mark.removeFromSuperview()
         window.close()
+    }
+
+    private func descendants(of layer: CALayer) -> [CALayer] {
+        [layer] + (layer.sublayers ?? []).flatMap { descendants(of: $0) }
     }
 }
 
