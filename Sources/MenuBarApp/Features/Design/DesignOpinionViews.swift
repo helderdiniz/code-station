@@ -67,7 +67,7 @@ struct DesignOpinionAsk: View {
         SecondOpinionAskView(
             message: "Agents that did not draw this design look at every screen and pin notes where they see a problem. You pick which notes go back.",
             safety: "They look and read. They cannot change the design or use your MCP servers.",
-            author: author, installed: installed, lineup: $lineup,
+            author: author, authorDid: "drew this design", installed: installed, lineup: $lineup,
             choices: {
                 DesignOpinionChoices(screenCount: screenCount, focus: $focus, reading: $reading)
             },

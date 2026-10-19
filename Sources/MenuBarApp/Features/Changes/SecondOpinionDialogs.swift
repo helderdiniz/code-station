@@ -174,38 +174,40 @@ private struct DialogFrame<Trailing: View, Content: View, Footer: View>: View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(alignment: .top, spacing: 12) {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(title).font(.serif(18, .semibold))
+                    Text(title).font(.serif(20, .semibold))
                         .fixedSize(horizontal: false, vertical: true)
                         .accessibilityAddTraits(.isHeader)
-                    Text(message).font(.system(size: 12.5)).foregroundStyle(.secondary)
+                    Text(message).font(.system(size: 12.5)).foregroundStyle(Theme.secondaryText)
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 Spacer(minLength: 0)
                 trailing()
-                Button { dialogs.dismiss() } label: {
-                    Image(systemName: "xmark").font(.system(size: 11, weight: .semibold)).foregroundStyle(.secondary)
-                        .frame(width: 26, height: 26).contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .keyboardShortcut(escapeCloses ? .cancelAction : nil)
-                .accessibilityLabel("Close")
             }
             .padding(.horizontal, 22).padding(.top, 20)
             content()
-            HStack(spacing: 12) { footer() }
-                .padding(.leading, 22).padding(.trailing, 16).padding(.vertical, 12)
+            HStack(spacing: 8) { footer() }
+                .padding(.leading, 22).padding(.trailing, 14).padding(.vertical, 12)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .background(Theme.field.opacity(0.5))
+                .background(Theme.field)
                 .overlay(alignment: .top) { Rectangle().fill(Theme.hairline).frame(height: 1) }
         }
         .background(Theme.card)
+        // No dialog draws a close button, so Escape is the way out that every one of
+        // them shares, held by a button nobody sees.
+        .background {
+            Button { dialogs.dismiss() } label: { EmptyView() }
+                .buttonStyle(.plain)
+                .keyboardShortcut(escapeCloses ? .cancelAction : nil)
+                .opacity(0)
+                .accessibilityHidden(true)
+        }
     }
 }
 
-private struct FieldLabel: View {
+private struct SectionTitle: View {
     let title: String
     var body: some View {
-        Text(title.uppercased()).font(.system(size: 10.5, weight: .semibold)).foregroundStyle(.tertiary)
+        Text(title).font(.system(size: 12.5, weight: .semibold))
             .accessibilityAddTraits(.isHeader)
     }
 }
@@ -222,9 +224,13 @@ struct SecondOpinionAskView<Choices: View>: View {
     let message: String
     let safety: String
     let author: SecondOpinion.Reviewer
+    // What the author did, after its name in the lineup's top row.
+    var authorDid = "wrote these changes"
     let installed: [AgentKind]
     var running: Set<SecondOpinion.Reviewer> = []
     @Binding var lineup: [SecondOpinion.Reviewer]
+    // Nothing is ticked to look for, so there is nothing to ask for yet.
+    var needsFocus = false
     @ViewBuilder let choices: Choices
     let ask: () -> Void
 
@@ -242,49 +248,35 @@ struct SecondOpinionAskView<Choices: View>: View {
             EmptyView()
         } content: {
             VStack(alignment: .leading, spacing: 18) {
-                writtenBy
                 VStack(alignment: .leading, spacing: 8) {
-                    HStack {
-                        FieldLabel(title: "Who reads it")
+                    HStack(alignment: .firstTextBaseline) {
+                        SectionTitle(title: "Reviewers")
                         Spacer(minLength: 0)
                         if !lineup.isEmpty && lineup == usual {
-                            Label("Your usual lineup", systemImage: "checkmark")
-                                .font(.system(size: 11)).foregroundStyle(.secondary)
+                            Label("Your usual reviewers", systemImage: "checkmark")
+                                .font(.system(size: 11.5)).foregroundStyle(Theme.secondaryText)
                         } else if !lineup.isEmpty {
-                            InlineLink(title: "Make this my usual", size: 11) {
+                            InlineLink(title: "Make this my usual", size: 11.5) {
                                 Preferences.setSecondOpinionLineup(lineup)
                                 usual = lineup
                             }
                             .appTooltip("Open with these reviewers, models and effort next time")
                         }
                     }
-                    if installed.isEmpty {
-                        Text("No agent CLI is installed to ask.").font(.system(size: 12)).foregroundStyle(.secondary)
-                    }
-                    ForEach(Array(lineup.enumerated()), id: \.offset) { index, seat in
-                        seatRow(seat, at: index)
-                    }
-                    HStack(spacing: 10) {
-                        addReviewer
-                        if lineup.count > 1 {
-                            Text("They read side by side, so more costs no extra time.")
-                                .font(.system(size: 11)).foregroundStyle(.tertiary)
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
-                    }
+                    reviewers
                 }
                 choices
                 HStack(alignment: .top, spacing: 8) {
-                    Image(systemName: "checkmark.shield").foregroundStyle(Theme.accent)
+                    Image(systemName: "checkmark.shield").font(.system(size: 12)).foregroundStyle(Theme.accent)
+                        .accessibilityHidden(true)
                     Text(safety)
-                        .font(.system(size: 11.5)).foregroundStyle(.secondary)
+                        .font(.system(size: 11.5)).foregroundStyle(Theme.secondaryText)
                         .fixedSize(horizontal: false, vertical: true)
                     Spacer(minLength: 0)
                 }
-                .padding(10)
-                .background(RoundedRectangle(cornerRadius: 8).fill(Theme.field))
+                .padding(.top, 2)
             }
-            .padding(.horizontal, 22).padding(.vertical, 16)
+            .padding(.horizontal, 22).padding(.top, 18).padding(.bottom, 18)
         } footer: {
             footer
         }
@@ -300,18 +292,56 @@ struct SecondOpinionAskView<Choices: View>: View {
 
     // MARK: Pieces
 
-    private var writtenBy: some View {
-        HStack(spacing: 8) {
-            ReviewAvatar(agent: author.agent, size: 20)
-            (Text("Written by ").foregroundColor(.secondary) + Text(author.agent.title).fontWeight(.semibold))
-                .font(.system(size: 12))
-            Spacer(minLength: 8)
-            Text(authorSetting).font(.system(size: 11.5)).foregroundStyle(.secondary).lineLimit(1)
+    // The author on top, then each seat, then the way to add one, all in one box split
+    // by hairlines, so each seat reads against the author it is measured from.
+    private var reviewers: some View {
+        VStack(spacing: 0) {
+            authorRow
+            ForEach(Array(lineup.enumerated()), id: \.offset) { index, seat in
+                hairline
+                seatRow(seat, at: index)
+            }
+            hairline
+            if installed.isEmpty {
+                (Text("No agent is installed to ask. ").fontWeight(.semibold).foregroundColor(.primary)
+                 + Text("Install \(otherAgents), then open this again."))
+                    .font(.system(size: 12)).foregroundStyle(Theme.secondaryText)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 12).padding(.vertical, 14)
+            } else {
+                addReviewer
+            }
         }
-        .padding(.horizontal, 10).frame(height: 34)
-        .background(RoundedRectangle(cornerRadius: 8).fill(Theme.sunken))
+        .background(Theme.field.opacity(0.5), in: RoundedRectangle(cornerRadius: 10))
+        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Theme.border))
+    }
+
+    private var hairline: some View {
+        Rectangle().fill(Theme.hairline).frame(height: 1)
+    }
+
+    private var otherAgents: String {
+        let others = AgentKind.allCases.filter { $0 != author.agent }.map(\.title)
+        guard others.count > 1 else { return others.first ?? "an agent" }
+        return others.dropLast().joined(separator: ", ") + " or " + others.last!
+    }
+
+    private var authorRow: some View {
+        HStack(spacing: 10) {
+            ReviewAvatar(agent: author.agent, size: 22).opacity(0.8)
+                .frame(width: 26)
+            (Text(author.agent.title).fontWeight(.semibold).foregroundColor(.primary) + Text(" " + authorDid))
+                .font(.system(size: 12)).foregroundStyle(Theme.secondaryText)
+                .lineLimit(1)
+            Spacer(minLength: 8)
+            Text(authorSetting).font(.system(size: 11.5)).foregroundStyle(Theme.secondaryText).lineLimit(1)
+        }
+        .padding(.horizontal, 12).frame(height: 42)
+        .background(Theme.sunken)
         .accessibilityElement(children: .combine)
-        .appTooltip("How independent each reviewer is, is measured against this")
+        .appTooltip("Each reviewer's independence is measured against this")
     }
 
     private var authorSetting: String {
@@ -324,42 +354,45 @@ struct SecondOpinionAskView<Choices: View>: View {
         let independence = SecondOpinion.independence(of: seat, from: author)
         let busy = running.contains(seat)
         let flagged = independence == .sameModel
-        return VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 8) {
-                ReviewAvatar(agent: seat.agent, size: 26)
-                VStack(alignment: .leading, spacing: 0) {
+        return HStack(spacing: 10) {
+            ReviewAvatar(agent: seat.agent, size: 26)
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
                     Text(seat.agent.title).font(.system(size: 12.5, weight: .semibold))
                     if seat.agent == author.agent {
-                        Text("Fresh start, without this conversation").font(.system(size: 10.5)).foregroundStyle(.secondary)
+                        Text("fresh start, without this conversation")
+                            .font(.system(size: 11, weight: .medium)).foregroundStyle(Theme.secondaryText)
+                            .truncationMode(.tail)
                     }
                 }
                 .lineLimit(1)
-                Spacer(minLength: 6)
-                if busy {
-                    Text("Reviewing now").font(.system(size: 11)).foregroundStyle(.tertiary)
+                HStack(spacing: 7) {
+                    IndependenceMeter(independence: independence)
+                    Text(independence.line)
+                        .font(.system(size: 11))
+                        .foregroundStyle(flagged ? Theme.attentionText : Theme.secondaryText)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
-                modelMenu(seat, at: index)
-                effortMenu(seat, at: index)
-                GlyphButton(icon: "xmark", side: 22) { lineup.remove(at: index) }
-                    .appTooltip("Remove")
-                    .accessibilityLabel("Remove \(seat.label(modelTitle: runner.modelTitle))")
+                .accessibilityElement(children: .combine)
             }
-            HStack(spacing: 8) {
-                IndependenceMeter(independence: independence)
-                Text(independence.line)
-                    .font(.system(size: 11))
-                    .foregroundStyle(flagged ? Theme.attentionText : Color.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 6)
+            if busy {
+                Text("Reviewing now").font(.system(size: 11)).foregroundStyle(.tertiary)
+            } else {
+                HStack(spacing: 6) {
+                    modelMenu(seat, at: index)
+                    effortMenu(seat, at: index)
+                    GlyphButton(icon: "xmark", side: 22) { lineup.remove(at: index) }
+                        .appTooltip("Remove")
+                        .accessibilityLabel("Remove \(seat.label(modelTitle: runner.modelTitle))")
+                }
             }
-            .padding(.leading, 34)
-            .accessibilityElement(children: .combine)
         }
-        .padding(10)
-        .background(RoundedRectangle(cornerRadius: 10).fill(flagged ? Theme.attention.opacity(0.08) : Theme.card))
-        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(flagged ? Theme.attention.opacity(0.5) : Theme.border))
+        .padding(.leading, 12).padding(.trailing, 10).padding(.vertical, 10)
+        .background(flagged ? Theme.attention.opacity(0.08) : .clear)
         .opacity(busy ? 0.6 : 1)
         .accessibilityElement(children: .contain)
-        .accessibilityLabel(seat.label(modelTitle: runner.modelTitle))
+        .accessibilityLabel(seat.label(modelTitle: runner.modelTitle) + (busy ? ", reviewing now" : ""))
     }
 
     private func modelMenu(_ seat: SecondOpinion.Reviewer, at index: Int) -> some View {
@@ -408,17 +441,26 @@ struct SecondOpinionAskView<Choices: View>: View {
         .accessibilityLabel("Effort: \(title)")
     }
 
+    // The last row of the box. `appMenu` brings the button itself, so the row is only
+    // its label.
     private var addReviewer: some View {
         let full = lineup.count >= SecondOpinion.Reviewer.maxSeats
-        return HStack(spacing: 5) {
+        return HStack(spacing: 10) {
             Image(systemName: "plus").font(.system(size: 10, weight: .bold))
-            Text("Add a reviewer").font(.system(size: 12, weight: .semibold))
+                .frame(width: 26)
+            Text(full ? "Four reviewers at most" : "Add a reviewer").font(.system(size: 12, weight: .semibold))
+            Spacer(minLength: 8)
+            if !full {
+                Text(lineup.count > 1 ? "They read side by side, so more costs no extra time" : "Up to four")
+                    .font(.system(size: 11)).foregroundStyle(.tertiary)
+                    .lineLimit(1)
+            }
         }
-        .foregroundStyle(full ? Color.secondary : Color.primary)
-        .padding(.horizontal, 10).frame(height: 28)
-        .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Theme.border, style: StrokeStyle(lineWidth: 1, dash: [4, 3])))
-        .contentShape(RoundedRectangle(cornerRadius: 8))
-        .fixedSize()
+        .foregroundStyle(full ? Color.secondary.opacity(0.7) : Theme.accent)
+        .padding(.horizontal, 12).frame(height: 38)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contentShape(Rectangle())
+        .hoverFill(cornerRadius: 0)
         .appMenu {
             installed.map { agent in
                 MenuEntry.item(agent == author.agent ? agent.title + " fresh start" : agent.title,
@@ -428,10 +470,9 @@ struct SecondOpinionAskView<Choices: View>: View {
                 }
             }
         }
-        .disabled(full || installed.isEmpty)
-        .opacity(full ? 0.5 : 1)
+        .disabled(full)
         .appTooltip(full ? "Four reviewers at most" : "Add another agent, or the same one on another model")
-        .accessibilityLabel("Add a reviewer")
+        .accessibilityLabel(full ? "Four reviewers at most" : "Add a reviewer")
         .accessibilityAddTraits(.isButton)
     }
 
@@ -454,12 +495,15 @@ struct SecondOpinionAskView<Choices: View>: View {
 
     @ViewBuilder private var footer: some View {
         let minutes = chosen.map { SecondOpinion.minutes(for: $0.effort) }.max() ?? 0
-        Text(minutes > 0 ? "About \(minutes) min. You can keep working." : "You can keep working while they read.")
-            .font(.system(size: 11.5)).foregroundStyle(.tertiary)
+        Text(installed.isEmpty ? "Install an agent to ask for a review."
+             : minutes > 0 ? "About \(minutes) min. You can keep working." : "You can keep working while they read.")
+            .font(.system(size: 11)).foregroundStyle(Theme.secondaryText)
+            .lineLimit(1)
         Spacer(minLength: 0)
-        InlineLink(title: "Cancel", tint: Color.secondary) { dialogs.dismiss() }
-        ActionButton(title: askTitle, tone: .green, height: 32, size: 12.5, keyboardShortcut: .defaultAction, action: ask)
-            .disabled(chosen.isEmpty)
+        ActionButton(title: "Cancel", tone: .sunken, height: 32, size: 12.5) { dialogs.dismiss() }
+        ActionButton(title: needsFocus ? "Pick what to look for" : askTitle, tone: .green, height: 32, size: 12.5,
+                     shortcut: "↩", keyboardShortcut: .defaultAction, action: ask)
+            .disabled(chosen.isEmpty || needsFocus)
     }
 
     private var askTitle: String {
@@ -477,7 +521,7 @@ struct SecondOpinionSection<Content: View>: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            FieldLabel(title: title)
+            SectionTitle(title: title)
             content
         }
     }
@@ -497,6 +541,7 @@ struct ChangesOpinionAsk: View {
     @State private var lineup: [SecondOpinion.Reviewer]
     @State private var focus: Set<SecondOpinion.Focus>
     @State private var scope: SecondOpinionScopeChoice
+    @Namespace private var track
 
     init(author: SecondOpinion.Reviewer, installed: [AgentKind], running: Set<SecondOpinion.Reviewer>,
          lineup: [SecondOpinion.Reviewer], focus: Set<SecondOpinion.Focus>, scope: SecondOpinionScopeChoice,
@@ -518,32 +563,56 @@ struct ChangesOpinionAsk: View {
         SecondOpinionAskView(
             message: "Agents that did not write these changes read them on their own and leave findings. You decide which ones reach \(author.agent.title).",
             safety: "Reviewers can read files but not change them, and run without your MCP servers. They see the diff, not this conversation.",
-            author: author, installed: installed, running: running, lineup: $lineup,
+            author: author, installed: installed, running: running, lineup: $lineup, needsFocus: focus.isEmpty,
             choices: {
+                // Several can be ticked at once, so these are checkboxes; filled pills
+                // would read as a choice of one.
                 SecondOpinionSection(title: "What to look for") {
-                    FlowRow(spacing: 6) {
-                        ForEach(SecondOpinion.Focus.allCases, id: \.self) { item in
-                            ChoicePill(title: item.title, selected: focus.contains(item)) {
-                                if !focus.insert(item).inserted { focus.remove(item) }
+                    Grid(alignment: .leading, horizontalSpacing: 22, verticalSpacing: 9) {
+                        ForEach(Array(stride(from: 0, to: SecondOpinion.Focus.allCases.count, by: 3)), id: \.self) { start in
+                            GridRow {
+                                ForEach(SecondOpinion.Focus.allCases.dropFirst(start).prefix(3), id: \.self) { item in
+                                    Toggle(isOn: Binding(get: { focus.contains(item) },
+                                                         set: { on in if on { focus.insert(item) } else { focus.remove(item) } })) {
+                                        Text(item.title).font(.system(size: 12.5))
+                                    }
+                                    .toggleStyle(.appCheckbox)
+                                }
                             }
-                            .accessibilityAddTraits(focus.contains(item) ? .isSelected : [])
                         }
                     }
                 }
                 SecondOpinionSection(title: "Which changes") {
-                    HStack(spacing: 4) {
-                        ChoicePill(title: "All \(counted(fileCount, "file"))", selected: scope == .all) { scope = .all }
-                        if let fileName {
-                            ChoicePill(title: fileName, selected: scope == .file) { scope = .file }
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack(spacing: 2) {
+                            scopePill("All \(counted(fileCount, "file"))", .all)
+                            if let fileName { scopePill(fileName, .file) }
+                            scopePill("Since your last review", .sinceReview, enabled: canReadSince)
+                                .appTooltip(canReadSince ? "Only what changed after the last review was sent"
+                                            : "Once you have sent a review, a reviewer can read only what changed after it")
                         }
-                        ChoicePill(title: "Since your last review", selected: scope == .sinceReview,
-                                   enabled: canReadSince) { scope = .sinceReview }
-                            .appTooltip(canReadSince ? "Only what changed after the last review was sent"
-                                        : "Once you have sent a review, a reviewer can read only what changed after it")
+                        .padding(2)
+                        .fieldSurface(cornerRadius: 10)
+                        .fixedSize()
+                        .accessibilityElement(children: .contain)
+                        .accessibilityLabel("Which changes")
+                        if !canReadSince {
+                            Text("Since your last review opens up once you send one.")
+                                .font(.system(size: 11)).foregroundStyle(.tertiary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
                     }
                 }
             },
             ask: { ask(lineup, focus, scope) })
+    }
+
+    private func scopePill(_ title: String, _ choice: SecondOpinionScopeChoice, enabled: Bool = true) -> some View {
+        ChoicePill(title: title, selected: scope == choice, enabled: enabled, thumb: track) {
+            withAnimation(Motion.control) { scope = choice }
+        }
+        .accessibilityLabel(title)
+        .accessibilityAddTraits(scope == choice ? .isSelected : [])
     }
 }
 

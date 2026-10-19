@@ -70,7 +70,7 @@ struct ChatOpinionAsk: View {
                 ? "Agents that did not write this plan check it before anything changes. You pick which points reach \(author.agent.title)."
                 : "Agents that did not write this answer check it on their own. You pick which points reach \(author.agent.title).",
             safety: "Read-only, and without your MCP servers. \(author.agent.title) sees nothing they say until you send it.",
-            author: author, installed: installed, lineup: $lineup,
+            author: author, authorDid: "wrote this \(subject.noun)", installed: installed, lineup: $lineup,
             choices: {
                 ChatOpinionChoices(authorTitle: author.agent.title, focus: $focus, reading: $reading,
                                    noun: subject.noun)
