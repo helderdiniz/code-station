@@ -34,21 +34,26 @@ struct TerminalSessionTests {
         })
     }
 
-    // What the link on a command's output does. The command has to arrive whole and run
-    // nothing: without bracketed paste the shell takes each newline as a return and runs
-    // every line but the last on the way in.
-    @Test func pastesACommandAtThePromptWithoutRunningIt() async {
+    // Each newline must reach the line editor as text rather than Enter, including in
+    // shells that do not support bracketed paste.
+    @Test(arguments: ["/bin/bash --noprofile --norc -i", "/bin/zsh -f -i"])
+    func pastesACommandAtThePromptWithoutRunningIt(shell: String) async {
         let session = makeSession()
         session.start()
         defer { session.stop() }
 
-        session.send("echo at-the-prompt\r")
-        #expect(await waitUntil { session.screenText().contains("at-the-prompt") })
+        session.send("exec \(shell)\r")
+        session.send("printf 'ready-%s\\n' 'for-paste'\r")
+        #expect(await waitUntil { session.screenText().contains("ready-for-paste") })
 
         session.paste("echo $((6 * 7))\necho pasted-tail")
         #expect(await waitUntil { session.screenText().contains("pasted-tail") },
                 "the whole command reaches the prompt")
         #expect(!session.screenText().contains("42"), "nothing ran")
+
+        session.send("\r")
+        #expect(await waitUntil { session.screenText().contains("42") },
+                "Enter runs the pasted command")
     }
 
     @Test func drainsOutputLargerThanTheBufferWithoutLosingTheEnd() async {

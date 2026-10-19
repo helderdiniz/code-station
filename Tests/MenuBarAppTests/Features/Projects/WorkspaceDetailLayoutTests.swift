@@ -57,6 +57,8 @@ struct WorkspaceDetailLayoutTests {
 
         // The smallest window is 960 points wide and the sidebar takes 318 of them.
         let pane: CGFloat = 600
-        #expect(hosting.sizeThatFits(in: CGSize(width: pane, height: 900)).width <= pane)
+        // Text and edges can round to the next backing pixel during measurement.
+        let pixel = 1 / window.backingScaleFactor
+        #expect(hosting.sizeThatFits(in: CGSize(width: pane, height: 900)).width <= pane + pixel)
     }
 }

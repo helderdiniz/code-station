@@ -44,6 +44,32 @@ struct TranscriptWindow: Equatable {
     }
 }
 
+struct LoadEarlierMessages: View {
+    let hiddenCount: Int
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 7) {
+                Image(systemName: "arrow.up")
+                Text("Load earlier messages")
+                Text("\(hiddenCount) hidden")
+                    .foregroundStyle(.secondary)
+            }
+            .font(.system(size: 12, weight: .semibold))
+            .foregroundStyle(Theme.accent)
+            .padding(.horizontal, 12)
+            .frame(height: 34)
+            .cardSurface(cornerRadius: 8)
+            .contentShape(RoundedRectangle(cornerRadius: 8))
+        }
+        .buttonStyle(.plain)
+        .hoverLift()
+        .frame(maxWidth: .infinity)
+        .accessibilityLabel("Load earlier messages, \(hiddenCount) hidden")
+    }
+}
+
 // Content growth and a person scrolling up both move the transcript's bottom marker.
 // AppKit's live-scroll notifications separate those cases, so streaming can keep its
 // place without taking the scroll position back from someone reading an earlier line.

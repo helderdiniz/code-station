@@ -385,6 +385,120 @@ struct MarkdownBlockTests {
             for: root, roots: ["/work/app"], fileExists: { _ in true }) == nil)
     }
 
+    // Markdown already links a bare address it can read, so linkingLocalServers only meets
+    // one it cannot, such as an IPv6 host.
+    @Test func linksALocalServerWithoutThePunctuationAroundIt() {
+        let text = AttributedString.inlineMarkdown("""
+            [http://localhost:3000](http://localhost:3000/login) or `http://localhost:3000` to see it. \
+            It is up (http://[::1]:8000/admin). Also http://[::1]:3000/. Open `http://localhost:3000`—it \
+            works, “http://[::1]:5173/” or `http://localhost:8000`…
+            """)
+
+        let linked = text.linkingLocalServers()
+
+        #expect(String(linked.characters) == String(text.characters))
+        #expect(linked.runs.compactMap(\.link).map(\.absoluteString) == [
+            "http://localhost:3000/login", "http://localhost:3000", "http://[::1]:8000/admin",
+            "http://[::1]:3000/", "http://localhost:3000", "http://[::1]:5173/", "http://localhost:8000",
+        ])
+    }
+
+    @Test func leavesCommandsAndOtherAddressesAlone() {
+        let text = AttributedString.inlineMarkdown(
+            "Run `curl http://localhost:3000/health` first. See localhost:3000, `http://localhost.example.com`, "
+                + "`http://app.localhost:3000`, `http://0.0.0.0:8000` and `https://example.com`.")
+
+        #expect(text.linkingLocalServers() == text)
+    }
+
+    @Test func recognizesOnlyServersOnThisMachine() {
+        let local = ["http://localhost:3000", "https://127.0.0.1/", "http://[::1]:5173/", "HTTP://LOCALHOST:3000/"]
+        let elsewhere = ["https://example.com", "http://localhost.example.com", "http://0.0.0.0:8000",
+                         "ftp://localhost", "file:///tmp/index.html"]
+
+        #expect(local.allSatisfy { TranscriptLink.isLocalServer(URL(string: $0)!) })
+        #expect(!elsewhere.contains { TranscriptLink.isLocalServer(URL(string: $0)!) })
+    }
+
+    // The Preview seat brings back the app the conversation last linked: the last address on
+    // this machine the transcript links, whoever wrote it and in whatever case. An address in a
+    // code block or a command stays code there, and instructions are plain text, so neither counts.
+    @Test func findsTheRunningAppTheConversationLastLinked() {
+        let messages = [
+            ChatMessage(role: .assistant, text: "The API is up at `http://localhost:8000/`."),
+            ChatMessage(role: .user, text: """
+                The page at http://localhost:5173/checkout is blank:
+                ```
+                GET http://localhost:5173/api/cart 500
+                ```
+                """),
+            ChatMessage(role: .instructions, text: "The app runs at http://localhost:3000."),
+            ChatMessage(role: .assistant, text: """
+                The settings page is at **http://localhost:5173/settings**.
+                ```
+                Local: http://localhost:5173/
+                ```
+                Check it with `curl http://localhost:5173/health`.
+                The fix is in [the pull request](https://example.com/pull/1).
+                """),
+        ]
+        let latest = { (messages: [ChatMessage]) in TranscriptLink.latestLocalServer(in: messages)?.absoluteString }
+
+        #expect(latest(messages) == "http://localhost:5173/settings")
+        #expect(latest(Array(messages.prefix(3))) == "http://localhost:5173/checkout")
+        #expect(latest(Array(messages.prefix(1))) == "http://localhost:8000/")
+        #expect(latest([ChatMessage(role: .assistant, text: "Sign in at [the app](http://localhost:3000/login).")])
+                == "http://localhost:3000/login")
+        #expect(latest([ChatMessage(role: .assistant, text: "It is up at [the app](HTTP://LOCALHOST:5173/).")])
+                == "HTTP://LOCALHOST:5173/")
+    }
+
+    // LinkedApp reads on from the reply being written, through a prompt queued behind it in the
+    // same update, a note added during its turn and a rewind that leaves a note in its place.
+    @Test func keepsUpWithTheAppTheConversationLinks() {
+        let prompt = ChatMessage(role: .user, text: "Start the app.")
+        var reply = ChatMessage(role: .assistant, text: "Starting it.")
+        var linked = LinkedApp()
+        linked.read([prompt, reply])
+        #expect(linked.address == nil)
+
+        reply.text += " It runs at http://localhost:5173/."
+        let queued = ChatMessage(role: .user, text: "Now the settings page.")
+        var next = ChatMessage(role: .assistant)
+        linked.read([prompt, reply, queued, next])
+        #expect(linked.address?.absoluteString == "http://localhost:5173/")
+        let note = ChatMessage(role: .system, text: "Plan mode is on.")
+        linked.read([prompt, reply, queued, next, note])
+        #expect(linked.address?.absoluteString == "http://localhost:5173/")
+        next.text = "It is at http://localhost:5173/settings."
+        linked.read([prompt, reply, queued, next, note])
+        #expect(linked.address?.absoluteString == "http://localhost:5173/settings")
+        linked.read([prompt, reply, ChatMessage(role: .system, text: "Conversation rewound.")])
+        #expect(linked.address?.absoluteString == "http://localhost:5173/")
+    }
+
+    // Only the session's own conversation has a preview to open, so the same text stays plain
+    // anywhere else. Code stays code, in a block or in a prompt the person sent.
+    @Test(arguments: [false, true])
+    @MainActor func linksLocalServersOnlyWherePreviewsAreOn(previews: Bool) throws {
+        func storage(_ view: some View) throws -> NSTextStorage {
+            let host = NSHostingView(rootView: view.environment(TooltipPresenter())
+                .environment(\.previewsLocalServers, previews))
+            host.frame = CGRect(x: 0, y: 0, width: 400, height: 100)
+            host.layoutSubtreeIfNeeded()
+            return try #require(host.descendants.compactMap { $0 as? NSTextView }.first?.textStorage)
+        }
+        let paragraph = try storage(MarkdownBlockView(
+            block: MarkdownBlock(id: 0, kind: .paragraph("Running at `http://localhost:3000`.")),
+            projectPath: "/tmp", textScale: 1))
+
+        #expect(hasLink(paragraph) == previews)
+        #expect(paragraph.string == "Running at http://localhost:3000.")
+        #expect(!hasLink(try storage(MarkdownCodeBlock(segment: MessageSegment(
+            id: 0, text: "npm run dev\n  Local: http://localhost:5173/", isCode: true)))))
+        #expect(!hasLink(try storage(SentPromptText(text: "Why is `http://localhost:3000` blank?"))))
+    }
+
     @Test @MainActor func givesWrappedLinkedListTextItsFullHeight() throws {
         let wrappedItem = MarkdownListItem(
             depth: 0,

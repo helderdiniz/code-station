@@ -164,7 +164,16 @@ final class TerminalSession: Identifiable {
                 try? await Task.sleep(for: .milliseconds(50))
             }
             guard isRunning else { return }
-            send(terminal.bracketedPasteMode ? "\u{1b}[200~\(text)\u{1b}[201~" : text)
+            if terminal.bracketedPasteMode {
+                send("\u{1b}[200~\(text)\u{1b}[201~")
+            } else {
+                // Older line editors use Control-V to insert control characters literally.
+                // Sending a bare newline would run part of the command before Enter.
+                let quoted = text.unicodeScalars.map { scalar in
+                    scalar.value < 32 || scalar.value == 127 ? "\u{16}\(scalar)" : String(scalar)
+                }.joined()
+                send(quoted)
+            }
         }
     }
 

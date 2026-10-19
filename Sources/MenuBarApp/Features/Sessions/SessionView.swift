@@ -1,6 +1,25 @@
 import AppKit
 import SwiftUI
 
+// Only what changed is read, so the transcript is not searched on every redraw.
+struct LinkedApp: Equatable {
+    private(set) var address: URL?
+    private var lastSeen: UUID?
+
+    mutating func read(_ messages: [ChatMessage]) {
+        if let lastSeen, let end = messages.lastIndex(where: { $0.id == lastSeen }) {
+            // Of the messages already read, only the reply being written can still link
+            // anything, and it can grow in the same update that adds messages after it.
+            let start = messages[...end].lastIndex(where: { $0.role == .assistant }) ?? end + 1
+            address = TranscriptLink.latestLocalServer(in: Array(messages[start...])) ?? address
+        } else {
+            // After a rewind the message last read is gone, so everything is read again.
+            address = TranscriptLink.latestLocalServer(in: messages)
+        }
+        lastSeen = messages.last?.id
+    }
+}
+
 // The detail pane for one Claude Code conversation: the transcript or the working tree
 // diff, with a real shell docked underneath. The terminal shares the screen rather
 // than replacing it, so a build and what the agent did are one glance apart.
@@ -55,6 +74,10 @@ struct SessionView: View {
     @State private var workingSetVisible: Bool
     @State private var requestedChange: RequestedChange?
     @State private var explorerReveal: ExplorerReveal?
+    @State private var previews = LocalServerPreviewTabs()
+    @State private var previewFocused = false
+    @State private var previewAddressFocused = false
+    @State private var linkedApp = LinkedApp()
     // False until this session's transcript has been scrolled to its end. The pane is
     // rebuilt per session, so it starts false on every switch without being reset.
     @State private var opened = false
@@ -171,7 +194,10 @@ struct SessionView: View {
                                                  selectedRoot: Binding(get: { projectDirectory }, set: { root in
                                                      selectWorkspaceRoot(root, in: session)
                                                  }), navigation: changesNavigation,
-                                                 reviewSent: { tab = .conversation })
+                                                 reviewSent: {
+                                                     tab = .conversation
+                                                     previews.hide()
+                                                 })
                             if let reviewingEnding,
                                reviewingEnding == runner.lastTurnEnding(sessionID)?.ended,
                                !runner.state(sessionID).isBusy {
@@ -258,12 +284,23 @@ struct SessionView: View {
                     }
                 }
             }
-            .onDisappear { findMonitors.forEach { $0.stop() } }
+            .onDisappear {
+                findMonitors.forEach { $0.stop() }
+                // A closed page stops following its loads, so it cannot be shown again.
+                previews.closeAll()
+            }
             .onChange(of: transcriptFind.isPresented ? session.messages : []) {
                 transcriptFind.refresh(in: session.messages)
             }
             .onChange(of: terminalFocused) { _, focused in
                 if focused { composerFocused = false }
+            }
+            // The reply is found by role, as a note the app adds can land below it.
+            .onChange(of: session.messages.last?.id, initial: true) {
+                linkedApp.read(session.messages)
+            }
+            .onChange(of: session.messages.last(where: { $0.role == .assistant })?.text) {
+                linkedApp.read(session.messages)
             }
             .onChange(of: tab, initial: true) {
                 store.noteSessionTab(openedDestination, for: sessionID)
@@ -456,6 +493,7 @@ struct SessionView: View {
         return HStack(spacing: 9) {
             SessionAgentIndicator(session: session) { target in
                 tab = .conversation
+                previews.hide()
                 transcriptWindow.reveal(target.messageID, in: session.messages)
                 transcriptPinnedToBottom = false
                 agentFocus = target
@@ -554,7 +592,8 @@ struct SessionView: View {
     // None of these sends you anywhere: they open a panel beside the pane and leave what
     // you were reading where it was. Keeping them off the tab deck is what gives the gap
     // between the two its meaning - inside the deck you choose where to be, outside it
-    // you open something next to where you already are.
+    // you open something next to where you already are. Preview is the exception, as it
+    // puts the running app in the conversation's place.
     private func panelDock(session: ChatSession, project: Project,
                            showsWords: Bool) -> some View {
         let directory = session.worktreePath ?? project.path
@@ -563,6 +602,7 @@ struct SessionView: View {
         // them out of the dock. They fade rather than vanish, so the dock reads as
         // shrinking instead of jumping.
         return HeaderRailDock {
+            previewSeat(session, showsWord: showsWords)
             if tab == .conversation {
                 // The glyph toggles the drawer; the other ways to reach a shell sit behind
                 // the chevron, so the most common one is a single click.
@@ -599,8 +639,8 @@ struct SessionView: View {
                }]
     }
 
-    // Find has nothing to search while a Design is on screen. It stays in the dock,
-    // greyed out, so the seats beside it do not shift when designing starts or stops.
+    // Find has nothing to search while a Design or a running app is on screen. It stays in
+    // the dock, greyed out, so the seats beside it do not shift when either comes or goes.
     private func findSeat(_ session: ChatSession, showsWord: Bool) -> some View {
         let isOpen = tab == .conversation && transcriptFind.isPresented
         return HeaderDockSeat(icon: "magnifyingglass",
@@ -617,7 +657,30 @@ struct SessionView: View {
                 $findFocused.request()
             }
         }
-        .disabled(session.isActivelyDesigning)
+        .disabled(session.isActivelyDesigning || previews.isOpen)
+    }
+
+    // Placed first: the rail keeps to the trailing edge, so the other seats do not move.
+    @ViewBuilder
+    private func previewSeat(_ session: ChatSession, showsWord: Bool) -> some View {
+        if !session.isActivelyDesigning,
+           let address = previews.selected?.address ?? linkedApp.address {
+            let isOpen = tab == .conversation && previews.isOpen
+            let pages = previews.pages.count
+            HeaderDockSeat(icon: "globe",
+                           word: "Preview",
+                           isOpen: isOpen,
+                           count: pages > 1 ? pages : nil,
+                           showsWord: showsWord,
+                           detail: "The running app at \(LocalServerPreview.label(for: address))") {
+                if isOpen {
+                    closePreview()
+                } else {
+                    tab = .conversation
+                    if previews.pages.isEmpty { previews.open(address) } else { previews.show() }
+                }
+            }
+        }
     }
 
     private func workingSetSeat(_ session: ChatSession, showsWord: Bool) -> some View {
@@ -1090,7 +1153,8 @@ struct SessionView: View {
     // Only the conversation is searched: the other tabs are either a file view with a
     // find of its own or a pane with no transcript in it.
     private func canFindInChat(_ session: ChatSession) -> Bool {
-        tab == .conversation && !session.isActivelyDesigning && dialogs.current == nil
+        tab == .conversation && !session.isActivelyDesigning && !previews.isOpen
+            && dialogs.current == nil
     }
 
     private var findMonitors: [WindowKeyMonitor] { [findMonitor, commandFindMonitor] }
@@ -1143,7 +1207,8 @@ struct SessionView: View {
         let target = visibleConversationID
         let state = runner.state(target)
         if state.isBusy, state != .stopping, dialogs.current == nil, !menus.isOpen,
-           !terminalFocused, !recapOpen, !commandPalette.isPresented, !findFocused {
+           !terminalFocused, !previewFocused, !recapOpen, !commandPalette.isPresented,
+           !findFocused, !previewAddressFocused {
             Button("") { runner.stop(target) }
                 .keyboardShortcut(.escape, modifiers: [])
                 .opacity(0)
@@ -1153,7 +1218,8 @@ struct SessionView: View {
     // The visible card has the first claim on Escape. In particular, closing a recap that
     // is being refreshed must not also stop the agent turn doing the refresh.
     @ViewBuilder private var recapShortcut: some View {
-        if recapOpen, dialogs.current == nil, !menus.isOpen, !terminalFocused, !findFocused {
+        if recapOpen, dialogs.current == nil, !menus.isOpen, !terminalFocused, !previewFocused,
+           !findFocused, !previewAddressFocused {
             Button("") { closeRecap() }
                 .keyboardShortcut(.escape, modifiers: [])
                 .opacity(0)
@@ -1298,14 +1364,22 @@ struct SessionView: View {
 
     private func conversation(session: ChatSession, project: Project) -> some View {
         GeometryReader { geometry in
-            let isDocked = geometry.size.width >= 800
+            // A running app has the conversation floating over it, reading every press around
+            // it, so the drawer sits beside the app rather than over the two.
+            let isDocked = geometry.size.width >= 800 || previews.isOpen
             ZStack(alignment: .trailing) {
-                conversationContent(session: session, project: project)
-                    .padding(.trailing,
-                             isDocked && workingSetVisible ? SessionWorkingSet.width : 0)
-                    // The transcript takes its final width in one layout pass. Animating
-                    // that width makes every line wrap again on every animation frame.
-                    .animation(nil, value: workingSetVisible)
+                Group {
+                    if previews.isOpen, let preview = previews.selected {
+                        previewPage(preview, session: session)
+                    } else {
+                        conversationContent(session: session, project: project)
+                    }
+                }
+                .padding(.trailing,
+                         isDocked && workingSetVisible ? SessionWorkingSet.width : 0)
+                // The transcript takes its final width in one layout pass. Animating
+                // that width makes every line wrap again on every animation frame.
+                .animation(nil, value: workingSetVisible)
 
                 ZStack(alignment: .trailing) {
                     if workingSetVisible {
@@ -1526,24 +1600,7 @@ struct SessionView: View {
 
             let hiddenCount = transcriptWindow.hiddenCount(totalCount: session.messages.count)
             if hiddenCount > 0 {
-                Button(action: loadEarlier) {
-                    HStack(spacing: 7) {
-                        Image(systemName: "arrow.up")
-                        Text("Load earlier messages")
-                        Text("\(hiddenCount) hidden")
-                            .foregroundStyle(.secondary)
-                    }
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(Theme.accent)
-                    .padding(.horizontal, 12)
-                    .frame(height: 34)
-                    .cardSurface(cornerRadius: 8)
-                    .contentShape(RoundedRectangle(cornerRadius: 8))
-                }
-                .buttonStyle(.plain)
-                .hoverLift()
-                .frame(maxWidth: .infinity)
-                .accessibilityLabel("Load earlier messages, \(hiddenCount) hidden")
+                LoadEarlierMessages(hiddenCount: hiddenCount, action: loadEarlier)
             }
 
             ForEach(messages) { message in
@@ -1561,6 +1618,7 @@ struct SessionView: View {
                                 runInShell(command, directory: projectPath)
                             },
                             showInExplorer: showInExplorer,
+                            openPreview: openPreview,
                             promptMenu: promptMenu(for: message),
                             arriving: message.isArriving(sentAt: promptSentAt),
                             bubble: bubble,
@@ -1574,6 +1632,7 @@ struct SessionView: View {
                     // again on the way.
                     .equatable()
                     .environment(\.runningAgents, runner.runningAgents(sessionID))
+                    .environment(\.previewsLocalServers, true)
                     .environment(\.activeTranscriptTools, runner.runningTools(sessionID))
                     .environment(\.agentTranscriptFocus, agentFocus)
                     .transition(.fadeIn)
@@ -1859,6 +1918,34 @@ struct SessionView: View {
         explorerReveal = ExplorerReveal(path: target.path, line: target.line)
         tab = .explorer
         return true
+    }
+
+    private func openPreview(_ url: URL) -> Bool {
+        previews.open(url, inNewPage: NSApp.currentEvent?.modifierFlags.contains(.command) == true)
+        return true
+    }
+
+    private func closePreview() {
+        previews.hide()
+        composerFocused = true
+    }
+
+    private func previewPage(_ preview: LocalServerPreview, session: ChatSession) -> some View {
+        let projectPath = store.workingDirectory(for: session) ?? ""
+        return LocalServerPreviewPage(previews: previews, preview: preview, session: session,
+                                      placeholder: placeholder(state: runner.state(sessionID)),
+                                      openPreview: openPreview,
+                                      openChange: { path in
+                                          openChange(path, root: projectPath)
+                                      },
+                                      runInShell: { command in
+                                          runInShell(command, directory: projectPath)
+                                      },
+                                      showInExplorer: showInExplorer,
+                                      pageFocused: $previewFocused,
+                                      addressFocused: $previewAddressFocused,
+                                      onClose: closePreview)
+            .environment(\.explorerRoots, explorerRoots(for: session))
     }
 
     // The shell a command ran in belongs to the agent and is gone by the time its output
