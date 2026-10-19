@@ -25,11 +25,24 @@ struct ExplorerReveal: Equatable {
     let line: Int?
 }
 
+// One of the header's actions, asked for by a header that lives outside the pane.
+enum ExplorerCommand {
+    case findInFiles
+    case newFile
+    case newFolder
+    case refresh
+}
+
 struct ExplorerView: View {
     let root: String
     // Taken and cleared once the file is shown, so coming back to the pane later
     // finds it where it was left rather than back on this file.
     var reveal: Binding<ExplorerReveal?> = .constant(nil)
+
+    // Given when the header's actions live outside the pane, as in a session's tab row.
+    // The pane then leaves its own header out. Taken and cleared once done, like `reveal`.
+    var command: Binding<ExplorerCommand?>?
+    private let sharedShowHidden: Binding<Bool>?
 
     var repositories: [ChangesRepository] = []
     var designFilesRoot: String?
@@ -43,11 +56,14 @@ struct ExplorerView: View {
     @State private var treeCursorVisible = false
 
     init(root: String, reveal: Binding<ExplorerReveal?> = .constant(nil),
+         command: Binding<ExplorerCommand?>? = nil, showHidden: Binding<Bool>? = nil,
          repositories: [ChangesRepository] = [], designFilesRoot: String? = nil,
          collapsedProjects: Binding<Set<String>> = .constant([]),
          selectRoot: @escaping (String) -> Void = { _ in }) {
         self.root = root
         self.reveal = reveal
+        self.command = command
+        self.sharedShowHidden = showHidden
         self.repositories = repositories
         self.designFilesRoot = designFilesRoot
         self._collapsedProjects = collapsedProjects
@@ -72,7 +88,7 @@ struct ExplorerView: View {
     @State private var preview: FilePreview?
     @State private var loadingPreview = false
     @State private var renderingMarkdown = false
-    @State private var showHidden = true
+    @State private var ownShowHidden = true
     @State private var language: CodeLanguage?
     @State private var pastingFiles = false
     @State private var treeWidth = ExplorerSplitLayout.defaultTreeWidth
@@ -119,9 +135,18 @@ struct ExplorerView: View {
 
     private var rootURL: URL { URL(fileURLWithPath: root) }
 
+    private var showHiddenBinding: Binding<Bool> { sharedShowHidden ?? $ownShowHidden }
+
+    private var showHidden: Bool {
+        get { showHiddenBinding.wrappedValue }
+        nonmutating set { showHiddenBinding.wrappedValue = newValue }
+    }
+
+    private var drawsHeader: Bool { command == nil }
+
     var body: some View {
         VStack(spacing: 0) {
-            if repositories.isEmpty { header }
+            if repositories.isEmpty && drawsHeader { header }
             GeometryReader { geometry in
                 let width = ExplorerSplitLayout.treeWidth(
                     treeWidth, availableWidth: geometry.size.width)
@@ -133,7 +158,7 @@ struct ExplorerView: View {
                     Rectangle().fill(Theme.hairline)
                         .frame(width: ExplorerSplitLayout.dividerWidth)
                     VStack(spacing: 0) {
-                        if !repositories.isEmpty { header }
+                        if !repositories.isEmpty && drawsHeader { header }
                         detail
                     }
                         .frame(width: max(0, geometry.size.width - width
@@ -190,6 +215,12 @@ struct ExplorerView: View {
             if findPresented { refreshFind() }
             if draft != original { revealedMatches = [] }
         }
+        .onChange(of: showHidden) { Task { await reopenFolders() } }
+        .onChange(of: command?.wrappedValue) { _, requested in
+            guard let requested else { return }
+            command?.wrappedValue = nil
+            perform(requested)
+        }
         .task(id: root) { await openRoot() }
         .onChange(of: reveal.wrappedValue) {
             if openedRoot == root { Task { await showRequestedFile() } }
@@ -223,23 +254,22 @@ struct ExplorerView: View {
 
             Spacer()
 
-            Toggle("Hidden files", isOn: $showHidden)
+            Toggle("Hidden files", isOn: showHiddenBinding)
                 .toggleStyle(.appCheckbox)
                 .font(.system(size: 12))
-                .onChange(of: showHidden) { Task { await reopenFolders() } }
 
             headerIcon("magnifyingglass", tooltip: "Find in files (Ctrl+H)", label: "Find in files") {
-                showFindInFiles()
+                perform(.findInFiles)
             }
             headerIcon("doc.badge.plus", tooltip: "New file") {
-                create(folder: false, in: newItemDestination())
+                perform(.newFile)
             }
             headerIcon("folder.badge.plus", tooltip: "New folder") {
-                create(folder: true, in: newItemDestination())
+                perform(.newFolder)
             }
 
             Button {
-                Task { await reopenFolders() }
+                perform(.refresh)
             } label: {
                 Image(systemName: "arrow.clockwise").font(.system(size: 12, weight: .semibold))
             }
@@ -250,6 +280,15 @@ struct ExplorerView: View {
         }
         .padding(.horizontal, 20)
         .headerBand(height: repositories.isEmpty ? Theme.subHeaderHeight : Theme.headerHeight)
+    }
+
+    private func perform(_ command: ExplorerCommand) {
+        switch command {
+        case .findInFiles: showFindInFiles()
+        case .newFile: create(folder: false, in: newItemDestination())
+        case .newFolder: create(folder: true, in: newItemDestination())
+        case .refresh: Task { await reopenFolders() }
+        }
     }
 
     private func headerIcon(_ symbol: String, tooltip: String, label: String? = nil,

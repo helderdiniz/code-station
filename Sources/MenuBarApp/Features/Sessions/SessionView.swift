@@ -75,6 +75,8 @@ struct SessionView: View {
     @State private var workingSetVisible: Bool
     @State private var requestedChange: RequestedChange?
     @State private var explorerReveal: ExplorerReveal?
+    @State private var explorerCommand: ExplorerCommand?
+    @State private var explorerShowsHidden = true
     @State private var previews = LocalServerPreviewTabs()
     @State private var previewFocused = false
     @State private var previewAddressFocused = false
@@ -220,6 +222,8 @@ struct SessionView: View {
                         }
                     case .explorer:
                         ExplorerView(root: explorerDirectory, reveal: $explorerReveal,
+                                     command: $explorerCommand,
+                                     showHidden: $explorerShowsHidden,
                                      repositories: workspaceRepositories(session) + (designFilesURL.map {
                                          [ChangesRepository(root: $0.path, name: "Design files")]
                                      } ?? []),
@@ -584,9 +588,12 @@ struct SessionView: View {
             if tab == .conversation {
                 panelDock(session: session, project: project, showsWords: fit == .wide)
                     .transition(.opacity)
+            } else if tab == .explorer {
+                explorerActions
+                    .transition(.opacity)
             }
             if hasUtilities(session: session) {
-                if tab == .conversation {
+                if tab == .conversation || tab == .explorer {
                     HeaderRailDivider()
                 }
                 if fit == .narrow {
@@ -638,6 +645,29 @@ struct SessionView: View {
                 }
             workingSetSeat(session, showsWord: showsWords)
             findSeat(session, showsWord: showsWords)
+        }
+    }
+
+    // The file tree's own actions sit in the tab row, so the Explorer needs no header band
+    // of its own between the tabs and the files.
+    private var explorerActions: some View {
+        HStack(spacing: 4) {
+            Toggle("Hidden files", isOn: $explorerShowsHidden)
+                .toggleStyle(.appCheckbox)
+                .font(.system(size: 12))
+                .padding(.trailing, 6)
+            HeaderRailButton(icon: "magnifyingglass", label: "Find in files", hint: "Ctrl+H") {
+                explorerCommand = .findInFiles
+            }
+            HeaderRailButton(icon: "doc.badge.plus", label: "New file") {
+                explorerCommand = .newFile
+            }
+            HeaderRailButton(icon: "folder.badge.plus", label: "New folder") {
+                explorerCommand = .newFolder
+            }
+            HeaderRailButton(icon: "arrow.clockwise", label: "Refresh") {
+                explorerCommand = .refresh
+            }
         }
     }
 
