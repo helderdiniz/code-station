@@ -322,6 +322,31 @@
     .prose { font-size: 15.5px; line-height: 1.5; }
     .prose, .bubble, .thinking, pre { overflow-wrap: anywhere; white-space: pre-wrap; }
     .system .prose, .instructions .prose { color: var(--muted); font-size: 14px; }
+    .prose > *, .prose blockquote > * { margin: 0 0 10px; }
+    .prose > :last-child, .prose blockquote > :last-child { margin-bottom: 0; }
+    .prose h3, .prose h4, .prose h5, .prose h6 { margin-top: 16px; font-weight: 650; line-height: 1.3; }
+    .prose > :first-child { margin-top: 0; }
+    .prose h3 { font: 600 20px/1.3 var(--serif); }
+    .prose h4 { font-size: 16.5px; }
+    .prose h5, .prose h6 { font-size: 15.5px; color: var(--muted); }
+    .prose strong { font-weight: 650; }
+    .prose ul, .prose ol { padding-left: 22px; }
+    .prose li { margin: 3px 0; }
+    .prose li > ul, .prose li > ol { margin: 3px 0 0; }
+    .prose li::marker { color: var(--faint); }
+    .prose code {
+      padding: 1px 5px;
+      border-radius: 5px;
+      background: var(--field);
+      font: .86em var(--mono);
+    }
+    .prose a { color: var(--green); text-decoration: underline; text-underline-offset: 2px; }
+    .prose blockquote {
+      padding-left: 11px;
+      border-left: 2px solid var(--hairline-strong);
+      color: var(--muted);
+    }
+    .prose hr { height: 1px; border: 0; background: var(--hairline-strong); }
     .prose-code {
       margin: 9px 0;
       overflow: hidden;

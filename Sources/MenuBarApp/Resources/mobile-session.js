@@ -708,11 +708,138 @@
         return line.startsWith(' ') ? line.slice(1) : line;
       };
 
+      // Inline marks are built as DOM nodes, never as HTML, so nothing an agent writes
+      // can turn into markup on the page.
+      const inlinePattern = /(`+)([\s\S]*?[^`])\1(?!`)|\*\*([\s\S]+?)\*\*|__([\s\S]+?)__|~~([\s\S]+?)~~|\*([^\s*](?:[\s\S]*?[^\s*])?)\*|(?<![\w])_([^\s_](?:[\s\S]*?[^\s_])?)_(?![\w])|\[([^\]\n]+)\]\(([^)\s]+)\)|(https?:\/\/[^\s<>()]*[^\s<>().,;:!?'"`])/g;
+
+      const link = (label, href, labelNodes) => {
+        if (!/^https?:\/\//i.test(href)) return document.createTextNode(label);
+        const anchor = element('a', '');
+        anchor.href = href;
+        anchor.target = '_blank';
+        anchor.rel = 'noopener noreferrer';
+        anchor.append(...labelNodes);
+        return anchor;
+      };
+
+      const wrapped = (tag, text) => {
+        const node = element(tag, '');
+        node.append(...inline(text));
+        return node;
+      };
+
+      const inline = text => {
+        const nodes = [];
+        let last = 0;
+        for (const match of text.matchAll(inlinePattern)) {
+          if (match.index > last) nodes.push(document.createTextNode(text.slice(last, match.index)));
+          const [, , code, strong, strongUnderscore, struck, em, emUnderscore, label, href, bare] = match;
+          if (code !== undefined) {
+            nodes.push(element('code', '', code.length > 2 && code.startsWith(' ') && code.endsWith(' ')
+              ? code.slice(1, -1) : code));
+          } else if (strong !== undefined || strongUnderscore !== undefined) {
+            nodes.push(wrapped('strong', strong ?? strongUnderscore));
+          } else if (struck !== undefined) nodes.push(wrapped('del', struck));
+          else if (em !== undefined || emUnderscore !== undefined) nodes.push(wrapped('em', em ?? emUnderscore));
+          else if (label !== undefined) nodes.push(link(label, href, inline(label)));
+          else nodes.push(link(bare, bare, [document.createTextNode(bare)]));
+          last = match.index + match[0].length;
+        }
+        if (last < text.length) nodes.push(document.createTextNode(text.slice(last)));
+        return nodes;
+      };
+
+      const listItem = /^(\s*)([-*+]|\d{1,9}[.)])\s+(.*)$/;
+      const isBlockStart = line => /^\s*(#{1,6}\s|>|([-*_]\s*){3,}$)/.test(line) || listItem.test(line);
+
+      // Block marks a chat answer uses: headings, lists, quotes, rules and paragraphs.
+      // A nested list follows its indent, so a sub-point sits inside its parent item.
+      const markdownBlocks = text => {
+        const blocks = [];
+        const lines = text.split('\n');
+        let index = 0;
+        while (index < lines.length) {
+          const line = lines[index];
+          if (!line.trim()) {
+            index += 1;
+            continue;
+          }
+          const heading = line.match(/^\s*(#{1,6})\s+(.*?)\s*#*\s*$/);
+          if (heading) {
+            blocks.push(wrapped(`h${Math.min(heading[1].length + 2, 6)}`, heading[2]));
+            index += 1;
+            continue;
+          }
+          if (/^\s*([-*_]\s*){3,}$/.test(line)) {
+            blocks.push(element('hr', ''));
+            index += 1;
+            continue;
+          }
+          if (/^\s*>/.test(line)) {
+            const quoted = [];
+            while (index < lines.length && /^\s*>/.test(lines[index])) {
+              quoted.push(lines[index].replace(/^\s*> ?/, ''));
+              index += 1;
+            }
+            const quote = element('blockquote', '');
+            quote.append(...markdownBlocks(quoted.join('\n')));
+            blocks.push(quote);
+            continue;
+          }
+          if (listItem.test(line)) {
+            const items = [];
+            while (index < lines.length) {
+              const current = lines[index];
+              const match = current.match(listItem);
+              if (match) {
+                const first = items[0];
+                if (first && match[1].length <= first.indent
+                  && /\d/.test(match[2]) !== /\d/.test(first.marker)) break;
+                items.push({ indent: match[1].length, marker: match[2], lines: [match[3]] });
+              } else if (current.trim() && items.length && /^\s/.test(current) && !isBlockStart(current)) {
+                items[items.length - 1].lines.push(current.trim());
+              } else break;
+              index += 1;
+            }
+            blocks.push(list(items));
+            continue;
+          }
+          const paragraph = [];
+          while (index < lines.length && lines[index].trim() && (!paragraph.length || !isBlockStart(lines[index]))) {
+            paragraph.push(lines[index].trim());
+            index += 1;
+          }
+          blocks.push(wrapped('p', paragraph.join('\n')));
+        }
+        return blocks;
+      };
+
+      const list = items => {
+        const ordered = /\d/.test(items[0].marker);
+        const node = element(ordered ? 'ol' : 'ul', '');
+        if (ordered && parseInt(items[0].marker, 10) !== 1) node.start = parseInt(items[0].marker, 10);
+        const base = items[0].indent;
+        let index = 0;
+        while (index < items.length) {
+          const item = items[index];
+          const entry = wrapped('li', item.lines.join('\n'));
+          index += 1;
+          const children = [];
+          while (index < items.length && items[index].indent > base) {
+            children.push(items[index]);
+            index += 1;
+          }
+          if (children.length) entry.append(list(children));
+          node.append(entry);
+        }
+        return node;
+      };
+
       const renderProse = (text, showCursor) => {
         const prose = element('div', 'prose');
         for (const segment of fencedSegments(text)) {
           if (segment.kind === 'prose') {
-            prose.append(document.createTextNode(segment.text));
+            prose.append(...markdownBlocks(segment.text));
             continue;
           }
           const code = element('div', 'prose-code');
@@ -724,7 +851,15 @@
             : element('pre', '', segment.text));
           prose.append(code);
         }
-        if (showCursor) prose.append(element('span', 'cursor'));
+        if (showCursor) {
+          // The cursor trails the last words written, so it goes inside the deepest
+          // closing block rather than on a line of its own below it.
+          let tail = prose;
+          while (tail.lastElementChild && /^(P|H\d|UL|OL|LI|BLOCKQUOTE)$/.test(tail.lastElementChild.tagName)) {
+            tail = tail.lastElementChild;
+          }
+          tail.append(element('span', 'cursor'));
+        }
         return prose;
       };
 
@@ -863,7 +998,7 @@
         }
 
         const redraw = new Set();
-        const appended = new Map();
+        const appended = new Set();
         for (const change of update.changed || []) {
           if (change.kind === 'full') {
             model.set(change.id, {
@@ -906,31 +1041,25 @@
             redraw.add(change.id);
           }
           if (change.textAppend && !redraw.has(change.id)) {
-            appended.set(change.id, change.textAppend);
+            appended.add(change.id);
           }
         }
 
         for (const id of redraw) if (!redrawMessage(id)) restructured = true;
         if (restructured) place();
 
-        // Growing the text in place is what keeps a long answer from rebuilding its whole
-        // message on every chunk that arrives.
-        for (const [id, text] of appended) {
+        // Only the prose that grew is rebuilt, which keeps a long answer from rebuilding
+        // its whole message, tool rows and all, on every chunk that arrives. A chunk can
+        // close a mark opened in an earlier one, so the prose is parsed again as a whole.
+        for (const id of appended) {
           const node = nodes.get(id);
           if (!node) continue;
           const proseBlocks = node.querySelectorAll('.prose');
           const prose = proseBlocks[proseBlocks.length - 1];
           if (prose) {
-            const cursor = prose.querySelector('.cursor');
-            const message = model.get(id);
-            const block = [...(message?.blocks || [])].reverse()
+            const block = [...(model.get(id)?.blocks || [])].reverse()
               .find(candidate => candidate.kind === 'prose');
-            if ((block?.text || '').includes('```')) {
-              prose.replaceWith(renderProse(block.text || '', !!cursor));
-              continue;
-            }
-            if (cursor) cursor.before(text);
-            else prose.append(text);
+            prose.replaceWith(renderProse(block?.text || '', !!prose.querySelector('.cursor')));
             continue;
           }
           redrawMessage(id);
