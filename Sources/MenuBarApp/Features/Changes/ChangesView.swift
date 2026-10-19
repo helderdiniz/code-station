@@ -405,9 +405,6 @@ struct ChangesView: View {
                 HStack(spacing: 8) {
                     if namesProject && !compact { projectLabel }
                     branchControl(snapshot)
-                    ActionButton(title: "Merge…", tone: .outlined, height: 30, size: 12,
-                                 icon: "arrow.triangle.merge") { showBranches(merging: true) }
-                        .disabled(busy || !snapshot.onBranch || !snapshot.hasCommits)
                     if !compact {
                         Spacer(minLength: 0)
                         ViewThatFits(in: .horizontal) {
@@ -929,11 +926,11 @@ struct ChangesView: View {
         .appTooltip(file.path)
     }
 
-    private func showBranches(merging: Bool = false) {
+    private func showBranches() {
         guard !busy else { return }
         let operationRoot = repoRoot
         dialogs.show(Dialog(title: "Branches", content: AnyView(
-            BranchBrowserView(root: operationRoot, repository: repositoryName, mergeInitially: merging) {
+            BranchBrowserView(root: operationRoot, repository: repositoryName, mergeInitially: false) {
                 await reload()
             }), actions: [], width: 780, isModal: true, framesItself: true, fitsWindow: true))
     }
