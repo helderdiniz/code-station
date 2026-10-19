@@ -134,3 +134,21 @@ extension PullRequestReview.Kind {
         }
     }
 }
+
+extension PullRequestReviewProposal.Action {
+    var title: String {
+        switch self {
+        case .fix: "FIX"
+        case .reply: "REPLY"
+        case .pushback: "PUSHBACK"
+        }
+    }
+
+    var ink: Color {
+        switch self {
+        case .fix: Theme.dotOnText
+        case .reply: Theme.accent
+        case .pushback: Theme.warningText
+        }
+    }
+}

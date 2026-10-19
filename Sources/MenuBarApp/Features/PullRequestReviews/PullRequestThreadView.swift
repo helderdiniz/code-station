@@ -67,6 +67,9 @@ struct PullRequestThreadView: View {
                 Text(counted(thread.comments.count - 1, "reply", plural: "replies"))
                     .font(.mono(10)).foregroundStyle(.secondary).lineLimit(1).layoutPriority(2)
             }
+            if reviews.proposals[thread.id] != nil, !answered {
+                Image(systemName: "sparkles").font(.system(size: 10)).foregroundStyle(Theme.accent)
+            }
             if answered { PullRequestAnsweredTick() }
             Text(thread.place).font(.mono(10.5)).foregroundStyle(.secondary).lineLimit(1)
                 .truncationMode(.middle).layoutPriority(1)

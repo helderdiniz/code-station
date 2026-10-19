@@ -19,9 +19,14 @@ final class PullRequestReviewStore {
     private(set) var loading: Set<UUID> = []
     // The account gh is signed in as. Its replies count as answers.
     private(set) var selfLogin: String?
-    // Pull requests with a reply or a resolve in flight, so a second click waits for the first.
+    // The agent's proposal per thread, keyed by the thread it answers.
+    private(set) var proposals: [Int: PullRequestReviewProposal] = [:]
+    private(set) var drafting: Set<Int> = []
+    // Pull requests with a commit, push or reply in flight. One at a time per checkout,
+    // or two approvals would race each other for git's index.
     private(set) var busy: Set<String> = []
 
+    @ObservationIgnored private var turnWaiters: [UUID: [CheckedContinuation<Void, Never>]] = [:]
     // Quick enough to feel live, slow enough to be nothing against GitHub's hourly allowance.
     static let pollInterval: Duration = .seconds(120)
 
@@ -107,8 +112,24 @@ final class PullRequestReviewStore {
         loaded[sessionID] = entries
     }
 
+    // MARK: - The agent
+
+    func setProposal(_ proposal: PullRequestReviewProposal) { proposals[proposal.threadID] = proposal }
+    func dropProposal(_ threadID: Int) { proposals[threadID] = nil }
+    func beganDrafting(_ threadID: Int) { drafting.insert(threadID) }
+    func endedDrafting(_ threadID: Int) { drafting.remove(threadID) }
     func beginWork(on url: String) -> Bool { busy.insert(url).inserted }
     func endWork(on url: String) { busy.remove(url) }
+
+    // Wired to the runner's turn-ended hook, so a draft waits on the turn rather than
+    // polling for it.
+    func turnEnded(_ sessionID: UUID) {
+        for waiter in turnWaiters.removeValue(forKey: sessionID) ?? [] { waiter.resume() }
+    }
+
+    func waitForTurnEnd(_ sessionID: UUID) async {
+        await withCheckedContinuation { turnWaiters[sessionID, default: []].append($0) }
+    }
 }
 
 // Whose reviews are on screen. Automation and people are read in different moods, so

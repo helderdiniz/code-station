@@ -3,7 +3,7 @@ import Testing
 @testable import MenuBarApp
 
 // The few rules the tab decides on its own: what counts as answered, how reviewers are
-// grouped and filtered, and how GitHub's HTML becomes markdown.
+// grouped and filtered, what the agent sends back, and how GitHub's HTML becomes markdown.
 struct PullRequestReviewRulesTests {
     private let now = Date(timeIntervalSince1970: 1_760_000_000)
 
@@ -61,6 +61,17 @@ struct PullRequestReviewRulesTests {
         #expect(unknownSelf.map(\.id) == [10, 20])
     }
 
+    @Test func readsTheLastArrayInTheAgentsTextEvenWithBracketsInTheWords() {
+        // Arrange
+        let text = "I looked at orders[0] first.\n```json\n[{\"threadID\": 10, \"action\": \"reply\", \"reply\": \"See [1].\"}]\n```"
+
+        // Act
+        let proposal = PullRequestReviewProposal.parse(text)
+
+        // Assert
+        #expect(proposal?.reply == "See [1].")
+    }
+
     @Test func groupsByReviewerMostRecentlyActiveFirstNewestReviewFirst() {
         // Arrange
         let reviews = [review(1, .commented, by: "maria", after: 10),
@@ -86,6 +97,32 @@ struct PullRequestReviewRulesTests {
         // Assert
         #expect(people == ["maria"])
         #expect(bots == ["Copilot"])
+    }
+
+    @Test func readsAProposalWithOrWithoutItsFenceAndFillsMissingFiles() {
+        // Arrange
+        let bare = Data(#"[{"threadID": 10, "action": "fix", "reply": "Done.", "files": ["A.swift"]}]"#.utf8)
+        let fenced = Data("Here:\n```json\n[{\"threadID\": 10, \"action\": \"pushback\", \"reply\": \"No.\"}]\n```".utf8)
+
+        // Act
+        let first = PullRequestReviewProposal.parse(String(decoding: bare, as: UTF8.self))
+        let second = PullRequestReviewProposal.parse(String(decoding: fenced, as: UTF8.self))
+
+        // Assert
+        #expect(first == PullRequestReviewProposal(threadID: 10, action: .fix, reply: "Done.", files: ["A.swift"]))
+        #expect(second?.action == .pushback)
+        #expect(second?.files.isEmpty == true)
+    }
+
+    @Test func rejectsAnUnknownAction() {
+        // Arrange
+        let data = Data(#"[{"threadID": 1, "action": "merge", "reply": ""}]"#.utf8)
+
+        // Act
+        let proposal = PullRequestReviewProposal.parse(String(decoding: data, as: UTF8.self))
+
+        // Assert
+        #expect(proposal == nil)
     }
 
     @Test func turnsGitHubsHTMLIntoMarkdownAndLeavesMarkdownAlone() {

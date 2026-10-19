@@ -145,18 +145,21 @@ struct InlineLink: View {
     let title: String
     var size: CGFloat = 12
     var tint: Color = Theme.accent
+    var icon: String? = nil
     let action: () -> Void
 
     @State private var hovering = false
 
     var body: some View {
         Button(action: action) {
-            Text(title)
-                .font(.system(size: size, weight: .semibold))
-                .foregroundStyle(tint)
-                .opacity(hovering ? 0.75 : 1)
-                .fixedSize()
-                .contentShape(Rectangle())
+            HStack(spacing: 4) {
+                if let icon { Image(systemName: icon).font(.system(size: size - 1.5)) }
+                Text(title).font(.system(size: size, weight: .semibold))
+            }
+            .foregroundStyle(tint)
+            .opacity(hovering ? 0.75 : 1)
+            .fixedSize()
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .hoverLift(hovering)

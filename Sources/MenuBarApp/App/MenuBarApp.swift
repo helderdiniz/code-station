@@ -39,6 +39,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             guard let session = projects.session(sessionID) else { return }
             workingTrees.noteChanged(projects.workingDirectories(for: session))
         }
+        let afterTurn = runner.onTurnEnded
+        runner.onTurnEnded = { [pullRequestReviews] sessionID in
+            afterTurn(sessionID)
+            pullRequestReviews.turnEnded(sessionID)
+        }
         return runner
     }()
     private lazy var scheduledTasks = ScheduledTaskService(
