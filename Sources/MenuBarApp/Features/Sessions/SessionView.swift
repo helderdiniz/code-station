@@ -680,10 +680,13 @@ struct SessionView: View {
     // of its own between the tabs and the files.
     private var explorerActions: some View {
         HStack(spacing: 4) {
-            Toggle("Hidden files", isOn: $explorerShowsHidden)
-                .toggleStyle(.appCheckbox)
-                .font(.system(size: 12))
-                .padding(.trailing, 6)
+            HeaderRailButton(icon: explorerShowsHidden ? "eye" : "eye.slash",
+                             state: explorerShowsHidden ? .open : .rest,
+                             label: explorerShowsHidden ? "Hide hidden files" : "Show hidden files",
+                             hint: "Dot-files and ignored folders") {
+                explorerShowsHidden.toggle()
+            }
+            .accessibilityAddTraits(explorerShowsHidden ? .isSelected : [])
             HeaderRailButton(icon: "magnifyingglass", label: "Find in files", hint: "Ctrl+H") {
                 explorerCommand = .findInFiles
             }

@@ -254,9 +254,11 @@ struct ExplorerView: View {
 
             Spacer()
 
-            Toggle("Hidden files", isOn: showHiddenBinding)
-                .toggleStyle(.appCheckbox)
-                .font(.system(size: 12))
+            headerIcon(showHidden ? "eye" : "eye.slash",
+                       tooltip: showHidden ? "Hide hidden files" : "Show hidden files") {
+                showHidden.toggle()
+            }
+            .accessibilityAddTraits(showHidden ? .isSelected : [])
 
             headerIcon("magnifyingglass", tooltip: "Find in files (Ctrl+H)", label: "Find in files") {
                 perform(.findInFiles)
