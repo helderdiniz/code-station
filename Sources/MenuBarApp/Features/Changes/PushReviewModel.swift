@@ -9,7 +9,8 @@ final class PushReviewModel {
 
     private(set) var phase = Phase.loading
     private(set) var commits: [GitRemoteCommit] = []
-    private(set) var behind = 0
+    // What origin has that this branch does not. Pushing waits until these are pulled.
+    private(set) var incoming: [GitRemoteCommit] = []
     private(set) var errorTitle = ""
     private(set) var error = ""
     private(set) var pulled: [GitRemoteCommit] = []
@@ -20,6 +21,7 @@ final class PushReviewModel {
     @ObservationIgnored private let push: () async -> String?
 
     var isWorking: Bool { phase == .pulling || phase == .pushing }
+    var behind: Int { incoming.count }
 
     init(read: @escaping () async -> GitPushPreview,
          pull: @escaping () async -> GitPullOutcome,
@@ -45,11 +47,11 @@ final class PushReviewModel {
         switch result {
         case .commits(let commits):
             self.commits = commits
-            behind = 0
+            incoming = []
             phase = .ready
-        case .behindUpstream(let behind, let commits):
+        case .behindUpstream(let incoming, let commits):
             self.commits = commits
-            self.behind = behind
+            self.incoming = incoming
             phase = .ready
         case .failed(let error):
             fail("Could not check commits to push", error)

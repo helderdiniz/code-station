@@ -5,6 +5,8 @@ import Testing
 @MainActor
 struct PushReviewTests {
     private let commit = GitRemoteCommit(id: "12345678", subject: "Keep local work")
+    private let incomingCommit = GitRemoteCommit(id: "abcdef12", subject: "Work from origin")
+    private let incomingCommit2 = GitRemoteCommit(id: "fedcba98", subject: "More work from origin")
 
     @Test func secondaryTextMeetsContrastOnReviewSurfaces() throws {
         for appearance in try appearances() {
@@ -37,7 +39,7 @@ struct PushReviewTests {
         #expect(await waitUntil { reads.pending.count == 1 })
         let second = Task { await model.load() }
         #expect(await waitUntil { reads.pending.count == 2 })
-        reads.pending[1].resume(returning: .behindUpstream(2, [commit]))
+        reads.pending[1].resume(returning: .behindUpstream(incoming: [incomingCommit, incomingCommit2], outgoing: [commit]))
         await second.value
         reads.pending[0].resume(returning: .commits([]))
         await first.value
@@ -84,7 +86,7 @@ struct PushReviewTests {
     @Test func pullFailureStopsPushAndRetryRequiresFreshReview() async {
         var attempts = 0
         var pushes = 0
-        let model = PushReviewModel(read: { .behindUpstream(1, [commit]) }, pull: {
+        let model = PushReviewModel(read: { .behindUpstream(incoming: [incomingCommit], outgoing: [commit]) }, pull: {
             attempts += 1
             return attempts == 1 ? .failed("Origin is unavailable") : .updated([])
         }, push: { pushes += 1; return nil })
@@ -109,7 +111,7 @@ struct PushReviewTests {
         let incoming = GitRemoteCommit(id: "87654321", subject: "Origin work")
         let model = PushReviewModel(read: {
             reads += 1
-            return reads == 1 ? .behindUpstream(1, [commit]) : .commits([commit])
+            return reads == 1 ? .behindUpstream(incoming: [incomingCommit], outgoing: [commit]) : .commits([commit])
         }, pull: { .updatedWithStashConflict([incoming]) }, push: {
             pushes += 1
             return pushes == 1 ? "Connection timed out" : nil

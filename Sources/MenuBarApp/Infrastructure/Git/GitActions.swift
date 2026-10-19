@@ -10,7 +10,7 @@ struct GitRemoteCommit: Identifiable, Sendable, Equatable {
 enum GitPushPreview: Sendable, Equatable {
     case commits([GitRemoteCommit])
     // Origin has commits this branch does not, so it would refuse the push.
-    case behindUpstream(Int, [GitRemoteCommit])
+    case behindUpstream(incoming: [GitRemoteCommit], outgoing: [GitRemoteCommit])
     case failed(String)
 }
 
@@ -237,9 +237,9 @@ enum GitActions {
             let commits = parseRemoteCommits(output.text)
             guard hasUpstream else { return .commits(commits) }
 
-            let behind = GitInspector.run(tool, ["rev-list", "--count", "HEAD..@{u}"], in: url)
-            let count = behind.ok ? Int(behind.trimmedText) ?? 0 : 0
-            return count > 0 ? .behindUpstream(count, commits) : .commits(commits)
+            let behind = GitInspector.run(tool, ["log", "--no-color", "--format=%H%x09%s", "HEAD..@{u}"], in: url)
+            let incoming = behind.ok ? parseRemoteCommits(behind.text) : []
+            return incoming.isEmpty ? .commits(commits) : .behindUpstream(incoming: incoming, outgoing: commits)
         }
     }
 

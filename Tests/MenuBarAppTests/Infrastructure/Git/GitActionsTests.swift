@@ -469,11 +469,11 @@ struct GitActionsTests {
         try first.git("push", "-q")
 
         let preview = await GitActions.commitsToPush(hasUpstream: true, at: second.path)
-        guard case .behindUpstream(let behind, let commits) = preview else {
+        guard case .behindUpstream(let incoming, let commits) = preview else {
             #expect(Bool(false), "a trailing branch has to be reported as behind")
             return
         }
-        #expect(behind == 1)
+        #expect(incoming.map(\.subject) == ["second"])
         #expect(commits.map(\.subject) == ["local work"])
     }
 

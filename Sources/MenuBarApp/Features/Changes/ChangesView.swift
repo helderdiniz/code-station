@@ -1371,7 +1371,7 @@ struct ChangesView: View {
                 if review.phase == .complete { commitSucceeded = false }
                 await reload()
             }), actions: [], onCancel: { review.invalidate(); pushFocused = true },
-            width: 560, isModal: true, framesItself: true, fitsWindow: true,
+            width: 560, isModal: true, framesItself: true, fitsWindow: true, hugsContent: true,
             maximumHeight: 480, canDismiss: { !review.isWorking }))
     }
 

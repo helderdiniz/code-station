@@ -213,3 +213,25 @@ struct FooterStrip<Trailing: View>: View {
         .background(RoundedRectangle(cornerRadius: 11).fill(Theme.sunken))
     }
 }
+
+// Sizes a scroll view to what it holds. A scroll view grows to fill all the height it is
+// offered, so a short list in one would leave a gap below its last row. This asks the
+// content for the height it needs and takes that, up to the limit or the room offered,
+// whichever is smaller, and only then does the content scroll.
+struct HuggingHeight: Layout {
+    var limit: CGFloat = .infinity
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews,
+                      cache: inout ()) -> CGSize {
+        guard let content = subviews.first else { return .zero }
+        let ideal = content.sizeThatFits(ProposedViewSize(width: proposal.width, height: nil))
+        let height = min(ideal.height, limit, proposal.height ?? .infinity)
+        return CGSize(width: proposal.width ?? ideal.width, height: height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews,
+                       cache: inout ()) {
+        subviews.first?.place(at: bounds.origin,
+                              proposal: ProposedViewSize(width: bounds.width, height: bounds.height))
+    }
+}

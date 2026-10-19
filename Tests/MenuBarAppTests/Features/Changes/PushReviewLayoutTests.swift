@@ -44,7 +44,7 @@ struct PushReviewLayoutTests {
             presenter.show(Dialog(title: "Review your push", content: AnyView(
                 PushReviewView(model: model, repository: "code-station", branch: "refine-commit-flow",
                                upstream: "origin/refine-commit-flow", changed: {})),
-                actions: [], width: 560, isModal: true, framesItself: true, fitsWindow: true,
+                actions: [], width: 560, isModal: true, framesItself: true, fitsWindow: true, hugsContent: true,
                 maximumHeight: 480, canDismiss: { !model.isWorking }))
             let identity = presenter.current?.id
             let host = NSHostingController(rootView: Theme.background.overlay { DialogHost() }
@@ -107,6 +107,40 @@ struct PushReviewLayoutTests {
             }
             presenter.dismiss()
             window.contentViewController = nil
+        }
+    }
+
+    // Five commits show whole at the dialog's width, a long list stops at its cap and
+    // scrolls inside, and the dialog stands only as tall as what it holds.
+    @Test func commitListShowsFiveRowsWholeAndCapsLongerLists() async throws {
+        let commits = (0..<12).map { GitRemoteCommit(id: String(format: "%08x", $0), subject: "Commit number \($0)") }
+        func height(_ count: Int) -> CGFloat {
+            let host = NSHostingController(rootView: RemoteCommitList(commits: Array(commits.prefix(count)),
+                                                                      emptyMessage: "").frame(width: 520))
+            return host.sizeThatFits(in: CGSize(width: 520, height: 2000)).height
+        }
+        #expect(height(5) > 5 * 28)
+        #expect(height(5) < 222)
+        #expect(height(12) == 222)
+
+        for (upstream, preview) in [("origin/main", GitPushPreview.commits(Array(commits.prefix(5)))),
+                                    (nil, .commits(Array(commits.prefix(3)))),
+                                    ("origin/main", .behindUpstream(incoming: Array(commits.prefix(2)),
+                                                                    outgoing: Array(commits.prefix(5))))] {
+            let model = PushReviewModel(read: { preview }, pull: { .upToDate }, push: { nil })
+            await model.load()
+            let presenter = DialogPresenter()
+            let view = PushReviewView(model: model, repository: "code-station",
+                                      branch: "feature/slide-map-and-night-scene-with-a-long-name",
+                                      upstream: upstream, changed: {})
+                .environment(presenter).environment(TooltipPresenter())
+            let host = NSHostingController(rootView: HuggingHeight(limit: 480) { view }.frame(width: 560))
+            let measured = host.sizeThatFits(in: CGSize(width: 560, height: 480))
+            #expect(measured.width == 560)
+            #expect(model.phase == .ready)
+            // Two lists outgrow the cap, and the body scrolls instead of the dialog growing.
+            if case .behindUpstream = preview { #expect(measured.height == 480) }
+            else { #expect(measured.height < 480) }
         }
     }
 }

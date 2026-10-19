@@ -59,6 +59,9 @@ struct Dialog: Identifiable {
     // screen reader hears.
     var framesItself = false
     var fitsWindow = false
+    // A self-framed dialog that fits the window shrinks to its content instead of always
+    // standing at the maximum height.
+    var hugsContent = false
     var maximumHeight: CGFloat = 680
     var canDismiss: () -> Bool = { true }
 }
@@ -165,15 +168,21 @@ struct DialogHost: View {
                         }
                     } else if dialog.framesItself, dialog.fitsWindow, let content = dialog.content {
                         GeometryReader { geometry in
-                            content
-                                .frame(width: min(dialog.width, max(0, geometry.size.width - 32)),
-                                       height: min(dialog.maximumHeight, max(0, geometry.size.height - 32)))
-                                .clipShape(RoundedRectangle(cornerRadius: 14))
-                                .floatingCard(cornerRadius: 14)
-                                .accessibilityElement(children: .contain)
-                                .accessibilityAddTraits(.isModal)
-                                .accessibilityLabel(dialog.title)
-                                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            let width = min(dialog.width, max(0, geometry.size.width - 32))
+                            let height = min(dialog.maximumHeight, max(0, geometry.size.height - 32))
+                            Group {
+                                if dialog.hugsContent {
+                                    HuggingHeight(limit: height) { content }.frame(width: width)
+                                } else {
+                                    content.frame(width: width, height: height)
+                                }
+                            }
+                            .clipShape(RoundedRectangle(cornerRadius: 14))
+                            .floatingCard(cornerRadius: 14)
+                            .accessibilityElement(children: .contain)
+                            .accessibilityAddTraits(.isModal)
+                            .accessibilityLabel(dialog.title)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
                         }
                     } else if dialog.framesItself, let content = dialog.content {
                         content

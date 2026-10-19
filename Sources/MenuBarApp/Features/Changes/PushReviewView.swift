@@ -28,17 +28,16 @@ struct PushReviewView: View {
         }
     }
 
-    private var description: String {
-        switch model.phase {
-        case .loading: "Checking the commits that will be shared with origin."
-        case .failed: "Your commits are safely stored on this computer."
-        case .complete: "Your branch has been sent to origin."
-        default:
-            model.behind > 0 ? "\(upstream ?? "Origin") has \(counted(model.behind, "new commit")). Pull before sending your commits."
-                : upstream.map { "These commits will be pushed to \($0)." }
-                    ?? "This branch will be published to origin and start tracking it."
+    // The remote side of the route. A branch with no upstream yet will be published to
+    // origin under its own name.
+    private var remote: (prefix: String, name: String) {
+        guard let upstream, let slash = upstream.firstIndex(of: "/") else {
+            return ("origin/", upstream ?? branch)
         }
+        return (String(upstream[...slash]), String(upstream[upstream.index(after: slash)...]))
     }
+
+    private var remoteName: String { remote.prefix + remote.name }
 
     private var actionTitle: String {
         switch model.phase {
@@ -53,43 +52,47 @@ struct PushReviewView: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack(alignment: .top, spacing: 12) {
-                Image(systemName: model.phase == .failed ? "exclamationmark.triangle" : "arrow.up")
+                Image(systemName: model.phase == .failed ? "exclamationmark.triangle"
+                      : model.behind > 0 ? "arrow.down" : "arrow.up")
+                    .font(.system(size: 14, weight: .semibold))
                     .foregroundStyle(model.phase == .failed ? Theme.warningText : Theme.accent)
-                    .padding(12).background(Theme.field, in: RoundedRectangle(cornerRadius: 10))
+                    .frame(width: 36, height: 36)
+                    .background(Theme.field, in: RoundedRectangle(cornerRadius: 9))
+                    .padding(.top, 2)
                     .accessibilityHidden(true)
-                VStack(alignment: .leading, spacing: 7) {
-                    Text(title).font(.serif(24)).accessibilityAddTraits(.isHeader)
-                    Text(description).font(.system(size: 12)).foregroundStyle(Theme.secondaryText)
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack(spacing: 6) {
+                        ProjectTileView(name: repository, tint: Theme.projectTint(for: repository), side: 18)
+                            .accessibilityHidden(true)
+                        Text(repository).font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(Theme.secondaryText).lineLimit(1)
+                    }
+                    Text(title).font(.serif(22)).accessibilityAddTraits(.isHeader)
+                    route
                 }.frame(maxWidth: .infinity, alignment: .leading)
                 GlyphButton(icon: "xmark") { dialogs.dismiss() }
                     .disabled(model.isWorking).focused($focus, equals: "close")
                     .overlay(RoundedRectangle(cornerRadius: 8).stroke(focus == "close" ? Theme.accent : .clear, lineWidth: 2))
                     .accessibilityLabel("Close push review")
-            }.padding(22)
+            }.padding(.top, 18).padding(.leading, 20).padding(.trailing, 18).padding(.bottom, 16)
             Divider().overlay(Theme.border)
-            ScrollView {
-                VStack(alignment: .leading, spacing: 20) {
-                    route
-                    preview
-                        .frame(maxWidth: .infinity, minHeight: 150, alignment: .topLeading)
-                        .motion(Motion.reveal, value: model.phase)
-                    if model.stashConflict {
-                        Label("Your commits were pulled, but restoring uncommitted changes left conflicts. The files contain conflict markers and the originals remain in the stash.", systemImage: "exclamationmark.triangle")
-                            .font(.system(size: 12)).foregroundStyle(Theme.warningText)
-                            .padding(12).background(Theme.warningBackground, in: RoundedRectangle(cornerRadius: 8))
-                    }
-                    Label("Uncommitted changes stay on this computer.", systemImage: "lock")
-                        .font(.system(size: 11)).foregroundStyle(Theme.secondaryText)
-                }.padding(22)
-            }.frame(maxHeight: .infinity)
+            HuggingHeight {
+                ScrollView { reviewBody }.scrollBounceBehavior(.basedOnSize)
+            }
             Divider().overlay(Theme.border)
             HStack(spacing: 10) {
-                if model.isWorking {
-                    ChangesProgressLabel(title: model.phase == .pulling ? "Pulling from origin…" : "Sending to origin…")
-                } else {
-                    Text(model.phase == .complete ? "Synced with origin" : "Review before sharing")
-                        .font(.system(size: 11)).foregroundStyle(Theme.secondaryText)
+                Group {
+                    if model.phase == .loading {
+                        ChangesProgressLabel(title: "Checking origin…")
+                    } else if model.isWorking {
+                        ChangesProgressLabel(title: model.phase == .pulling ? "Pulling from origin…" : "Sending to origin…")
+                    } else if model.phase == .complete {
+                        Text("Synced with origin")
+                    } else {
+                        Label("Uncommitted changes stay on this computer.", systemImage: "lock")
+                    }
                 }
+                .font(.system(size: 11)).foregroundStyle(Theme.secondaryText).lineLimit(1)
                 Spacer(minLength: 0)
                 ActionButton(title: "Cancel", tone: .outlined) { dialogs.dismiss() }
                     .disabled(model.isWorking).focused($focus, equals: "cancel")
@@ -102,7 +105,7 @@ struct PushReviewView: View {
                     .disabled(model.phase == .loading || model.isWorking)
                     .focused($focus, equals: "primary")
                     .overlay(RoundedRectangle(cornerRadius: 8).stroke(focus == "primary" ? Theme.accent : .clear, lineWidth: 2))
-            }.padding(16).background(Theme.field)
+            }.padding(.vertical, 12).padding(.leading, 20).padding(.trailing, 14).background(Theme.field)
         }
         .background(Theme.card)
         .background(WindowKeyAnchor(handler: keys))
@@ -117,51 +120,86 @@ struct PushReviewView: View {
         }
     }
 
+    private var reviewBody: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            preview
+                .frame(maxWidth: .infinity, alignment: .topLeading)
+                .motion(Motion.reveal, value: model.phase)
+            if model.stashConflict {
+                Label("Your commits were pulled, but restoring uncommitted changes left conflicts. The files contain conflict markers and the originals remain in the stash.", systemImage: "exclamationmark.triangle")
+                    .font(.system(size: 12)).foregroundStyle(Theme.warningText)
+                    .padding(12).background(Theme.warningBackground, in: RoundedRectangle(cornerRadius: 8))
+            }
+        }.padding(.top, 14).padding(.horizontal, 20).padding(.bottom, 18)
+    }
+
+    // Always one line. When both names do not fit, each chip gives up room and cuts its
+    // name short, and the full name stays in the tooltip.
     private var route: some View {
-        HStack(spacing: 12) {
-            ProjectTileView(name: repository, tint: Theme.projectTint(for: repository), side: 28)
-                .accessibilityHidden(true)
-            VStack(alignment: .leading, spacing: 5) {
-                Text(repository).font(.system(size: 12, weight: .semibold))
-                Text(branch).font(.mono(11)).textSelection(.enabled)
-            }.frame(maxWidth: .infinity, alignment: .leading)
-            Image(systemName: "arrow.right").foregroundStyle(Theme.accent).accessibilityHidden(true)
-            Text(upstream ?? "origin").font(.mono(11)).textSelection(.enabled)
-                .frame(maxWidth: .infinity, alignment: .trailing)
-        }.padding(14).background(Theme.field, in: RoundedRectangle(cornerRadius: 10))
+        HStack(spacing: 6) {
+            BranchChip(icon: "arrow.triangle.branch", name: branch)
+            Image(systemName: "arrow.right")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(Theme.accent)
+            BranchChip(icon: "cloud", prefix: remote.prefix, name: remote.name, isNew: upstream == nil)
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("From \(branch) to \(remoteName)\(upstream == nil ? ", a new branch on origin" : "")")
     }
 
     @ViewBuilder private var preview: some View {
         switch model.phase {
         case .loading:
-            ChangesLoadingPlaceholder(title: "Checking origin…", rows: 2)
-                .transition(.opacity)
+            PushReviewSkeleton().transition(.opacity)
         case .failed:
-            VStack(alignment: .leading, spacing: 12) {
+            VStack(alignment: .leading, spacing: 8) {
                 Text(model.error).font(.mono(11)).textSelection(.enabled)
-                    .foregroundStyle(Theme.warningText)
                     .accessibilityFocused($errorFocused)
-                Text("Check the error, then try again to review the current commits.")
-                    .font(.system(size: 12)).foregroundStyle(Theme.warningText)
-            }.padding(14).frame(maxWidth: .infinity, alignment: .leading)
+                Text("Your commits are safe on this computer. Check the error, then try again.")
+                    .font(.system(size: 12))
+            }.foregroundStyle(Theme.warningText)
+                .padding(.vertical, 12).padding(.horizontal, 14).frame(maxWidth: .infinity, alignment: .leading)
                 .background(Theme.warningBackground, in: RoundedRectangle(cornerRadius: 10))
                 .transition(.opacity)
         case .complete:
-            VStack(alignment: .leading, spacing: 16) {
+            VStack(alignment: .leading, spacing: 12) {
                 HStack(spacing: 10) {
                     ChangesSuccessMark()
-                    Text("\(counted(model.commits.count, "commit")) sent to origin")
+                    Text("\(counted(model.commits.count, "commit")) sent to \(remoteName)")
                         .font(.system(size: 14, weight: .medium))
                 }
                 if !model.pulled.isEmpty {
                     Text("Pulled \(counted(model.pulled.count, "commit")) from origin.").font(.system(size: 12))
-                    RemoteCommitList(commits: model.pulled, emptyMessage: "")
+                    RemoteCommitList(commits: model.pulled, emptyMessage: "", incoming: true)
                 }
             }.transition(.opacity)
         default:
-            RemoteCommitList(commits: model.commits, emptyMessage: "There are no new commits to send.")
-                .transition(.opacity)
+            VStack(alignment: .leading, spacing: 12) {
+                if model.behind > 0 {
+                    Text("\(Text(remoteName).fontWeight(.semibold).foregroundStyle(.primary)) has \(counted(model.behind, "new commit")) you don’t have yet. Pull them first, then your commits go up.")
+                        .font(.system(size: 12)).foregroundStyle(Theme.secondaryText)
+                        .fixedSize(horizontal: false, vertical: true)
+                    listLabel("Coming down", count: model.incoming.count)
+                    RemoteCommitList(commits: model.incoming, emptyMessage: "", incoming: true)
+                    listLabel("Going up", count: model.commits.count)
+                } else if upstream == nil {
+                    Text("Origin doesn’t have this branch yet. Publishing creates it and keeps the two in step from now on.")
+                        .font(.system(size: 12)).foregroundStyle(Theme.secondaryText)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                RemoteCommitList(commits: model.commits, emptyMessage: "There are no new commits to send.")
+            }.transition(.opacity)
         }
+    }
+
+    private func listLabel(_ title: String, count: Int) -> some View {
+        HStack(alignment: .firstTextBaseline) {
+            Text(title).font(.system(size: 12, weight: .semibold)).accessibilityAddTraits(.isHeader)
+            Spacer(minLength: 0)
+            Text("\(count)").font(.system(size: 11)).foregroundStyle(Theme.secondaryText)
+        }
+        .padding(.bottom, -4)
+        .accessibilityElement(children: .combine)
     }
 
     private func primaryAction() {
@@ -192,5 +230,75 @@ struct PushReviewView: View {
             return true
         }
         return false
+    }
+}
+
+private struct BranchChip: View {
+    let icon: String
+    var prefix = ""
+    let name: String
+    var isNew = false
+
+    var body: some View {
+        HStack(spacing: 5) {
+            Image(systemName: icon)
+                .font(.system(size: 10))
+                .foregroundStyle(Theme.secondaryText)
+            Text("\(Text(prefix).foregroundStyle(Theme.secondaryText))\(name)")
+                .font(.mono(11, .medium))
+                .lineLimit(1)
+                .truncationMode(.tail)
+            if isNew {
+                Text("New")
+                    .font(.system(size: 9.5, weight: .semibold))
+                    .foregroundStyle(Theme.dotOnText)
+                    .padding(.horizontal, 5).padding(.vertical, 1)
+                    .background(Theme.dotOn.opacity(0.12), in: RoundedRectangle(cornerRadius: 4))
+                    .fixedSize()
+                    .padding(.leading, 2)
+            }
+        }
+        .padding(.leading, 6).padding(.trailing, 8)
+        .frame(height: 22)
+        .background(Theme.card, in: RoundedRectangle(cornerRadius: 6))
+        .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(
+            Theme.settingsBorder, style: StrokeStyle(lineWidth: 1, dash: isNew ? [3, 2] : [])))
+        .appTooltip(prefix + name)
+    }
+}
+
+// Rows the shape of the commit list, so the dialog keeps its size while origin is read.
+// They fade in only if the read takes long enough to notice.
+private struct PushReviewSkeleton: View {
+    @State private var visible = false
+
+    var body: some View {
+        VStack(spacing: 0) {
+            ForEach(Array([0.6, 0.78, 0.52].enumerated()), id: \.offset) { index, share in
+                HStack(spacing: 12) {
+                    RoundedRectangle(cornerRadius: 4).fill(Theme.field).frame(width: 56, height: 8)
+                    GeometryReader { geometry in
+                        RoundedRectangle(cornerRadius: 4).fill(Theme.field)
+                            .frame(width: geometry.size.width * share, height: 8)
+                            .frame(maxHeight: .infinity, alignment: .center)
+                    }
+                }
+                .padding(.horizontal, 12)
+                .frame(height: 32)
+                .overlay(alignment: .top) {
+                    if index > 0 { Rectangle().fill(Theme.hairline).frame(height: 1) }
+                }
+            }
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Theme.settingsBorder))
+        .opacity(visible ? 1 : 0)
+        .motion(Motion.reveal, value: visible)
+        .task {
+            do { try await Task.sleep(for: .milliseconds(150)) } catch { return }
+            visible = true
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Checking origin…")
     }
 }
