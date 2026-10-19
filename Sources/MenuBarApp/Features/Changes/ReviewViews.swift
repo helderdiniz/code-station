@@ -872,7 +872,7 @@ struct SeatPill<Content: View>: View {
     }
 }
 
-// The way into a second opinion on a plan or a design. It leads with the usual
+// The way into a second opinion on a plan. It leads with the usual
 // reviewers' tiles, so the lineup the dialog will start from is the button's mark.
 struct SecondOpinionButton: View {
     let usual: [AgentKind]

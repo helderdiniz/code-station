@@ -1,7 +1,7 @@
 import SwiftUI
 
 // The Lineup: a second opinion drawn as the reviewers themselves. The same tiles stand
-// for the action in the session header, under an answer and on a plan or a design. In
+// for the action in the session header, under an answer and on a plan. In
 // the header the one button also carries the whole run, from reading to findings to all
 // sorted, so progress shows on the control that started it.
 

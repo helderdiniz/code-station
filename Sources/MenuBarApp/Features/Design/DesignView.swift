@@ -55,6 +55,9 @@ struct DesignView: View {
                 conversationMinimized = false
                 conversationExpanded = empty
             }
+            .onChange(of: runner.designOpinions.asks[sessionID]) { _, _ in
+                askForSecondOpinion(session, directory: directory)
+            }
             .onDisappear {
                 store.release(sessionID, for: .open)
                 runner.forgetCanvasWidth(sessionID)
@@ -119,11 +122,6 @@ struct DesignView: View {
                         ? "Bring design window to front"
                         : "Open design in a separate window")
                     .accessibilityLabel("Full screen")
-
-                    SecondOpinionButton(usual: Preferences.secondOpinionLineup().map(\.agent)) {
-                        askForSecondOpinion(session, directory: directory)
-                    }
-                    .appTooltip("Ask other agents to look at every screen")
 
                     if let implementation {
                         if onOpenImplementation == nil {

@@ -799,6 +799,16 @@ struct SessionView: View {
                                           ask: askForChangesOpinion,
                                           open: { changesNavigation.secondOpinionOpens += 1 })
             }
+            if let design = designOpinionSession(session) {
+                let opinion = runner.designOpinions.opinion(design.id)
+                SecondOpinionLineupButton(author: design.agent,
+                                          installed: AgentKind.allCases.filter { runner.executable(for: $0) != nil },
+                                          runs: opinion?.runs ?? [],
+                                          status: opinion?.status ?? .ask,
+                                          ask: { runner.designOpinions.requestAsk(in: design.id) },
+                                          // The notes already sit in their panel beside the canvas.
+                                          open: {})
+            }
             if let worktreePath = session.worktreePath, let app = WorktreeOpener.current {
                 openInButton(path: worktreePath, app: app, showsWord: showsWords)
             }
@@ -875,6 +885,11 @@ struct SessionView: View {
         if showsSecondOpinion(session) {
             entries.append(.item("Ask for a second opinion", icon: "eyes", action: askForChangesOpinion))
         }
+        if let design = designOpinionSession(session) {
+            entries.append(.item("Ask for a second opinion", icon: "eyes") {
+                runner.designOpinions.requestAsk(in: design.id)
+            })
+        }
         if let worktreePath = session.worktreePath, let current = WorktreeOpener.current {
             // Finder stays one click away whichever app was picked.
             var apps = [current]
@@ -916,6 +931,17 @@ struct SessionView: View {
     // there is a diff to read.
     private func showsSecondOpinion(_ session: ChatSession) -> Bool {
         tab == .changes && workingTreeChanges(session) != nil
+    }
+
+    // The Design session on screen, once it has something to look at.
+    private func designOpinionSession(_ session: ChatSession) -> ChatSession? {
+        let design = switch tab {
+        case .design: store.designSession(for: session.id)
+        case .conversation where session.isActivelyDesigning: session
+        default: nil as ChatSession?
+        }
+        guard let design, store.hasDesignArtifacts(for: design) else { return nil }
+        return design
     }
 
     // The Changes screen owns the dialog, the lineup and the scope it was last asked with.

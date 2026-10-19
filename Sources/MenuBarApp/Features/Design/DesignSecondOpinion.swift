@@ -334,10 +334,47 @@ struct DesignOpinion: Identifiable, Equatable {
     var notes: [PinnedNote] = []
     // How many notes went back, once they have.
     var sent: Int?
+    var dismissed = 0
 
     var isRunning: Bool { lanes.contains(where: \.isRunning) }
     var kept: [PinnedNote] { notes.filter { $0.status == .kept } }
     var pending: [PinnedNote] { notes.filter { $0.status == .pending } }
+
+    // The lanes as the header's lineup reads them, so a design's second opinion shows
+    // the same way as one on the changes.
+    var runs: [SecondOpinionRun] {
+        lanes.map { lane in
+            let state: SecondOpinionRun.State = switch lane.state {
+            case .running: .running
+            case .finished: .finished(found: notes.count { $0.voices.contains { $0.reviewer == lane.reviewer } })
+            case .failed(let message): .failed(message)
+            }
+            return SecondOpinionRun(reviewer: lane.reviewer, started: lane.started, ended: lane.ended, state: state,
+                                    activity: lane.activity, recent: [lane.activity],
+                                    request: SecondOpinionRequest(repositories: [], executable: ""))
+        }
+    }
+
+    var status: SecondOpinionStatus {
+        let running = lanes.filter(\.isRunning)
+        if !running.isEmpty {
+            return .reviewing(agents: Self.unique(running.map(\.reviewer.agent)),
+                              started: running.map(\.started).min() ?? Date(), pending: pending.count)
+        }
+        if pending.isEmpty, let failed = lanes.first(where: { if case .failed = $0.state { true } else { false } }) {
+            return .failed(failed.reviewer.agent)
+        }
+        if !pending.isEmpty {
+            let voices = Set(pending.flatMap { $0.voices.map(\.reviewer.agent) })
+            return .ready(agents: AgentKind.allCases.filter(voices.contains), pending: pending.count)
+        }
+        return .settled(kept: kept.count + (sent ?? 0), dismissed: dismissed)
+    }
+
+    private static func unique(_ agents: [AgentKind]) -> [AgentKind] {
+        var seen = Set<AgentKind>()
+        return agents.filter { seen.insert($0).inserted }
+    }
 
     mutating func take(_ found: [DesignSecondOpinion.Note], from reviewer: SecondOpinion.Reviewer) {
         for note in found {
@@ -380,7 +417,15 @@ final class DesignOpinionStore {
             await DesignSecondOpinion.ask(request, reviewer: reviewer, searchPath: path, activity: activity)
         }
 
+    // Each time the header asks for a second opinion on a session. The Design screen
+    // answers it, since it has the screens to show the reviewers.
+    private(set) var asks: [UUID: Int] = [:]
+
     func opinion(_ sessionID: UUID) -> DesignOpinion? { opinions[sessionID] }
+
+    func requestAsk(in sessionID: UUID) {
+        asks[sessionID, default: 0] += 1
+    }
 
     // Pictures every screen once, then asks every seat alongside the others. Asking
     // again replaces the opinion before it.
@@ -467,7 +512,9 @@ final class DesignOpinionStore {
 
     // A dismissed note is gone for good, along with its pin.
     func dismiss(_ noteID: UUID, in sessionID: UUID) {
+        guard opinions[sessionID]?.notes.contains(where: { $0.id == noteID }) == true else { return }
         opinions[sessionID]?.notes.removeAll { $0.id == noteID }
+        opinions[sessionID]?.dismissed += 1
     }
 
     func markSent(count: Int, in sessionID: UUID) {

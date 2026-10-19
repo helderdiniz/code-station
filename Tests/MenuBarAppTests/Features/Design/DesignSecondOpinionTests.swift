@@ -83,6 +83,23 @@ struct DesignSecondOpinionTests {
         #expect(opinion.pending.count == 3 && opinion.kept.isEmpty)
     }
 
+    @Test func theHeaderReadsADesignOpinionLikeOneOnTheChanges() {
+        var opinion = DesignOpinion(request: request(), lanes: [.init(reviewer: codex), .init(reviewer: copilot)])
+        opinion.take([.init(screen: "approved", selector: "#amt", category: "Copy", severity: .should, text: "Shorter.")],
+                     from: codex)
+        guard case .reviewing(let agents, _, let pending) = opinion.status else {
+            Issue.record("Expected the opinion to be reviewing")
+            return
+        }
+        #expect(agents == [.codex, .copilot] && pending == 1)
+
+        opinion.lanes[0].state = .finished("1 note")
+        opinion.lanes[1].state = .finished("Nothing worth raising")
+        opinion.notes[0].status = .kept
+        opinion.dismissed = 2
+        #expect(opinion.status == .settled(kept: 1, dismissed: 2))
+    }
+
     @Test func keptNotesSayWhereTheyAre() {
         let notes = [DesignOpinion.PinnedNote(screen: "approved", selector: "#amt", category: "Accessibility",
                                               severity: .must, voices: [], status: .kept, text: "Raise the contrast."),
@@ -120,6 +137,8 @@ struct DesignSecondOpinionTests {
         #expect(opinion.lanes.first?.state == .finished("2 notes"))
         #expect(opinion.lanes.last?.state == .failed("Its answer was not a list of notes."))
         #expect(opinion.kept.isEmpty)
+        #expect(opinion.status == .ready(agents: [.codex], pending: 2))
+        #expect(opinion.runs.map(\.state) == [.finished(found: 2), .failed("Its answer was not a list of notes.")])
 
         let contrast = try #require(opinion.notes.first { $0.selector == "#amt" })
         let id = try #require(opinion.notes.first { $0.selector == "#tid" })
@@ -129,6 +148,8 @@ struct DesignSecondOpinionTests {
         #expect(after.notes.count == 1)
         #expect(after.kept.first?.edited == true)
         #expect(after.kept.first?.text == "Raise the amount's contrast to 4.5 to 1.")
+        // Nothing is left to look at, so the lane that failed is what the header says.
+        #expect(after.status == .failed(.copilot))
 
         store.markSent(count: 1, in: session)
         #expect(store.opinion(session)?.sent == 1)
