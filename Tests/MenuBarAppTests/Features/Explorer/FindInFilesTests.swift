@@ -13,6 +13,36 @@ struct FindInFilesTests {
         #expect(loaded.limited)
     }
 
+    @Test func leavesOutWhatGitIgnores() async throws {
+        let scratch = ScratchDirectory()
+        let git = GitInspector.GitTool(path: "/usr/bin/git", searchPath: "/usr/bin:/bin")
+        #expect(GitInspector.run(git, ["init", "-q"], in: scratch.url).ok)
+        let src = scratch.url.appendingPathComponent("src")
+        let packages = scratch.url.appendingPathComponent("node_modules/lib")
+        try FileManager.default.createDirectory(at: src, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: packages, withIntermediateDirectories: true)
+        try Data("node_modules/\n".utf8).write(to: scratch.url.appendingPathComponent(".gitignore"))
+        try Data("kept".utf8).write(to: src.appendingPathComponent("page.html"))
+        try Data("dropped".utf8).write(to: packages.appendingPathComponent("index.js"))
+
+        let root = scratch.url.path
+        let files = await FileTree.files(beneath: scratch.url, includeHidden: true)
+        let paths = await FileTextSearch.unignoredPaths(beneath: root, tool: git)
+        let kept = FileTextSearch.unignored(files, root: root, paths: paths)
+
+        #expect(kept.compactMap { $0.path.pathRelative(to: root) } == [".gitignore", "src/page.html"])
+    }
+
+    @Test func searchesEverythingOutsideARepository() async throws {
+        let scratch = ScratchDirectory()
+        let git = GitInspector.GitTool(path: "/usr/bin/git", searchPath: "/usr/bin:/bin")
+        try Data("text".utf8).write(to: scratch.url.appendingPathComponent("a.txt"))
+
+        let paths = await FileTextSearch.unignoredPaths(beneath: scratch.url.path, tool: git)
+
+        #expect(paths == nil)
+    }
+
     @Test func cancelledLoadsDoNotReadFiles() async throws {
         let scratch = ScratchDirectory()
         try Data("text".utf8).write(to: scratch.url.appendingPathComponent("a.txt"))

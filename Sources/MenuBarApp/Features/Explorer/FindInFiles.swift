@@ -165,6 +165,27 @@ enum FileTextSearch {
 
     static let byteLimit = 32 * 1024 * 1024
 
+    // Inside a git repository, what git ignores is left out. Installed packages and build
+    // output are rarely what the reader is after, and in a web project they hold far more
+    // text than the budget, so the files that matter would never be read. The paths are
+    // relative to `root`. Nil outside a repository, where every file is searched.
+    static func unignoredPaths(beneath root: String, tool: GitInspector.GitTool) async -> Set<String>? {
+        await GitInspector.offMain(lane: .interactive) {
+            let output = GitInspector.run(
+                tool, ["ls-files", "--cached", "--others", "--exclude-standard", "-z"],
+                in: URL(fileURLWithPath: root), captureByteLimit: 64 << 20)
+            guard output.ok, !output.truncated else { return nil }
+            return Set(output.text.split(separator: "\0").map(String.init))
+        }
+    }
+
+    static func unignored(_ files: [FileNode], root: String, paths: Set<String>?) -> [FileNode] {
+        guard let paths else { return files }
+        return files.filter { file in
+            file.path.pathRelative(to: root).map(paths.contains) ?? true
+        }
+    }
+
     static func documents(for files: [FileNode], byteLimit: Int = byteLimit) async -> LoadedDocuments {
         guard !Task.isCancelled else { return LoadedDocuments() }
         let task = Task.detached(priority: .userInitiated) {
@@ -268,8 +289,12 @@ final class FindInFilesModel {
     }
 
     func load() async {
-        let files = await FileTree.files(
+        let tool = GitInspector.tool()
+        async let walked = FileTree.files(
             beneath: URL(fileURLWithPath: root), includeHidden: includeHidden)
+        var paths: Set<String>?
+        if let tool { paths = await FileTextSearch.unignoredPaths(beneath: root, tool: tool) }
+        let files = FileTextSearch.unignored(await walked, root: root, paths: paths)
         guard !Task.isCancelled else { return }
         let loaded = await FileTextSearch.documents(for: files)
         guard !Task.isCancelled else { return }
