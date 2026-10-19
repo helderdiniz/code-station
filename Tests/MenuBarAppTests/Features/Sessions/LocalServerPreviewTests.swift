@@ -473,7 +473,9 @@ struct LocalServerPreviewPageTests {
 
         func click(_ control: Control) throws { try click(CGPoint(x: control.rawValue, y: 779)) }
 
-        func click(page point: CGPoint) throws { try click(preview.webView.convert(point, to: nil)) }
+        func click(page point: CGPoint, holding modifiers: NSEvent.ModifierFlags = []) throws {
+            try click(preview.webView.convert(point, to: nil), holding: modifiers)
+        }
 
         func settle() async throws {
             for _ in 0..<20 {
@@ -824,7 +826,7 @@ struct LocalServerPreviewPageTests {
         let server = FileServer(serving: "<p>Page</p>")
         let port = try await server.start()
         defer { server.stop() }
-        let pane = try await Pane(app: """
+        let app = """
             <a id="docs" href="/docs" target="_blank" \(box(0, 0))>Docs</a>
             <button onclick="document.getElementById('docs').click()" \(box(0, 100))>Docs</button>
             <button onclick="window.open('/report')" \(box(0, 200))>Report</button>
@@ -832,37 +834,33 @@ struct LocalServerPreviewPageTests {
             <button onclick="window.open('https://example.com/docs')" \(box(0, 400))>Elsewhere</button>
             <a id="later" href="/later" target="_blank"></a>
             <script>setTimeout(() => document.getElementById("later").click()); window.open("/popup");</script>
-            """, at: url("http://localhost:\(port)/settings"))
-        defer { pane.close() }
-        var opened: [URL] = []
-        pane.preview.coordinator.openInBrowser = { opened.append($0) }
-        let page = pane.preview.webView
-        try await pane.settle()
-        #expect(pane.previews.pages.count == 1)
+            """
+        let address = url("http://localhost:\(port)/settings")
 
+        // Each press goes to a page that has just loaded. On a slow machine, a page switched
+        // back on screen can miss the first click sent straight to its window.
         let links: [(y: CGFloat, path: String, holding: NSEvent.ModifierFlags)] = [
             (40, "/docs", []), (140, "/docs", []), (240, "/report", []), (340, "/billing", .command),
         ]
         for link in links {
-            let pages = pane.previews.pages.count
-            try pane.click(page.convert(CGPoint(x: 100, y: link.y), to: nil), holding: link.holding)
-            try #require(await waitUntil { pane.previews.pages.count == pages + 1 })
-            let openedPage = try #require(pane.previews.selected)
-            #expect(openedPage.address.path == link.path)
-            // Adding the tab happens before SwiftUI mounts it and WebKit loads it.
-            // Let that finish before switching back to the page the next click targets.
-            try #require(await waitUntil {
-                openedPage.webView.window === pane.window
-                    && openedPage.phase == .showing && !openedPage.webView.isLoading
-            })
-            pane.previews.select(pane.preview)
-            try #require(await waitUntil { page.window === pane.window })
+            let pane = try await Pane(app: app, at: address)
+            defer { pane.close() }
             try await pane.settle()
+            #expect(pane.previews.pages.count == 1)
+            try pane.click(page: CGPoint(x: 100, y: link.y), holding: link.holding)
+            #expect(await waitUntil { pane.previews.pages.count == 2 }, "\(link.path)")
+            #expect(pane.previews.selected?.address.path == link.path)
+            #expect(pane.preview.address.path == "/settings")
         }
-        try pane.click(page: CGPoint(x: 100, y: 440))
 
+        let pane = try await Pane(app: app, at: address)
+        defer { pane.close() }
+        var opened: [URL] = []
+        pane.preview.coordinator.openInBrowser = { opened.append($0) }
+        try await pane.settle()
+        try pane.click(page: CGPoint(x: 100, y: 440))
         #expect(await waitUntil { opened == [url("https://example.com/docs")] })
-        #expect(pane.previews.pages.count == 5)
+        #expect(pane.previews.pages.count == 1)
         #expect(pane.preview.address.path == "/settings")
     }
 }

@@ -2090,7 +2090,6 @@ struct ChangesView: View {
         let unplaced = placement.unplaced.count
         let sent = review.reviews.threads(review.sessionID).count
         let unread = review.reviews.unreadCount(review.sessionID)
-        let asked = review.reviews.questions(review.sessionID).count
         let details = [
             !kept.isEmpty ? "On \(counted(fileCount, "file")). Changes wait here until you send them"
                 : all.isEmpty ? "Click a line number to ask or comment" : "Nothing kept yet",
@@ -2106,14 +2105,6 @@ struct ChangesView: View {
                 .fixedSize()
                 .appTooltip(details.joined(separator: ". ") + ".")
                 .accessibilityHint(details.joined(separator: ". "))
-            reviewCount(count: kept.count, text: "to send",
-                        icon: "pencil", tint: Theme.accent, help: "Goes to \(review.agent.title) when you send") {
-                showingReview = true
-            }
-            reviewCount(count: asked, text: asked == 1 ? "question stays here" : "questions stay here",
-                        icon: "eye.slash", tint: Theme.plan, help: "Answered here. Never sent to \(review.agent.title)") {
-                showingQuestions = true
-            }
             if unread > 0 {
                 Button(action: nextUnread) {
                     Text(unread == 1 ? "1 reply to read" : "\(unread) replies to read")
@@ -2147,27 +2138,6 @@ struct ChangesView: View {
         .padding(.horizontal, 20).padding(.vertical, 8)
         .background(Theme.card)
         .overlay(alignment: .top) { Rectangle().fill(Theme.hairline).frame(height: 1) }
-    }
-
-    // A count in the review bar that says where things go, in words as well as colour.
-    private func reviewCount(count: Int, text: String, icon: String, tint: Color, help: String,
-                             open: @escaping () -> Void) -> some View {
-        Button(action: open) {
-            HStack(spacing: 5) {
-                Image(systemName: icon).font(.system(size: 10, weight: .semibold))
-                Text("\(count)").fontWeight(.bold)
-                Text(text)
-            }
-            .font(.system(size: 11.5, weight: .medium))
-            .foregroundStyle(count > 0 ? tint : Color.secondary)
-            .padding(.horizontal, 9).frame(height: 24)
-            .background(Capsule().fill((count > 0 ? tint : Color.secondary).opacity(0.1)))
-            .contentShape(Capsule())
-            .fixedSize()
-        }
-        .buttonStyle(.plain)
-        .appTooltip(help)
-        .accessibilityLabel("\(count) \(text)")
     }
 
     // The first thread with an answer not yet read, in the order the review list shows.
