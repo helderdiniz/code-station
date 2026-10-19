@@ -875,7 +875,7 @@ final class ReviewCommentStore {
         runs[sessionID] = nil
         clear(sessionID)
         rounds[sessionID] = nil
-        for question in questions(sessionID) { stopQuestion(question.id) }
+        for question in questions(sessionID) { cancelAnswer(question.id) }
         questions[sessionID] = nil
         saver?.schedule()
     }
@@ -1310,8 +1310,31 @@ final class ReviewCommentStore {
         startAnswer(id, context: context, in: sessionID)
     }
 
+    // Ends the side copy's run at once. The fork id stays, so asking again goes on in the
+    // same conversation.
+    func stopAnswering(_ id: UUID, in sessionID: UUID) {
+        guard let index = questionIndex(id, in: sessionID),
+              let last = questions[sessionID]?[index].exchanges.indices.last,
+              questions[sessionID]?[index].status == .answering else { return }
+        let reached = questionSteps[id] ?? []
+        cancelAnswer(id)
+        questions[sessionID]?[index].exchanges[last].stopped = Date()
+        questions[sessionID]?[index].exchanges[last].stoppedSteps = reached
+        saver?.schedule()
+    }
+
+    func askAgain(_ id: UUID, context: QuestionContext, in sessionID: UUID) {
+        guard let index = questionIndex(id, in: sessionID),
+              let last = questions[sessionID]?[index].exchanges.indices.last,
+              questions[sessionID]?[index].status == .stopped else { return }
+        questions[sessionID]?[index].exchanges[last].stopped = nil
+        questions[sessionID]?[index].exchanges[last].stoppedSteps = nil
+        saver?.schedule()
+        startAnswer(id, context: context, in: sessionID)
+    }
+
     func deleteQuestion(_ id: UUID, in sessionID: UUID) {
-        stopQuestion(id)
+        cancelAnswer(id)
         questions[sessionID]?.removeAll { $0.id == id }
         if questions[sessionID]?.isEmpty == true { questions[sessionID] = nil }
         saver?.schedule()
@@ -1364,7 +1387,7 @@ final class ReviewCommentStore {
         questions[sessionID]?.firstIndex { $0.id == id }
     }
 
-    private func stopQuestion(_ id: UUID) {
+    private func cancelAnswer(_ id: UUID) {
         questionTasks[id]?.cancel()
         questionTasks[id] = nil
         questionSteps[id] = nil
@@ -1372,7 +1395,7 @@ final class ReviewCommentStore {
 
     private func startAnswer(_ id: UUID, context: QuestionContext, in sessionID: UUID) {
         guard let question = question(id, in: sessionID) else { return }
-        stopQuestion(id)
+        cancelAnswer(id)
         guard let executable = context.executable else {
             finishAnswer(id, in: sessionID, outcome: .failure(.init(message: "\(context.agent.title) is not installed.")))
             return

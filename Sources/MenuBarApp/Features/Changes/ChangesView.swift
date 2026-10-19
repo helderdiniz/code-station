@@ -627,11 +627,12 @@ struct ChangesView: View {
         .background(Theme.card)
     }
 
-    // Before the first comment every control on the strip is disabled, so it only takes
-    // room from the diff. The coach mark covers how to start a review.
+    // The strip only shows when it can do something: send kept comments, or show a round
+    // that went. Findings still waiting for a look do not count, since the header already
+    // offers them, and the coach mark covers how to start a review.
     private var showsReviewStrip: Bool {
         guard let review, mode == .changes else { return false }
-        return !review.reviews.comments(review.sessionID).isEmpty
+        return !review.reviews.kept(review.sessionID).isEmpty
             || !review.reviews.rounds(review.sessionID).isEmpty
     }
 
@@ -1974,6 +1975,11 @@ struct ChangesView: View {
             step(event.keyCode == 125 ? 1 : -1)
             return true
         }
+        if flags.isEmpty, event.keyCode == 53, let id = focusedComment,
+           let question = review.reviews.question(id, in: review.sessionID), question.status == .answering {
+            stopAnswering(question, review: review)
+            return true
+        }
         guard flags.isEmpty, let id = focusedComment,
               let comment = review.reviews.comment(id, in: review.sessionID) else { return false }
         if event.keyCode == 53 {
@@ -2435,6 +2441,8 @@ struct ChangesView: View {
                 if focusedComment == question.id { focusedComment = nil }
                 announce("Question deleted")
             },
+            stop: { stopAnswering(question, review: review) },
+            askAgain: { askAgain(question, review: review) },
             makeChange: question.isWhole ? nil : {
                 guard let change = reviews.makeChange(from: question.id, in: sessionID) else { return }
                 sendChange(change, review: review)
@@ -2453,6 +2461,21 @@ struct ChangesView: View {
             .clipShape(RoundedRectangle(cornerRadius: 10))
             .overlay(RoundedRectangle(cornerRadius: 10).stroke(focused ? Theme.plan : Theme.border, lineWidth: focused ? 2 : 1))
             .onTapGesture { focusedComment = question.id }
+    }
+
+    // Stopping is cheap and asking again undoes it, so it needs no confirming.
+    private func stopAnswering(_ question: ReviewQuestion, review: ReviewTarget) {
+        review.reviews.stopAnswering(question.id, in: review.sessionID)
+        showToast("Stopped answering \u{201C}\(question.text.trimmed)\u{201D}", action: "Ask again") {
+            focusedComment = question.id
+            askAgain(question, review: review)
+        }
+    }
+
+    private func askAgain(_ question: ReviewQuestion, review: ReviewTarget) {
+        review.reviews.askAgain(question.id, context: questionContext(review), in: review.sessionID)
+        if toast?.actionTitle == "Ask again" { toast = nil }
+        announce("Asked again")
     }
 
     // Puts a question in focus and brings it on screen. One about the whole change has no
@@ -2552,6 +2575,9 @@ struct ChangesView: View {
                             .font(.mono(10.5)).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
                         Spacer(minLength: 4)
                         questionBadge(question, review: review)
+                        // Room for the stop button, which sits over the label so it is not
+                        // a button inside a button.
+                        if question.status == .answering { Color.clear.frame(width: 22, height: 22) }
                     }
                     Text(question.text).font(.system(size: 12, weight: .semibold)).lineLimit(2)
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -2564,6 +2590,9 @@ struct ChangesView: View {
                         .font(.system(size: 11.5)).foregroundStyle(.secondary)
                     case .failed:
                         Text(question.failure ?? "").font(.system(size: 11.5)).foregroundStyle(Theme.warningText).lineLimit(2)
+                    case .stopped:
+                        Text("You stopped it. Ask again or remove it.").font(.system(size: 11.5))
+                            .foregroundStyle(.secondary).lineLimit(2)
                     case .answered:
                         ReviewText(text: question.exchanges.last?.answer ?? "", size: 11.5, lineLimit: 3)
                             .foregroundStyle(.secondary)
@@ -2574,6 +2603,11 @@ struct ChangesView: View {
             .buttonStyle(.plain)
             .accessibilityLabel(question.spokenName)
             .accessibilityAddTraits(isFocused ? .isSelected : [])
+            .overlay(alignment: .topTrailing) {
+                if question.status == .answering {
+                    StopAnsweringButton { stopAnswering(question, review: review) }
+                }
+            }
             if question.status == .failed {
                 HStack(spacing: 12) {
                     InlineLink(title: "Try again", size: 11.5) {
@@ -2599,6 +2633,7 @@ struct ChangesView: View {
         let (text, ink): (String, Color) = switch question.status {
         case .answering: ("Answering…", Color.secondary)
         case .failed: ("Couldn't answer", Theme.warningText)
+        case .stopped: ("Stopped", Color.secondary)
         case .answered:
             sent ? ("Became a change", Theme.accent)
                 : waiting ? ("Change in review", Theme.accent)

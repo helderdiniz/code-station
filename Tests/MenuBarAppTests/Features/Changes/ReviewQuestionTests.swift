@@ -156,6 +156,99 @@ struct ReviewQuestionTests {
         #expect(!FileManager.default.fileExists(atPath: questionsURL.path))
     }
 
+    // A side copy that never answers on its own, the way a long one looks while it runs.
+    private func slowStore(url: URL? = nil, then reply: SideQuestion.Reply? = nil,
+                           asked: Asked = Asked()) -> ReviewCommentStore {
+        let store = ReviewCommentStore(url: url)
+        store.answerQuestion = { request, activity in
+            asked.append(request)
+            if let reply, asked.requests.count > 1 { return .success(reply) }
+            activity("Opening a side copy of this session")
+            activity("Reading App.swift")
+            try? await Task.sleep(for: .seconds(60))
+            return .success(.init(answer: "Too late.", suggestion: nil, forkID: nil))
+        }
+        return store
+    }
+
+    @Test func stoppingEndsTheRunAndKeepsTheStepsItReached() async {
+        let store = slowStore(then: .init(answer: "Second time.", suggestion: nil, forkID: "fork-2"))
+        let session = UUID()
+        let question = question()
+        store.ask(question, context: context, in: session)
+        #expect(await waitUntil { store.questionSteps[question.id]?.count == 2 })
+
+        store.stopAnswering(question.id, in: session)
+        let stopped = store.question(question.id, in: session)
+        #expect(stopped?.status == .stopped)
+        #expect(stopped?.exchanges.last?.stoppedSteps == ["Opening a side copy of this session", "Reading App.swift"])
+        #expect(stopped?.exchanges.last?.failure == nil)
+        #expect(stopped?.spokenName.contains("stopped") == true)
+        #expect(!store.isAnswering(question.id))
+        #expect(store.questionSteps[question.id] == nil)
+
+        store.askAgain(question.id, context: context, in: session)
+        #expect(store.question(question.id, in: session)?.exchanges.last?.stopped == nil)
+        #expect(await waitUntil { store.question(question.id, in: session)?.status == .answered })
+        #expect(store.question(question.id, in: session)?.exchanges.map(\.answer) == ["Second time."])
+    }
+
+    @Test func onlyARunningQuestionCanBeStopped() async {
+        let store = store(replies: [.success(.init(answer: "Done.", suggestion: nil, forkID: nil))])
+        let session = UUID()
+        let question = question()
+        store.ask(question, context: context, in: session)
+        #expect(await waitUntil { store.question(question.id, in: session)?.status == .answered })
+
+        store.stopAnswering(question.id, in: session)
+        #expect(store.question(question.id, in: session)?.status == .answered)
+        store.askAgain(question.id, context: context, in: session)
+        #expect(store.question(question.id, in: session)?.exchanges.count == 1)
+    }
+
+    @Test func askingAgainAfterAStoppedFollowUpGoesOnInTheSameFork() async {
+        let asked = Asked()
+        let store = ReviewCommentStore(url: nil)
+        store.answerQuestion = { request, _ in
+            asked.append(request)
+            if asked.requests.count == 2 { try? await Task.sleep(for: .seconds(60)) }
+            return .success(.init(answer: "Answer \(asked.requests.count).", suggestion: nil, forkID: "fork-1"))
+        }
+        let session = UUID()
+        let question = question()
+        store.ask(question, context: context, in: session)
+        #expect(await waitUntil { store.question(question.id, in: session)?.status == .answered })
+
+        store.followUp("And why?", to: question.id, context: context, in: session)
+        #expect(await waitUntil { asked.requests.count == 2 })
+        store.stopAnswering(question.id, in: session)
+        #expect(store.question(question.id, in: session)?.forkID == "fork-1")
+
+        store.askAgain(question.id, context: context, in: session)
+        #expect(await waitUntil { store.question(question.id, in: session)?.status == .answered })
+        #expect(asked.requests.last?.question.forkID == "fork-1")
+        #expect(asked.requests.last?.question.exchanges.last?.question == "And why?")
+    }
+
+    @Test func aStoppedQuestionLoadsAsStopped() throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("review-\(UUID().uuidString).json")
+        let questionsURL = url.deletingPathExtension().appendingPathExtension("questions").appendingPathExtension("json")
+        defer {
+            try? FileManager.default.removeItem(at: url)
+            try? FileManager.default.removeItem(at: questionsURL)
+        }
+        let session = UUID()
+        let store = slowStore(url: url)
+        let question = question()
+        store.ask(question, context: context, in: session)
+        store.stopAnswering(question.id, in: session)
+        store.flush()
+
+        let reopened = ReviewCommentStore(url: url)
+        #expect(reopened.question(question.id, in: session)?.status == .stopped)
+        #expect(reopened.question(question.id, in: session)?.failure == nil)
+    }
+
     @Test func theSuggestedChangeIsTakenOffTheEndOfTheAnswer() {
         let read = SideQuestion.read("It is a sample.\n\nSuggested change: Say it is a sample to copy.\n")
         #expect(read.answer == "It is a sample.")

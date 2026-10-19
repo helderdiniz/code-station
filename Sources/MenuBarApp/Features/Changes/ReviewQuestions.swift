@@ -14,10 +14,15 @@ struct ReviewQuestion: Identifiable, Codable, Equatable, Sendable {
         var suggestion: String?
         var answered: Date?
         var failure: String?
+        // Set when the person stops the answer. Kept apart from a failure, since nothing
+        // went wrong and asking again is all it takes.
+        var stopped: Date?
+        // The steps the side copy had reached when it was stopped, the last one cut short.
+        var stoppedSteps: [String]?
     }
 
     enum Status: Equatable, Sendable {
-        case answering, answered, failed
+        case answering, answered, failed, stopped
     }
 
     var id = UUID()
@@ -65,7 +70,8 @@ struct ReviewQuestion: Identifiable, Codable, Equatable, Sendable {
     var status: Status {
         guard let last = exchanges.last else { return .answered }
         if last.answer != nil { return .answered }
-        return last.failure != nil ? .failed : .answering
+        if last.failure != nil { return .failed }
+        return last.stopped != nil ? .stopped : .answering
     }
 
     var failure: String? { exchanges.last?.failure }
@@ -80,6 +86,7 @@ struct ReviewQuestion: Identifiable, Codable, Equatable, Sendable {
         case .answering: "answering"
         case .answered: "answered"
         case .failed: "could not answer"
+        case .stopped: "stopped"
         }
         return "Question on \(linesLabel.lowercased()), \(state): \(text)"
     }

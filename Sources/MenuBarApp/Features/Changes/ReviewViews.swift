@@ -443,6 +443,8 @@ struct QuestionThreadView: View {
     let reopen: () -> Void
     let retry: () -> Void
     let delete: () -> Void
+    var stop: () -> Void = {}
+    var askAgain: () -> Void = {}
     // Nil where there are no lines to hang a change from: a question on the whole change.
     var makeChange: (() -> Void)?
     var takeOut: () -> Void = {}
@@ -452,6 +454,7 @@ struct QuestionThreadView: View {
     @State private var asking = false
     @State private var draft = ""
     @FocusState private var fieldFocused: Bool
+    @AccessibilityFocusState private var askAgainFocused: Bool
 
     private var agent: AgentKind { question.agent }
 
@@ -461,6 +464,9 @@ struct QuestionThreadView: View {
         }
         .accessibilityElement(children: .contain)
         .accessibilityLabel(question.spokenName)
+        .onChange(of: question.status) { _, status in
+            if status == .stopped { askAgainFocused = true }
+        }
     }
 
     private var collapsed: some View {
@@ -495,6 +501,8 @@ struct QuestionThreadView: View {
                         }
                     } else if let failure = exchange.failure {
                         failed(failure)
+                    } else if exchange.stopped != nil {
+                        stopped(exchange.stoppedSteps ?? [])
                     } else {
                         answering
                     }
@@ -534,6 +542,10 @@ struct QuestionThreadView: View {
                 HStack(spacing: 7) {
                     Text(agent.title).font(.system(size: 12, weight: .semibold))
                     Text(meta).font(.system(size: 11)).foregroundStyle(.tertiary)
+                    if answering {
+                        Spacer(minLength: 8)
+                        StopAnsweringButton(showsTitle: true, action: stop)
+                    }
                 }
                 .frame(minHeight: 22)
                 content()
@@ -562,6 +574,50 @@ struct QuestionThreadView: View {
             .padding(.top, 2)
             .accessibilityElement(children: .combine)
             .accessibilityLabel("\(agent.title) is answering. " + (steps.last ?? ""))
+        }
+    }
+
+    // The steps it had finished keep their tick, the one it was on is struck through, and
+    // the rest are never shown.
+    private func stopped(_ reached: [String]) -> some View {
+        sideCopy(meta: "side copy · stopped") {
+            VStack(alignment: .leading, spacing: 10) {
+                VStack(alignment: .leading, spacing: 4) {
+                    let shown = reached.isEmpty ? ["Starting"] : reached
+                    ForEach(Array(shown.enumerated()), id: \.offset) { index, step in
+                        HStack(spacing: 6) {
+                            if index == shown.count - 1 {
+                                RoundedRectangle(cornerRadius: 1.5).fill(Color.secondary)
+                                    .frame(width: 7, height: 7).frame(width: 12)
+                                Text(step).strikethrough(color: Color.secondary.opacity(0.6))
+                                    .lineLimit(1).truncationMode(.middle)
+                            } else {
+                                Image(systemName: "checkmark").font(.system(size: 9, weight: .bold))
+                                    .foregroundStyle(Theme.dotOn).frame(width: 12)
+                                Text(step).foregroundStyle(Color.primary).lineLimit(1).truncationMode(.middle)
+                            }
+                        }
+                    }
+                }
+                .font(.system(size: 12)).foregroundStyle(.secondary)
+                .padding(.top, 2)
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel("Stopped at: " + (reached.last ?? "Starting"))
+                HStack(spacing: 12) {
+                    (Text("You stopped this answer. ").fontWeight(.semibold).foregroundStyle(Color.primary)
+                     + Text("Nothing in the session or the review changed."))
+                        .font(.system(size: 12)).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    InlineLink(title: "Remove", size: 11.5, action: delete)
+                    ActionButton(title: "Ask again", tone: .plan, height: 26, size: 11.5,
+                                 icon: "arrow.clockwise", action: askAgain)
+                        .accessibilityFocused($askAgainFocused)
+                }
+                .padding(10)
+                .background(RoundedRectangle(cornerRadius: 8).fill(Theme.field))
+                .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.border))
+            }
         }
     }
 
@@ -702,6 +758,38 @@ struct QuestionThreadView: View {
     private func cancel() {
         draft = ""
         asking = false
+    }
+}
+
+// Stops a side copy while it answers. The full pill carries the Esc cap; the square one
+// fits beside a chip in a list.
+struct StopAnsweringButton: View {
+    var showsTitle = false
+    let action: () -> Void
+
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 6) {
+                RoundedRectangle(cornerRadius: 2).frame(width: 8, height: 8)
+                if showsTitle {
+                    Text("Stop").font(.system(size: 11.5, weight: .semibold)).fixedSize()
+                    KeyCap(key: "esc")
+                }
+            }
+            .foregroundStyle(hovering ? Theme.warningText : Color.primary)
+            .padding(.horizontal, showsTitle ? 9 : 0)
+            .frame(width: showsTitle ? nil : 22, height: showsTitle ? 24 : 22)
+            .surface(hovering ? Theme.warningBackground : Theme.card, cornerRadius: 6,
+                     border: hovering ? Theme.warningText.opacity(0.3) : Theme.border)
+            .contentShape(RoundedRectangle(cornerRadius: 6))
+        }
+        .buttonStyle(.plain)
+        .hoverLift(hovering, amount: Motion.smallLift)
+        .onHover { hovering = $0 }
+        .appTooltip("Stop answering  esc")
+        .accessibilityLabel("Stop answering")
     }
 }
 
