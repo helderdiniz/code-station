@@ -658,7 +658,7 @@ struct AppSidebar: View {
                                 isFirst: session.id == visible.first?.id,
                                 isLast: hidden == 0 && session.id == visible.last?.id,
                                 stackSpacing: Self.listSpacing)
-            .transition(.fadeIn)
+            .transition(.fold)
         }
         if hidden > 0 {
             SidebarRailRow(colour: tint.colour) {
@@ -668,7 +668,7 @@ struct AppSidebar: View {
             }
             .sidebarRailSegment(colour: tint.colour, isFirst: false, isLast: true,
                                 stackSpacing: Self.listSpacing)
-            .transition(.fadeIn)
+            .transition(.fold)
         }
     }
 
