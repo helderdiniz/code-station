@@ -1069,8 +1069,7 @@ struct SessionView: View {
     }
 
     private func changesTab(_ session: ChatSession) -> HeaderTab {
-        let label = store.isDesignMode(session) ? "Project Changes" : "Changes"
-        var changes = destination(label, icon: "plusminus", value: .changes)
+        var changes = destination("Changes", icon: "plusminus", value: .changes)
         changes.hasContent = workingTreeChanges(session) != nil
         return changes
     }

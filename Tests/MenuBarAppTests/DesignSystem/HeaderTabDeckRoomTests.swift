@@ -13,11 +13,11 @@ struct HeaderTabDeckRoomTests {
     private func tabs(selecting selected: String,
                       changesHaveContent: Bool? = nil) -> [HeaderTab] {
         [("Chat", "bubble.left.and.bubble.right"), ("Design", "paintbrush.pointed"),
-         ("Troubleshoot", "stethoscope"), ("Project Changes", "plusminus"),
+         ("Troubleshoot", "stethoscope"), ("Changes", "plusminus"),
          ("Explorer", "folder")].map { label, icon in
             var tab = HeaderTab(label: label, icon: icon, selected: label == selected,
                                 activate: {})
-            if label == "Project Changes" { tab.hasContent = changesHaveContent }
+            if label == "Changes" { tab.hasContent = changesHaveContent }
             return tab
         }
     }
