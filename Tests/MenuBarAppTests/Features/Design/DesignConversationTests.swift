@@ -210,6 +210,10 @@ struct DesignConversationViewTests {
         selectedText.setSelectedRange(NSRange(location: 2, length: 4))
         transcript.contentView.scroll(to: CGPoint(x: 0, y: 200))
         transcript.reflectScrolledClipView(transcript.contentView)
+        // Only a person's scroll unpins the transcript from its end. Left pinned, it is sent
+        // back to the end as the panel grows, racing the restore of the reading position.
+        NotificationCenter.default.post(name: NSScrollView.didLiveScrollNotification, object: transcript)
+        NotificationCenter.default.post(name: NSScrollView.didEndLiveScrollNotification, object: transcript)
         try await settle()
         let readingPosition = transcript.documentVisibleRect
         let escape = try #require(NSEvent.keyEvent(with: .keyDown, location: .zero,
@@ -233,7 +237,9 @@ struct DesignConversationViewTests {
         }
         try await settle()
         #expect(observer.expanded)
-        #expect(abs(transcript.documentVisibleRect.minY - readingPosition.minY) < 1)
+        // The position comes back once the panel has finished growing, which takes longer
+        // on a slow machine.
+        #expect(await waitUntil { abs(transcript.documentVisibleRect.minY - readingPosition.minY) < 1 })
         #expect(transcript.documentVisibleRect.size == readingPosition.size)
         #expect(descendants(hosting.view).contains { $0 === composer })
         #expect(descendants(hosting.view).contains { $0 === transcript })
