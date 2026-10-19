@@ -494,6 +494,24 @@ struct TranscriptSelectionTests {
         #expect(selection.selectedText == "https")
     }
 
+    // The project's colour is a thin bar, but the shape behind it covers the whole bubble.
+    @Test func aLinkInAPromptWithTheProjectsEdgeCanBeClicked() throws {
+        var opened: [URL] = []
+        let page = try Page(selection: TranscriptSelection()) {
+            MessageView(message: ChatMessage(role: .user, text: "Look at http://localhost:5173/page"),
+                        projectPath: "/tmp", textScale: 1,
+                        openPreview: { opened.append($0); return true },
+                        availableWidth: 800,
+                        bubble: .tinted(.red))
+        }
+        defer { page.close() }
+        let view = try #require(page.views.first)
+
+        page.click(view, atCharacter: view.characterIndex(of: "localhost") + 2)
+
+        #expect(opened.map(\.absoluteString) == ["http://localhost:5173/page"])
+    }
+
     @Test func aLongSentCodeLineScrollsWithinTheBubble() throws {
         let page = try Page(selection: TranscriptSelection()) {
             MessageView(message: ChatMessage(role: .user,

@@ -109,7 +109,8 @@ struct MessageView: View, Equatable {
                                                bottomTrailingRadius: 4, topTrailingRadius: 12)
                 .fill(bubble.fill))
             // Clipped by the bubble, so the bar follows its rounded top corner and its
-            // squared bottom one.
+            // squared bottom one. A mask only hides pixels, so the bar would still take
+            // every click on the bubble, links included, without turning hit testing off.
             .overlay(alignment: .trailing) {
                 if let edge = bubble.edge {
                     UnevenRoundedRectangle(topLeadingRadius: 12, bottomLeadingRadius: 12,
@@ -118,6 +119,7 @@ struct MessageView: View, Equatable {
                         .mask(alignment: .trailing) {
                             Rectangle().frame(width: Self.edgeWidth)
                         }
+                        .allowsHitTesting(false)
                 }
             }
             .overlay(UnevenRoundedRectangle(topLeadingRadius: 12, bottomLeadingRadius: 12,
