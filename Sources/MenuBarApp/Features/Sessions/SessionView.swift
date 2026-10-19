@@ -671,10 +671,12 @@ struct SessionView: View {
     }
 
     // Placed first: the rail keeps to the trailing edge, so the other seats do not move.
+    // It shows before the agent links an app, so any address can be typed in.
     @ViewBuilder
     private func previewSeat(_ session: ChatSession, showsWord: Bool) -> some View {
-        if !session.isActivelyDesigning,
-           let address = previews.selected?.address ?? linkedApp.address {
+        if !session.isActivelyDesigning {
+            let address = previews.selected.flatMap { $0.isBlank ? nil : $0.address }
+                ?? linkedApp.address
             let isOpen = tab == .conversation && previews.isOpen
             let pages = previews.pages.count
             HeaderDockSeat(icon: "globe",
@@ -682,12 +684,19 @@ struct SessionView: View {
                            isOpen: isOpen,
                            count: pages > 1 ? pages : nil,
                            showsWord: showsWord,
-                           detail: "The running app at \(LocalServerPreview.label(for: address))") {
+                           detail: address.map { "The running app at \(LocalServerPreview.label(for: $0))" }
+                               ?? "Open a running app by its address") {
                 if isOpen {
                     closePreview()
                 } else {
                     tab = .conversation
-                    if previews.pages.isEmpty { previews.open(address) } else { previews.show() }
+                    if !previews.pages.isEmpty {
+                        previews.show()
+                    } else if let address {
+                        previews.open(address)
+                    } else {
+                        previews.openBlank()
+                    }
                 }
             }
         }

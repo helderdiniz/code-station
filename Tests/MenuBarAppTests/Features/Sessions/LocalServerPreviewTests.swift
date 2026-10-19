@@ -195,6 +195,38 @@ struct LocalServerPreviewTabsTests {
         #expect(stores[0] === stores[1])
         #expect(stores[0] !== stores[2])
     }
+
+    // With no app linked yet, the preview opens empty and waits for an address to be typed.
+    @Test func aBlankPageWaitsForATypedAddress() throws {
+        let previews = LocalServerPreviewTabs()
+        previews.openBlank()
+        let page = try #require(previews.selected)
+        #expect(previews.isOpen)
+        #expect(page.phase == .blank)
+        page.reload()
+        #expect(page.phase == .blank)
+        #expect(page.reloadGeneration == 0)
+        #expect(!page.canGoBack)
+        #expect(LocalServerPreview.label(for: page.address) == "New page")
+
+        #expect(!page.open(typed: "/settings"))
+        #expect(page.open(typed: "example.com"))
+        #expect(page.phase == .elsewhere(url("http://example.com"), over: .blank))
+        page.stay()
+        #expect(page.phase == .blank)
+
+        #expect(page.open(typed: ":5173"))
+        #expect(page.address == url("http://localhost:5173"))
+        #expect(page.phase == .opening)
+        #expect(page.reloadGeneration == 1)
+
+        previews.openBlank()
+        let second = try #require(previews.selected)
+        previews.open(url("http://localhost:3000/"))
+        #expect(previews.pages.count == 2)
+        #expect(previews.selected === second)
+        #expect(second.address == url("http://localhost:3000/"))
+    }
 }
 
 // An agent reads a pick, so it names the element and its page once, as a pick on Design does.

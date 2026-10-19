@@ -6,7 +6,7 @@ import WebKit
 @Observable
 final class LocalServerPreview: Identifiable {
     enum Phase: Equatable {
-        case opening, showing, unreachable, failed(String), noPage, stopped, left(URL)
+        case blank, opening, showing, unreachable, failed(String), noPage, stopped, left(URL)
         indirect case elsewhere(URL, over: Phase)
     }
 
@@ -23,10 +23,15 @@ final class LocalServerPreview: Identifiable {
     // Kept off disk, so nothing a running app stores outlives the session's pane.
     @ObservationIgnored private let dataStore: WKWebsiteDataStore
 
+    // A page with no address yet waits for one to be typed, so it loads nothing.
+    static let blank = URL(string: "about:blank")!
+
+    var isBlank: Bool { address == Self.blank }
+
     init(opening address: URL, dataStore: WKWebsiteDataStore = .nonPersistent()) {
         self.address = address
         self.dataStore = dataStore
-        reload()
+        if isBlank { phase = .blank } else { reload() }
     }
 
     var webView: WKWebView {
@@ -50,7 +55,7 @@ final class LocalServerPreview: Identifiable {
     }
 
     func open(typed text: String) -> Bool {
-        guard let url = Self.address(text, on: address) else { return false }
+        guard let url = Self.address(text, on: isBlank ? nil : address) else { return false }
         if TranscriptLink.isLocalServer(url) {
             open(url)
         } else {
@@ -73,6 +78,7 @@ final class LocalServerPreview: Identifiable {
     }
 
     func reload() {
+        guard !isBlank else { return }
         phase = pagePhase == .showing ? .showing : .opening
         reloadGeneration += 1
     }
@@ -83,7 +89,7 @@ final class LocalServerPreview: Identifiable {
         switch phase {
         case .elsewhere: true
         case .unreachable, .failed, .left: shownPage != nil
-        case .opening, .showing, .noPage, .stopped: pageBehind
+        case .blank, .opening, .showing, .noPage, .stopped: pageBehind
         }
     }
 
@@ -101,7 +107,7 @@ final class LocalServerPreview: Identifiable {
             guard let shownPage else { return }
             phase = .showing
             follow(shownPage)
-        case .opening, .showing, .noPage, .stopped:
+        case .blank, .opening, .showing, .noPage, .stopped:
             madeWebView?.goBack()
         }
     }
@@ -112,7 +118,7 @@ final class LocalServerPreview: Identifiable {
     // the one that failed, so Reload tries it again.
     func follow(_ url: URL) {
         switch pagePhase {
-        case .unreachable, .failed, .noPage: return
+        case .blank, .unreachable, .failed, .noPage: return
         case .opening, .showing, .stopped, .left, .elsewhere: break
         }
         if url != address { address = url }
@@ -141,6 +147,7 @@ final class LocalServerPreview: Identifiable {
     }
 
     static func label(for url: URL) -> String {
+        if url == blank { return "New page" }
         let path = Self.path(url)
         return path == "/" ? server(url) : server(url) + path
     }
@@ -222,9 +229,18 @@ final class LocalServerPreviewTabs {
         isOpen = true
     }
 
+    func openBlank() {
+        let page = LocalServerPreview(opening: LocalServerPreview.blank, dataStore: dataStore)
+        page.coordinator.onNewPage = { [weak self] in self?.open($0, inNewPage: true) }
+        pages.append(page)
+        selectedID = page.id
+        isOpen = true
+    }
+
     func openAnotherPage() {
-        guard let address = selected?.address,
-              let root = URL(string: "/", relativeTo: address)?.absoluteURL else { return }
+        guard let page = selected, !page.isBlank,
+              let root = URL(string: "/", relativeTo: page.address)?.absoluteURL
+        else { return openBlank() }
         open(root, inNewPage: true)
     }
 
@@ -324,8 +340,10 @@ struct LocalServerPreviewPage: View {
         // The monitors capture the page they started with, so they start again with the new one.
         .onChange(of: preview.id) {
             if dialogs.current == nil { startMonitors() }
-            if editingAddress { typedAddress = preview.address.absoluteString }
+            if editingAddress { typedAddress = preview.isBlank ? "" : preview.address.absoluteString }
+            if preview.isBlank { editAddress() }
         }
+        .onAppear { if preview.isBlank { editAddress() } }
         .onChange(of: addressFieldFocused) { _, focused in
             addressFocused = focused
             if !focused { editingAddress = false }
@@ -418,9 +436,13 @@ struct LocalServerPreviewPage: View {
                     : "Select an element to refine")
                 .accessibilityLabel("Select an element to refine")
             }
-            barButton("arrow.up.right", help: "Open in browser") { openInBrowser(preview.address) }
+            barButton("arrow.up.right", help: "Open in browser", disabled: preview.isBlank) {
+                openInBrowser(preview.address)
+            }
             barButton("xmark", help: "Hide preview", action: onClose)
-            barButton("arrow.clockwise", help: "Reload page") { preview.reload() }
+            barButton("arrow.clockwise", help: "Reload page", disabled: preview.isBlank) {
+                preview.reload()
+            }
         }
         .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { barWidth = $0 }
         .canvasBar()
@@ -450,8 +472,9 @@ struct LocalServerPreviewPage: View {
         } else {
             Button(action: editAddress) {
                 addressSurface {
-                    Text(LocalServerPreview.label(for: preview.address))
+                    Text(preview.isBlank ? "Address or port" : LocalServerPreview.label(for: preview.address))
                         .font(.mono(11))
+                        .foregroundStyle(preview.isBlank ? .secondary : .primary)
                         .lineLimit(1)
                         .truncationMode(.middle)
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -459,7 +482,7 @@ struct LocalServerPreviewPage: View {
                 .contentShape(RoundedRectangle(cornerRadius: 7))
             }
             .buttonStyle(.plain)
-            .appTooltip(preview.address.absoluteString)
+            .appTooltip(preview.isBlank ? "Type an address" : preview.address.absoluteString)
             .accessibilityLabel("Address")
             .accessibilityValue(LocalServerPreview.label(for: preview.address))
         }
@@ -480,10 +503,10 @@ struct LocalServerPreviewPage: View {
 
     // Just after a page opens, this view still holds the old one, so the selection is read.
     private func editAddress() {
-        guard let address = previews.selected?.address, !editingAddress else { return }
+        guard let page = previews.selected, !editingAddress else { return }
         // An expanded conversation would take Escape from the field.
         conversationExpanded = false
-        typedAddress = address.absoluteString
+        typedAddress = page.isBlank ? "" : page.address.absoluteString
         editingAddress = true
     }
 
@@ -499,6 +522,9 @@ struct LocalServerPreviewPage: View {
         switch preview.phase {
         case .showing:
             EmptyView()
+        case .blank:
+            PaneMessage(icon: "globe", title: "Open a running app",
+                        detail: "Type its address or port above, like localhost:3000 or :5173.")
         case .opening:
             PaneMessage(icon: "globe", title: "Opening \(server)",
                         detail: "It appears here as soon as the server answers.")
@@ -573,7 +599,8 @@ struct LocalServerPreviewPage: View {
 
     @ViewBuilder private var pageStrip: some View {
         if previews.pages.count > 1 {
-            let servers = Set(previews.pages.map { LocalServerPreview.server($0.address) })
+            let servers = Set(previews.pages.filter { !$0.isBlank }
+                .map { LocalServerPreview.server($0.address) })
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 6) {
                     ForEach(previews.pages) { page in
@@ -596,7 +623,7 @@ struct LocalServerPreviewPage: View {
 
     private func pageTab(_ page: LocalServerPreview, spansServers: Bool) -> some View {
         let selected = page.id == preview.id
-        let label = spansServers
+        let label = spansServers || page.isBlank
             ? LocalServerPreview.label(for: page.address) : LocalServerPreview.path(page.address)
         return HStack(spacing: 0) {
             Button { previews.select(page) } label: {
