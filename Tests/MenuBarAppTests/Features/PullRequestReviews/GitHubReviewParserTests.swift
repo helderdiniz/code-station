@@ -5,6 +5,31 @@ import Testing
 // Reading what GitHub says about a pull request: which submissions count as a review,
 // how line comments fold into threads, and where a lone comment goes.
 struct GitHubReviewParserTests {
+    @Test func readsThreadStatesAndNodeIDsAcrossAllGraphQLPages() throws {
+        let pages: [[String: Any]] = stride(from: 1, through: 201, by: 100).map { start in
+            let nodes: [[String: Any]] = (start...min(start + 99, 201)).map { id in
+                ["id": "thread-\(id)", "isResolved": id > 100,
+                 "comments": ["nodes": [["databaseId": id]]]]
+            }
+            return ["data": ["repository": ["pullRequest": ["reviewThreads": [
+                "nodes": nodes, "pageInfo": ["hasNextPage": start < 201, "endCursor": "cursor-\(start)"]
+            ]]]]]
+        }
+        let states = GitHubReviewParser.threadStates(from: try JSONSerialization.data(withJSONObject: pages))
+
+        #expect(states.count == 201)
+        #expect(states[1] == .init(nodeID: "thread-1", isResolved: false))
+        #expect(states[101] == .init(nodeID: "thread-101", isResolved: true))
+        #expect(states[201] == .init(nodeID: "thread-201", isResolved: true))
+    }
+
+    @Test func readsTheForkThatOwnsThePullRequestBranch() {
+        let status = GitHubReviewParser.status(from: Data(#"{"state":"open","head":{"ref":"fix","repo":{"html_url":"https://github.com/contributor/app"}}}"#.utf8))
+
+        #expect(status?.headBranch == "fix")
+        #expect(status?.headRepositoryURL == "https://github.com/contributor/app")
+    }
+
     private func reviewJSON(id: Int, state: String, body: String = "", login: String = "maria",
                             type: String = "User", at: String = "2026-10-16T10:00:00Z") -> String {
         """

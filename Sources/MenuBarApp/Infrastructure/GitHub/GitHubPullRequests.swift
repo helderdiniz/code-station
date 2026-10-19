@@ -111,19 +111,24 @@ enum GitHubPullRequests {
 
     private static func threads(_ endpoint: Endpoint) async throws -> Data {
         try await graphql(endpoint.host, """
-        query($owner: String!, $repo: String!, $number: Int!) {
+        query($owner: String!, $repo: String!, $number: Int!, $endCursor: String) {
           repository(owner: $owner, name: $repo) {
             pullRequest(number: $number) {
-              reviewThreads(first: 100) { nodes { id isResolved comments(first: 1) { nodes { databaseId } } } }
+              reviewThreads(first: 100, after: $endCursor) {
+                nodes { id isResolved comments(first: 1) { nodes { databaseId } } }
+                pageInfo { hasNextPage endCursor }
+              }
             }
           }
         }
-        """, fields: ["owner=\(endpoint.owner)", "repo=\(endpoint.name)"], ints: ["number=\(endpoint.number)"])
+        """, fields: ["owner=\(endpoint.owner)", "repo=\(endpoint.name)"], ints: ["number=\(endpoint.number)"], paginate: true)
     }
 
-    private static func graphql(_ host: String, _ query: String, fields: [String], ints: [String]) async throws -> Data {
+    private static func graphql(_ host: String, _ query: String, fields: [String], ints: [String],
+                                paginate: Bool = false) async throws -> Data {
         try await api(host, ["graphql", "--raw-field", "query=\(query)"]
-                      + fields.flatMap { ["--raw-field", $0] } + ints.flatMap { ["--field", $0] })
+                      + fields.flatMap { ["--raw-field", $0] } + ints.flatMap { ["--field", $0] }
+                      + (paginate ? ["--paginate", "--slurp"] : []))
     }
 
     private static func api(_ host: String, _ arguments: [String]) async throws -> Data {

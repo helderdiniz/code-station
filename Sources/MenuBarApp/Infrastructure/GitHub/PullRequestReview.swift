@@ -59,4 +59,5 @@ struct PullRequestStatus: Equatable, Sendable {
     var state: State
     var title: String
     var headBranch: String
+    var headRepositoryURL: String? = nil
 }

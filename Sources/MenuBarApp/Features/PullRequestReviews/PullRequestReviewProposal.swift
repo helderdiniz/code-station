@@ -15,6 +15,10 @@ struct PullRequestReviewProposal: Codable, Equatable, Sendable {
     var action: Action
     var reply: String
     var files: [String]
+    // Only the app records ownership. JSON from the agent cannot supply a baseline.
+    var changes: PullRequestReviewChanges? = nil
+
+    private enum CodingKeys: String, CodingKey { case threadID, action, reply, files }
 
     init(threadID: Int, action: Action, reply: String, files: [String] = []) {
         self.threadID = threadID
@@ -74,8 +78,14 @@ enum PullRequestReviewDrafter {
                       sessionID: UUID, store: ProjectStore, runner: SessionRunner,
                       reviews: PullRequestReviewStore) async -> Outcome {
         guard store.session(sessionID) != nil else { return .sessionGone }
-        let live = LiveConversation.id(of: sessionID, store: store, runner: runner)
-        guard !runner.state(live).isBusy else { return .busy }
+        guard !runner.isBusy(sessionID, store: store), runner.queued(sessionID).isEmpty,
+              reviews.beginWork(on: loaded.pullRequest.url) else { return .busy }
+        defer { reviews.endWork(on: loaded.pullRequest.url) }
+        guard reviews.proposals[thread.id]?.changes?.files.isEmpty != false else {
+            return .blocked(.git("Handle the current proposal's changes before asking for another draft."))
+        }
+        reviews.beganDrafting(thread.id)
+        defer { reviews.endedDrafting(thread.id) }
         guard let root = await PullRequestReviewActions.root(for: loaded, sessionID: sessionID, store: store) else {
             return .blocked(.noCheckout)
         }
@@ -87,15 +97,31 @@ enum PullRequestReviewDrafter {
         try? FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
         try? FileManager.default.removeItem(at: file)
         await GitActions.excludeFromStatus(folder, at: root)
-        reviews.beganDrafting(thread.id)
-        defer { reviews.endedDrafting(thread.id) }
-
-        runner.send(prompt(review: review, thread: thread, pullRequest: loaded.pullRequest, file: file),
-                    sessionID: sessionID, store: store)
-        await reviews.waitForTurnEnd(live)
+        let baseline: PullRequestReviewChanges.Baseline
+        do { baseline = try await PullRequestReviewChanges.begin(at: root) }
+        catch { return .blocked(.git(error.localizedDescription)) }
+        // Repository reads suspend, so another turn may have started while they ran.
+        guard !runner.isBusy(sessionID, store: store), runner.queued(sessionID).isEmpty else { return .busy }
+        let finished = await reviews.waitForTurnEnd(sessionID) {
+            runner.send(prompt(review: review, thread: thread, pullRequest: loaded.pullRequest, file: file),
+                        sessionID: sessionID, store: store)
+            guard runner.state(sessionID).isBusy else {
+                for queued in runner.queued(sessionID) { runner.unqueue(queued.id, sessionID: sessionID) }
+                return false
+            }
+            return true
+        }
+        guard finished, !Task.isCancelled else { return .noAnswer }
+        guard !runner.isBusy(sessionID, store: store) else { return .busy }
         guard let text = try? String(contentsOf: file, encoding: .utf8),
               var proposal = PullRequestReviewProposal.parse(text) else { return .noAnswer }
         proposal.threadID = thread.id
+        do {
+            let changes = try await PullRequestReviewChanges.finish(baseline)
+            proposal.changes = changes
+            proposal.files = changes.files
+            if !changes.files.isEmpty { proposal.action = .fix }
+        } catch { return .blocked(.git(error.localizedDescription)) }
         reviews.setProposal(proposal)
         return .proposed
     }
@@ -108,10 +134,11 @@ enum PullRequestReviewDrafter {
         lines += thread.comments.map { "\($0.author.login) wrote: \($0.body)" }
         lines += ["", """
         For the thread above, decide one of:
-        - fix: the comment asks for a code change you agree with. Make the change in the working tree now. Do not commit, do not push, do not run gh. Then write a one or two sentence reply saying what you changed.
+        - fix: the comment asks for a code change you agree with. Make the change in the working tree now. Do not stage, commit, push, or run gh. Then write a one or two sentence reply saying what you changed.
         - reply: the comment is a question or needs no code change. Write the reply.
         - pushback: you think the comment is mistaken. Do not change code. Write a short, polite reply explaining why.
         Never post anything to GitHub. The person will read every reply before it is sent.
+        Only edit files in \(file.deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent().path). Preserve any edits already there.
 
         When done, write the file \(file.path) containing only JSON in this shape:
         [{"threadID": \(thread.id), "action": "fix" | "reply" | "pushback", "reply": "<text>", "files": ["<path changed>", ...]}]

@@ -243,34 +243,33 @@ enum GitActions {
         }
     }
 
-    // Commits only the paths named. Nothing pending among them means the commit already
-    // went through on an earlier try, and whatever is owed is the push, not a second commit.
-    static func commitPaths(_ paths: [String], message: String, at root: String) async -> String? {
-        await perform(at: root) { tool, url in
-            let pending = GitInspector.run(tool, ["status", "--porcelain", "--"] + paths, in: url)
-            if pending.ok, pending.trimmedText.isEmpty { return pending }
-            let add = GitInspector.run(tool, ["add", "--"] + paths, in: url)
-            guard add.ok else { return add }
-            return GitInspector.run(tool, ["commit", "-m", message, "--"] + paths, in: url)
-        }
-    }
-
-    // Puts the paths named back the way HEAD has them. Tracked files are restored; a
-    // file that did not exist before is untracked and only clean removes it. Each
-    // command touches only the paths it is given.
-    static func restorePaths(_ paths: [String], at root: String) async -> String? {
-        await perform(at: root) { tool, url in
-            let restore = GitInspector.run(tool, ["restore", "--staged", "--worktree", "--"] + paths, in: url)
-            let clean = GitInspector.run(tool, ["clean", "-f", "--"] + paths, in: url)
-            return restore.ok || clean.ok ? clean : restore
-        }
-    }
-
-    static func originContains(_ repository: String, at root: String) async -> Bool {
+    static func originMatches(repositoryURL: String, at root: String) async -> Bool {
         guard let tool = await GitInspector.tool() else { return false }
         let url = URL(fileURLWithPath: root)
-        let origin = await GitInspector.offMain { GitInspector.run(tool, ["remote", "get-url", "origin"], in: url) }
-        return origin.ok && origin.text.lowercased().contains(repository.lowercased())
+        return await GitInspector.offMain {
+            let origin = GitInspector.run(tool, ["remote", "get-url", "origin"], in: url)
+            let push = GitInspector.run(tool, ["remote", "get-url", "--push", "--all", "origin"], in: url)
+            let destinations = push.text.split(whereSeparator: \.isNewline)
+            return origin.ok && push.ok && destinations.count == 1
+                && remoteMatches(origin.trimmedText, repositoryURL: repositoryURL)
+                && remoteMatches(String(destinations[0]), repositoryURL: repositoryURL)
+        }
+    }
+
+    static func remoteMatches(_ remote: String, repositoryURL: String) -> Bool {
+        let address: URL?
+        if remote.contains("://") {
+            address = URL(string: remote)
+        } else if let colon = remote.firstIndex(of: ":"), remote[..<colon].contains("@") {
+            address = URL(string: "ssh://" + remote[..<colon] + "/" + remote[remote.index(after: colon)...])
+        } else {
+            return false
+        }
+        guard let address, let repository = URL(string: repositoryURL), let host = repository.host else { return false }
+        var path = address.path.trimmingCharacters(in: CharacterSet(charactersIn: "/")).lowercased()
+        if path.hasSuffix(".git") { path.removeLast(4) }
+        return address.host?.lowercased() == host.lowercased()
+            && path == repository.path.trimmingCharacters(in: CharacterSet(charactersIn: "/")).lowercased()
     }
 
     // Keeps a folder out of `git status` without touching the repository's .gitignore.

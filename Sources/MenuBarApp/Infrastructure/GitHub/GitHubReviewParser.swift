@@ -11,7 +11,8 @@ enum GitHubReviewParser {
         return PullRequestStatus(
             state: merged ? .merged : (state == "open" ? .open : .closed),
             title: object["title"] as? String ?? "",
-            headBranch: (object["head"] as? Object)?["ref"] as? String ?? "")
+            headBranch: (object["head"] as? Object)?["ref"] as? String ?? "",
+            headRepositoryURL: ((object["head"] as? Object)?["repo"] as? Object)?["html_url"] as? String)
     }
 
     // `/pulls/{n}/reviews` lists the submissions; `/pulls/{n}/comments` lists every line
@@ -37,11 +38,15 @@ enum GitHubReviewParser {
     // What GraphQL knows about each thread, keyed by the REST id of its first comment,
     // which is the one id both APIs share.
     static func threadStates(from data: Data) -> [Int: ThreadState] {
-        let nodes = ((json(data) as? Object)?["data"] as? Object)
-            .flatMap { $0["repository"] as? Object }
-            .flatMap { $0["pullRequest"] as? Object }
-            .flatMap { $0["reviewThreads"] as? Object }
-            .flatMap { $0["nodes"] as? [Object] } ?? []
+        let value = json(data)
+        let pages = value as? [Object] ?? (value as? Object).map { [$0] } ?? []
+        let nodes = pages.flatMap { page in
+            (page["data"] as? Object)
+                .flatMap { $0["repository"] as? Object }
+                .flatMap { $0["pullRequest"] as? Object }
+                .flatMap { $0["reviewThreads"] as? Object }
+                .flatMap { $0["nodes"] as? [Object] } ?? []
+        }
         var states: [Int: ThreadState] = [:]
         for node in nodes {
             let comments = (node["comments"] as? Object)?["nodes"] as? [Object]

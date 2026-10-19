@@ -26,7 +26,7 @@ final class PullRequestReviewStore {
     // or two approvals would race each other for git's index.
     private(set) var busy: Set<String> = []
 
-    @ObservationIgnored private var turnWaiters: [UUID: [CheckedContinuation<Void, Never>]] = [:]
+    @ObservationIgnored private var turnWaiters: [UUID: [UUID: CheckedContinuation<Bool, Never>]] = [:]
     // Quick enough to feel live, slow enough to be nothing against GitHub's hourly allowance.
     static let pollInterval: Duration = .seconds(120)
 
@@ -124,11 +124,26 @@ final class PullRequestReviewStore {
     // Wired to the runner's turn-ended hook, so a draft waits on the turn rather than
     // polling for it.
     func turnEnded(_ sessionID: UUID) {
-        for waiter in turnWaiters.removeValue(forKey: sessionID) ?? [] { waiter.resume() }
+        let waiters = turnWaiters.removeValue(forKey: sessionID) ?? [:]
+        for waiter in waiters.values { waiter.resume(returning: true) }
     }
 
-    func waitForTurnEnd(_ sessionID: UUID) async {
-        await withCheckedContinuation { turnWaiters[sessionID, default: []].append($0) }
+    func waitForTurnEnd(_ sessionID: UUID, start: () -> Bool) async -> Bool {
+        let id = UUID()
+        return await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                guard !Task.isCancelled else { return continuation.resume(returning: false) }
+                turnWaiters[sessionID, default: [:]][id] = continuation
+                if !start() { cancelWaiter(id, in: sessionID) }
+            }
+        } onCancel: {
+            Task { @MainActor in self.cancelWaiter(id, in: sessionID) }
+        }
+    }
+
+    private func cancelWaiter(_ id: UUID, in sessionID: UUID) {
+        turnWaiters[sessionID]?.removeValue(forKey: id)?.resume(returning: false)
+        if turnWaiters[sessionID]?.isEmpty == true { turnWaiters[sessionID] = nil }
     }
 }
 

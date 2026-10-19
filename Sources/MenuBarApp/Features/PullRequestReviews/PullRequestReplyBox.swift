@@ -7,6 +7,7 @@ struct PullRequestReplyBox: View {
     @Environment(ProjectStore.self) private var store
     @Environment(SessionRunner.self) private var runner
     @Environment(PullRequestReviewStore.self) private var reviews
+    @Environment(DialogPresenter.self) private var dialogs
     let review: PullRequestReview
     let thread: PullRequestReviewThread
     let entry: PullRequestReviewStore.Loaded
@@ -69,6 +70,7 @@ struct PullRequestReplyBox: View {
         } else if store.session(sessionID) != nil {
             InlineLink(title: proposal == nil ? "Ask the agent" : "Ask again", size: 11.5, icon: "sparkles", action: ask)
                 .appTooltip("The agent reads this comment, edits the checkout without committing, and writes a reply here for you to approve.")
+                .disabled(reviews.busy.contains(entry.pullRequest.url) || proposal?.changes?.files.isEmpty == false)
         }
     }
 
@@ -99,16 +101,30 @@ struct PullRequestReplyBox: View {
             Spacer(minLength: 0)
             // Done without a word. A fix is put back first, so nothing stray stays in the checkout.
             InlineLink(title: fix == nil ? "Resolve" : "Discard and resolve", size: 11.5, tint: .secondary) {
-                run(resolves: true) {
-                    if let fix, let failure = await PullRequestReviewActions.discard(fix, on: entry, sessionID: sessionID,
-                                                                                    store: store) {
-                        return failure
-                    }
-                    return await PullRequestReviewActions.setResolved(true, thread, on: entry)
-                }
+                if let fix, !fix.files.isEmpty { confirmDiscard(fix) }
+                else { resolve(discarding: nil) }
             }
         }
-        .disabled(working || reviews.busy.contains(entry.pullRequest.url))
+        .disabled(working || reviews.busy.contains(entry.pullRequest.url) || runner.isBusy(sessionID, store: store))
+    }
+
+    private func confirmDiscard(_ fix: PullRequestReviewProposal) {
+        var rows = fix.files.map { Dialog.Impact.Row(title: $0, detail: "The proposal's edits will be removed.") }
+        rows.append(.init(title: "Earlier edits and staged work", detail: "Changes made before the draft stay.", kept: true))
+        dialogs.show(.impact("Discard this proposal and resolve the thread?",
+                             subject: .init(name: entry.pullRequest.repository ?? "Repository"), rows: rows,
+                             warning: "The proposal's edits cannot be restored from this screen.", action: "Discard and resolve") {
+            resolve(discarding: fix)
+        })
+    }
+
+    private func resolve(discarding fix: PullRequestReviewProposal?) {
+        run(resolves: true) {
+            if let fix, let failure = await PullRequestReviewActions.discard(fix, on: entry, sessionID: sessionID, store: store) {
+                return failure
+            }
+            return await PullRequestReviewActions.setResolved(true, thread, on: entry)
+        }
     }
 
     private func ask() {

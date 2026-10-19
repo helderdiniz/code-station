@@ -12,7 +12,7 @@ enum PullRequestReviewActions {
 
         var message: String {
             switch self {
-            case .noCheckout: "The checkout this pull request belongs to is gone."
+            case .noCheckout: "Could not find a unique checkout whose origin matches this pull request's repository."
             case .wrongBranch(let checkout, let pullRequest):
                 "The checkout is on \(checkout) but the pull request is on \(pullRequest). Switch the checkout to that branch in the Changes tab first."
             case .git(let text): text
@@ -21,29 +21,26 @@ enum PullRequestReviewActions {
         }
     }
 
-    // The checkout whose origin is the pull request's repository. A workspace session has
-    // one per project, and only one of them is where this pull request's branch lives.
+    // A fork's branch lives in the head repository, not the repository being reviewed.
     static func root(for loaded: PullRequestReviewStore.Loaded, sessionID: UUID, store: ProjectStore) async -> String? {
         guard let session = store.session(sessionID) else { return nil }
         let roots = store.workingDirectories(for: session)
-        guard roots.count > 1 else { return roots.first }
-        // With several checkouts and no way to ask git which is which, guessing would
-        // commit into the wrong repository.
-        guard let owner = loaded.pullRequest.owner, let name = loaded.pullRequest.repository else { return nil }
-        for root in roots where await GitActions.originContains("\(owner)/\(name)", at: root) { return root }
-        return roots.first
+        guard let repository = loaded.status.headRepositoryURL else { return nil }
+        var matches: [String] = []
+        for root in roots where await GitActions.originMatches(repositoryURL: repository, at: root) { matches.append(root) }
+        return matches.count == 1 ? matches.first : nil
     }
 
     // A session pointed at somebody's pull request may be sitting on a branch of its own.
     // A commit there would never reach the pull request, so the branch is checked first.
     static func onPullRequestBranch(_ loaded: PullRequestReviewStore.Loaded, root: String) -> Failure? {
         let wanted = loaded.status.headBranch
-        guard !wanted.isEmpty else { return nil }
+        guard !wanted.isEmpty else { return .git("GitHub did not provide the pull request's head branch. Reload the review first.") }
         let current = GitHead.branch(at: root) ?? "no branch"
         return current == wanted ? nil : .wrongBranch(checkout: current, pullRequest: wanted)
     }
 
-    // Commits the files the agent named, pushes the branch, and only then answers the
+    // Commits the recorded draft, pushes the branch, and only then answers the
     // reviewer. A push that fails leaves the reply unsent, so GitHub never shows an answer
     // that points at a change it cannot see. `reply` is the text as the person left it.
     static func approve(_ proposal: PullRequestReviewProposal, reply: String, thread: PullRequestReviewThread,
@@ -51,8 +48,11 @@ enum PullRequestReviewActions {
         if proposal.action == .fix, !proposal.files.isEmpty {
             guard let root = await root(for: loaded, sessionID: sessionID, store: store) else { return .noCheckout }
             if let failure = onPullRequestBranch(loaded, root: root) { return failure }
-            let message = "address review comment on \((thread.path as NSString).lastPathComponent)"
-            if let failure = await GitActions.commitPaths(proposal.files, message: message, at: root) { return .git(failure) }
+            guard let changes = proposal.changes, changes.baseline.root == root else {
+                return .git("This proposal has no recorded changes for this checkout. Review it in Changes first.")
+            }
+            let message = "Address review comment on \((thread.path as NSString).lastPathComponent)"
+            if let failure = await changes.commit(message: message) { return .git(failure) }
             if let failure = await GitActions.push(hasUpstream: false, at: root) { return .git(failure) }
         }
         return await self.reply(reply, thread: thread, on: loaded)
@@ -69,12 +69,16 @@ enum PullRequestReviewActions {
         await github { try await GitHubPullRequests.setResolved(resolved, thread, on: loaded.pullRequest) }
     }
 
-    // Puts the files the agent touched back the way the branch had them.
+    // Restores the draft's baseline while keeping earlier edits and staged work.
     static func discard(_ proposal: PullRequestReviewProposal, on loaded: PullRequestReviewStore.Loaded,
                         sessionID: UUID, store: ProjectStore) async -> Failure? {
         guard proposal.action == .fix, !proposal.files.isEmpty else { return nil }
         guard let root = await root(for: loaded, sessionID: sessionID, store: store) else { return .noCheckout }
-        return await GitActions.restorePaths(proposal.files, at: root).map { .git($0) }
+        if let failure = onPullRequestBranch(loaded, root: root) { return failure }
+        guard let changes = proposal.changes, changes.baseline.root == root else {
+            return .git("This proposal has no recorded changes for this checkout. Review it in Changes first.")
+        }
+        return await changes.discard().map { .git($0) }
     }
 
     private static func github(_ work: () async throws -> Void) async -> Failure? {

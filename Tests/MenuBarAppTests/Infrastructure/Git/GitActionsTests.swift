@@ -820,24 +820,4 @@ private extension GitRepo {
             .split(separator: "\n").map(String.init)
     }
 
-    // Approving a review fix commits only the files the agent named, and a second try
-    // after a failed push finds nothing to add and leaves the commit alone.
-    @Test func commitsOnlyTheNamedPathsAndSkipsWhenNothingIsPending() async throws {
-        // Arrange
-        let repo = try GitRepo()
-        try repo.write("README.md", "changed")
-        try repo.write("notes.txt", "left alone")
-        let before = try repo.git("rev-parse", "HEAD")
-
-        // Act
-        let first = await GitActions.commitPaths(["README.md"], message: "address review", at: repo.path)
-        let again = await GitActions.commitPaths(["README.md"], message: "address review", at: repo.path)
-
-        // Assert
-        #expect(first == nil)
-        #expect(again == nil)
-        #expect(try repo.git("rev-list", "--count", "\(before.trimmed)..HEAD").trimmed == "1")
-        #expect(try repo.git("status", "--porcelain").contains("notes.txt"))
-    }
-
 }
