@@ -111,7 +111,6 @@ struct SidebarBrandBar: View {
         .accessibilityLabel("Teya Code Station home")
         .accessibilityValue(Self.accessibilityValue(runningCount: runningCount, phone: phone))
         .accessibilityAddTraits(isHome ? .isSelected : [])
-        .appTooltip("Home")
     }
 
     static func accessibilityValue(runningCount: Int, phone: SidebarPhoneStatus?) -> String {
