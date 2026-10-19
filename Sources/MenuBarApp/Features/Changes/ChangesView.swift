@@ -96,6 +96,8 @@ struct ChangesView: View {
         nonmutating set { commitDraft.message = newValue }
     }
     @FocusState private var commitFocused: Bool
+    @State private var committing = false
+    @State private var commitSucceeded = false
     @FocusState private var pushFocused: Bool
     // Files the next commit leaves out. Tracking the exclusions rather than the picks
     // means a file that appears between refreshes starts selected, like everything else.
@@ -242,6 +244,13 @@ struct ChangesView: View {
             }
         }
         .background(Theme.background)
+        .overlay(alignment: .top) {
+            if loading && snapshot != nil {
+                Breathing { Rectangle().fill(Theme.accent) }
+                    .frame(height: 2).allowsHitTesting(false)
+                    .accessibilityLabel("Refreshing Git status")
+            }
+        }
         .background(WindowKeyAnchor(handler: reviewKeys))
         .motion(Motion.reveal, value: toast?.id)
         .task(id: toast?.id) {
@@ -436,6 +445,16 @@ struct ChangesView: View {
 
     private func remoteControls(_ snapshot: GitSnapshot, compact: Bool) -> some View {
         HStack(spacing: 6) {
+            if commitSucceeded {
+                HStack(spacing: 5) {
+                    ChangesSuccessMark()
+                    if !compact { Text("Committed locally").font(.system(size: 11)) }
+                }
+                .foregroundStyle(Theme.accent)
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel("Committed locally. Ready to push.")
+                .transition(.opacity)
+            }
             pushButton(snapshot, compact: compact)
             Button {
                 Task { await reload(fetchOrigin: true) }
@@ -484,7 +503,7 @@ struct ChangesView: View {
             else if snapshot.upstream != nil && !snapshot.trackingKnown { title = "Status unknown" }
             else { title = "Up to date" }
         }
-        return ActionButton(title: working ?? title, tone: .outlined,
+        return ActionButton(title: title, tone: .outlined,
                             height: 30, size: 12, icon: action == nil ? "checkmark" : "arrow.up") {
             pushFocused = true
             confirmPush(snapshot)
@@ -492,7 +511,7 @@ struct ChangesView: View {
         .focused($pushFocused)
         .overlay(RoundedRectangle(cornerRadius: 8)
             .stroke(pushFocused ? Theme.accent : .clear, lineWidth: 2))
-        .accessibilityLabel(working ?? title)
+        .accessibilityLabel(title)
         .accessibilityHint("\(repositoryName). \(syncStatus)")
         .disabled(busy || action == nil)
         .layoutPriority(1)
@@ -906,7 +925,7 @@ struct ChangesView: View {
         } label: {
             Group {
                 if loading || loadingHistory {
-                    ProgressView().controlSize(.mini)
+                    ChangesProgressLabel(title: "Refreshing…", compact: true)
                 } else {
                     Image(systemName: "arrow.clockwise").font(.system(size: 11, weight: .semibold))
                 }
@@ -956,9 +975,12 @@ struct ChangesView: View {
                 Text(snapshot?.branch ?? "").font(.mono(10)).foregroundStyle(.secondary)
                     .lineLimit(1).truncationMode(.middle).appTooltip(snapshot?.branch ?? "")
             }
-            ActionButton(title: "\(amend ? "Amend" : "Commit") \(counted(selectedFiles.count, "file"))",
-                         tone: .green, height: 34, shortcut: "⌘ ↵", fills: true) { commit() }
+            ActionButton(title: committing ? (amend ? "Amending…" : "Committing…")
+                            : "\(amend ? "Amend" : "Commit") \(counted(selectedFiles.count, "file"))",
+                         tone: .green, height: 34, icon: committing ? "hourglass" : nil,
+                         shortcut: committing ? nil : "⌘ ↵", fills: true) { commit() }
                 .disabled(busy || commitMessage.isBlank || selectedFiles.isEmpty || files.contains { $0.kind == .conflicted })
+                .motion(Motion.reveal, value: committing)
             Text("Commits stay local until you push.").font(.system(size: 10)).foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity)
         }
@@ -971,20 +993,34 @@ struct ChangesView: View {
         let chosen = selectedFiles
         guard !message.isEmpty, !busy, !chosen.isEmpty, !files.contains(where: { $0.kind == .conflicted }) else { return }
         let fold = amend
+        let operationRoot = repoRoot
+        let draft = commitDraft
+        committing = true
+        commitSucceeded = false
         working = fold ? "Amending…" : "Committing…"
+        announce(working ?? "Committing…")
         Task {
             let error = await GitActions.commitSelected(message: message, files: chosen,
-                                                        amend: fold, at: repoRoot)
-            working = nil
-            if let error {
-                dialogs.show(.notice(fold ? "Could not amend" : "Could not commit", message: error))
-            } else {
-                // The message only clears once it is safely in a commit, so a failed
-                // attempt can be fixed and retried without retyping it.
-                commitDraft.didCommit()
-                announce(fold ? "Commit amended" : "Committed \(counted(chosen.count, "file"))")
+                                                        amend: fold, at: operationRoot)
+            if error == nil {
+                draft.didCommit()
+                commitSucceeded = true
+                feedback = fold ? "Commit amended locally. Ready to push." : "Committed locally. Ready to push."
+                announce(feedback)
             }
             await reload()
+            working = nil
+            committing = false
+            if let error {
+                dialogs.show(Dialog(
+                    title: fold ? "Could not amend" : "Could not create the commit",
+                    message: "Your message and selected files have been kept.\n\n" + error,
+                    actions: [
+                        .init(label: "Try again", kind: .primary, handler: { commit() }, isEnabled: { !busy }),
+                        .init(label: "Back to changes", kind: .cancel) { commitFocused = true }
+                    ], onCancel: { commitFocused = true }, width: 500, isModal: true, fitsWindow: true))
+                announce("Could not create the commit. Your draft and selection have been kept.")
+            }
         }
     }
 
@@ -1148,7 +1184,7 @@ struct ChangesView: View {
             HStack(spacing: 10) {
                 title()
                 Spacer()
-                if loadingDiff { ProgressView().controlSize(.small) }
+                if loadingDiff { ChangesProgressLabel(title: "Reading diff…", compact: true) }
                 if mode == .changes, review != nil, !orderedComments.isEmpty { commentNavigation }
                 if mode == .changes, let file = selected {
                     Image(systemName: "ellipsis").padding(8).contentShape(Rectangle())
@@ -1280,7 +1316,7 @@ struct ChangesView: View {
                                   back: narrow ? { historySelection.showingDetail = false } : nil)
             }
         } else {
-            ProgressView("Loading history…").frame(maxWidth: .infinity, maxHeight: .infinity)
+            ChangesLoadingPlaceholder(title: "Loading history…").padding(28).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
     }
 
@@ -1335,146 +1371,41 @@ struct ChangesView: View {
     private func confirmDiscard(_ files: [GitChange]) {
         guard !busy, let file = files.first else { return }
         let root = repoRoot
-        let untrackedCount = files.count(where: \.isUntracked)
-        let allUntracked = untrackedCount == files.count
-        let multiple = files.count > 1
-        let message: String
-        if !multiple {
-            message = file.isUntracked
-                ? "\(file.path) is not in git yet, so there is no committed version to go back "
-                    + "to. It will be moved to the Trash."
-                : "\(file.path) goes back to the way the last commit has it. The changes in it "
-                    + "are lost."
-        } else if allUntracked {
-            message = "These files are not in git yet. They will be moved to the Trash."
-        } else {
-            message = "Tracked files go back to the way the last commit has them. "
-                + "Their uncommitted changes are lost."
-                + (untrackedCount > 0 ? " Untracked files will be moved to the Trash." : "")
+        let allUntracked = files.allSatisfy(\.isUntracked)
+        var rows = files.map { file in
+            Dialog.Impact.Row(title: file.path, detail: file.isUntracked
+                ? "This untracked file will be moved to the Trash."
+                : "Uncommitted changes will be removed. The file returns to its last committed state.")
         }
-        dialogs.show(Dialog(
-            title: multiple ? "Discard changes in \(files.count) files?"
-                : (allUntracked ? "Delete this file?" : "Discard changes?"),
-            message: message,
-            content: multiple ? AnyView(
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 6) {
-                        ForEach(files) { file in
-                            Text(file.path)
-                                .font(.mono(11))
-                                .fixedSize(horizontal: false, vertical: true)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                        }
-                    }
+        rows.append(.init(title: "Your commits and other changed files",
+                          detail: "Your saved history and changes in other files stay.", kept: true))
+        if !allUntracked {
+            rows.append(.init(title: "The last committed versions",
+                              detail: "Tracked files are restored from the last commit.", kept: true))
+        }
+        dialogs.show(.impact(files.count > 1 ? "Discard changes in \(files.count) files?"
+                : (file.isUntracked ? "Move this file to the Trash?" : "Discard changes?"),
+            subject: .init(name: repositoryName), rows: rows,
+            warning: allUntracked ? "Git has no copy of these files. They can be restored from the Trash until it is emptied."
+                : "Discarded uncommitted changes in tracked files cannot be restored from Git.",
+            action: allUntracked ? "Move to Trash" : "Discard changes") {
+                perform("Discarding…", failure: "Could not discard changes") {
+                    await GitActions.discard(files, at: root)
                 }
-                .frame(maxHeight: 160)
-            ) : nil,
-            actions: [
-                .init(label: allUntracked ? "Move to Trash" : "Discard", kind: .destructive) {
-                    perform("Discarding…", failure: "Could not discard changes") {
-                        await GitActions.discard(files, at: root)
-                    }
-                },
-                .init(label: "Cancel", kind: .cancel)
-            ],
-            width: 420))
+            })
     }
 
     private func confirmPush(_ snapshot: GitSnapshot) {
         guard !busy else { return }
-        working = "Checking commits…"
-        let root = snapshot.root
-        let upstream = snapshot.upstream
-        let hasUpstream = upstream != nil
-        Task {
-            let preview = await GitActions.commitsToPush(hasUpstream: hasUpstream, at: root)
-            working = nil
-            switch preview {
-            case .commits(let commits):
-                dialogs.show(pushDialog(commits: commits, upstream: upstream,
-                                        hasUpstream: hasUpstream, root: root))
-            case .behindUpstream(let behind, let commits):
-                dialogs.show(behindDialog(behind: behind, commits: commits, upstream: upstream,
-                                          hasUpstream: hasUpstream, root: root))
-            case .failed(let error):
-                dialogs.show(.notice("Could not check commits to push", message: error))
-            }
-        }
-    }
-
-    private func pushDialog(commits: [GitRemoteCommit], upstream: String?,
-                            hasUpstream: Bool, root: String) -> Dialog {
-        let count = commits.count
-        let title = count == 0
-            ? (hasUpstream ? "Push branch?" : "Publish branch?")
-            : "Push \(counted(count, "commit"))?"
-        let message = upstream.map {
-            count == 0
-                ? "No commits are ahead of \($0)."
-                : "These commits will be pushed to \($0)."
-        } ?? "This branch will be published to origin and start tracking it."
-        return Dialog(
-            title: title,
-            message: message,
-            content: AnyView(RemoteCommitList(commits:
-                commits, emptyMessage: "There are no new commits to send.")),
-            actions: [
-                .init(label: count == 0 ? (hasUpstream ? "Push" : "Publish branch") : "Push commits",
-                      kind: .primary) {
-                    perform("Pushing…", failure: "Could not push") {
-                        await GitActions.push(hasUpstream: hasUpstream, at: root)
-                    }
-                },
-                .init(label: "Cancel", kind: .cancel) { pushFocused = true }
-            ],
-            onCancel: { pushFocused = true }, width: 520, isModal: true)
-    }
-
-    // Origin refuses a push from a branch that trails it, so the screen says so instead of
-    // sending one to be rejected, and offers the pull that makes it possible in one press.
-    private func behindDialog(behind: Int, commits: [GitRemoteCommit], upstream: String?,
-                              hasUpstream: Bool, root: String) -> Dialog {
-        let target = upstream ?? "origin"
-        let mine = commits.count == 1 ? "your commit" : "your \(commits.count) commits"
-        return Dialog(
-            title: "Pull before pushing",
-            message: "\(target) has \(counted(behind, "commit")) this branch does "
-                + "not, so origin would refuse the push. Pulling first puts \(mine) on top.",
-            content: AnyView(RemoteCommitList(commits:
-                commits, emptyMessage: "There are no new commits to send.")),
-            actions: [
-                .init(label: "Pull, then push", kind: .primary) {
-                    pullThenPush(hasUpstream: hasUpstream, root: root)
-                },
-                .init(label: "Cancel", kind: .cancel) { pushFocused = true }
-            ],
-            onCancel: { pushFocused = true }, width: 520, isModal: true)
-    }
-
-    // Only a pull that fails stops the push: a stash that came back badly leaves conflict
-    // markers in uncommitted files, which is worth saying but has no bearing on what the
-    // push sends. Either way that news waits until after, so one dialog cannot bury another.
-    private func pullThenPush(hasUpstream: Bool, root: String) {
-        guard !busy else { return }
-        Task {
-            working = "Pulling…"
-            let outcome = await GitActions.pull(at: root)
-            if case .failed(let error) = outcome {
-                working = nil
-                dialogs.show(.notice("Could not pull", message: error))
+        let review = PushReviewModel(root: snapshot.root, hasUpstream: snapshot.upstream != nil)
+        dialogs.show(Dialog(title: "Review your push", content: AnyView(
+            PushReviewView(model: review, repository: repositoryName, branch: snapshot.branch,
+                           upstream: snapshot.upstream) {
+                if review.phase == .complete { commitSucceeded = false }
                 await reload()
-                return
-            }
-            working = "Pushing…"
-            let error = await GitActions.push(hasUpstream: hasUpstream, at: root)
-            working = nil
-            if let error {
-                dialogs.show(.notice("Could not push", message: error))
-            } else {
-                report(outcome)
-            }
-            await reload()
-        }
+            }), actions: [], onCancel: { review.invalidate(); pushFocused = true },
+            width: 560, isModal: true, framesItself: true, fitsWindow: true,
+            maximumHeight: 480, canDismiss: { !review.isWorking }))
     }
 
     // Every git action ends in a reload, success or not: a failed pull can still have
@@ -1634,9 +1565,8 @@ struct ChangesView: View {
             await reload()
             return
         }
-        diffScroll = .top
+        diffScroll = !recheckList && diff != nil ? .hold : .top
         diff = loaded
-        diffText = nil
         // Publish the file before building its text, so comments arriving during the
         // build are rendered against these lines too.
         await renderDiff()
@@ -2361,7 +2291,7 @@ struct ChangesView: View {
                     announce("Stopped every review")
                 },
                 lookAt: { reviewer in openFindings(review, from: reviewer) })),
-            actions: [], width: 580, framesItself: true)
+            actions: [], width: 560, framesItself: true)
         secondOpinionDialog = dialog.id
         dialogs.show(dialog)
     }

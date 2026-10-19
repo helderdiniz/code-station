@@ -31,6 +31,9 @@ enum Theme {
     static let card = adaptive(
         light: NSColor(srgbRed: 1, green: 0.992, blue: 0.965, alpha: 1),
         dark: NSColor(srgbRed: 0.125, green: 0.122, blue: 0.114, alpha: 1))
+    static let secondaryText = adaptive(
+        light: NSColor(srgbRed: 106.0 / 255, green: 108.0 / 255, blue: 96.0 / 255, alpha: 1),
+        dark: .secondaryLabelColor)
     static let field = adaptive(
         light: NSColor(srgbRed: 0.102, green: 0.102, blue: 0.082, alpha: 0.05),
         dark: NSColor(srgbRed: 1, green: 1, blue: 1, alpha: 0.05))

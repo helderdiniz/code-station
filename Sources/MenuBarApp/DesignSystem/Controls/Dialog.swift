@@ -59,6 +59,8 @@ struct Dialog: Identifiable {
     // screen reader hears.
     var framesItself = false
     var fitsWindow = false
+    var maximumHeight: CGFloat = 680
+    var canDismiss: () -> Bool = { true }
 }
 
 extension Dialog {
@@ -116,7 +118,13 @@ final class DialogPresenter {
         presentingWindow = nil
     }
 
+    func setDismissalGuard(for id: UUID, _ canDismiss: @escaping () -> Bool) {
+        guard current?.id == id else { return }
+        current?.canDismiss = canDismiss
+    }
+
     func dismiss() {
+        guard current?.canDismiss() != false else { return }
         let cancel = current?.onCancel
         current = nil
         cancel?()
@@ -159,7 +167,7 @@ struct DialogHost: View {
                         GeometryReader { geometry in
                             content
                                 .frame(width: min(dialog.width, max(0, geometry.size.width - 32)),
-                                       height: min(680, max(0, geometry.size.height - 32)))
+                                       height: min(dialog.maximumHeight, max(0, geometry.size.height - 32)))
                                 .clipShape(RoundedRectangle(cornerRadius: 14))
                                 .floatingCard(cornerRadius: 14)
                                 .accessibilityElement(children: .contain)
@@ -175,6 +183,12 @@ struct DialogHost: View {
                             .accessibilityElement(children: .contain)
                             .accessibilityAddTraits(.isModal)
                             .accessibilityLabel(dialog.title)
+                    } else if dialog.fitsWindow {
+                        GeometryReader { geometry in
+                            card(dialog, maxHeight: min(dialog.maximumHeight, max(0, geometry.size.height - 32)))
+                                .frame(width: min(dialog.width, max(0, geometry.size.width - 32)))
+                                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        }
                     } else {
                         card(dialog)
                             .frame(width: dialog.width)
@@ -190,27 +204,15 @@ struct DialogHost: View {
     // The card reads its parts out in order once it has arrived: the question, what it
     // is about, then whatever else it shows. The buttons come early so the way out is
     // there almost at once.
-    private func card(_ dialog: Dialog) -> some View {
+    private func card(_ dialog: Dialog, maxHeight: CGFloat? = nil) -> some View {
         VStack(alignment: .leading, spacing: 0) {
-            VStack(alignment: .leading, spacing: 8) {
-                Text(dialog.title)
-                    .font(.serif(17, .semibold))
-                    .fixedSize(horizontal: false, vertical: true)
-                    .arrives(after: 0.05, rising: 4)
-                if let message = dialog.message {
-                    Text(message)
-                        .font(.system(size: 13))
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .arrives(after: 0.09, rising: 4)
+            if let maxHeight {
+                MenuContentScrollView(maxHeight: max(0, maxHeight - CGFloat(dialog.actions.count) * 44 - 12)) {
+                    description(dialog)
                 }
-                if let content = dialog.content {
-                    content
-                        .arrives(after: 0.13, rising: 4)
-                }
+            } else {
+                description(dialog)
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(20)
 
             VStack(spacing: 8) {
                 ForEach(dialog.actions) { action in
@@ -242,6 +244,28 @@ struct DialogHost: View {
             if dialog.isModal { focusedAction = dialog.actions.first { $0.kind == .cancel }?.id }
         }
         .onDisappear { if dialog.isModal { presenter.restoreFocus() } }
+    }
+
+    private func description(_ dialog: Dialog) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(dialog.title)
+                .font(.serif(17, .semibold))
+                .fixedSize(horizontal: false, vertical: true)
+                .arrives(after: 0.05, rising: 4)
+            if let message = dialog.message {
+                Text(message)
+                    .font(.system(size: 13))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .arrives(after: 0.09, rising: 4)
+            }
+            if let content = dialog.content {
+                content
+                    .arrives(after: 0.13, rising: 4)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(20)
     }
 
     // The buttons are the app's own pills, so the action a dialog confirms wears the
@@ -473,7 +497,7 @@ private struct RuleDraw: ViewModifier {
 
 // Only for plain SwiftUI content: a scale on a view that hosts AppKit, such as an
 // `ActionButton` or anything with a tooltip or a hover lift, can crash its layout.
-private extension View {
+extension View {
     func arrives(after delay: Double, rising rise: CGFloat = 0, sliding slide: CGFloat = 0,
                  growing scale: CGFloat = 1, animation: Animation = .easeOut(duration: 0.2)) -> some View {
         modifier(Arrival(delay: delay, rise: rise, slide: slide, scale: scale, animation: animation))

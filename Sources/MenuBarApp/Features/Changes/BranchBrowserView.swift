@@ -11,7 +11,10 @@ struct BranchBrowserView: View {
     @State private var catalog: GitBranchCatalog?
     @State private var query = ""
     @State private var selected: GitBranch?
-    @State private var preview: GitBranchPreview?
+    @State private var loadedPreview: GitBranchPreview?
+    @State private var previewGeneration = 0
+    @State private var previewRefresh = 0
+    @State private var dialogID: UUID?
     @State private var page = Page.branches
     @State private var busy = false
     @State private var previewing = false
@@ -34,6 +37,9 @@ struct BranchBrowserView: View {
     private enum Page: Equatable { case branches, merge, compare, switchBranch, rebase, create, rename, worktree, stashes, recovery }
     private var visible: [GitBranch] {
         (catalog?.branches ?? []).filter { query.isEmpty || $0.name.localizedCaseInsensitiveContains(query) }
+    }
+    private var preview: GitBranchPreview? {
+        loadedPreview?.source.id == selected?.id ? loadedPreview : nil
     }
     private var current: String { catalog?.current ?? "" }
     private var isCurrent: Bool { selected?.ref == "refs/heads/" + current }
@@ -66,11 +72,11 @@ struct BranchBrowserView: View {
                 Image(systemName: "point.topleft.down.to.point.bottomright.curvepath")
                     .foregroundStyle(Theme.accent).padding(10).background(Theme.field, in: RoundedRectangle(cornerRadius: 9))
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(title).font(.system(size: 19, weight: .semibold))
+                    Text(title).font(.serif(24)).accessibilityAddTraits(.isHeader)
                     Text(repository).font(.system(size: 12)).foregroundStyle(.secondary)
                 }
                 Spacer()
-                if busy || previewing || loading { ProgressView().controlSize(.small).accessibilityLabel("Reading repository") }
+                if busy || previewing || loading { ChangesProgressLabel(title: busy ? "Working…" : "Reading repository…") }
                 Button { dialogs.dismiss() } label: {
                     Image(systemName: "xmark").padding(10).contentShape(Rectangle())
                 }.buttonStyle(.plain).disabled(busy).focused($focus, equals: "close")
@@ -88,27 +94,34 @@ struct BranchBrowserView: View {
                         .accessibilityElement(children: .combine)
                 }.frame(maxHeight: 90).fixedSize(horizontal: false, vertical: true).background(Theme.field)
             }
-            if page == .branches { browser }
-            else {
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 18) {
-                        switch page {
-                        case .merge, .compare, .switchBranch, .rebase: previewContent
-                        case .create, .rename, .worktree: nameForm
-                        case .stashes: stashList
-                        case .recovery: recoveryContent
-                        case .branches: EmptyView()
-                        }
-                    }.padding(22).frame(maxWidth: .infinity, alignment: .leading)
-                }.frame(maxHeight: .infinity)
+            ZStack {
+                if page == .branches { browser.transition(.opacity) }
+                else {
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 18) {
+                            switch page {
+                            case .merge, .compare, .switchBranch, .rebase: previewContent
+                            case .create, .rename, .worktree: nameForm
+                            case .stashes: stashList
+                            case .recovery: recoveryContent
+                            case .branches: EmptyView()
+                            }
+                        }.padding(22).frame(maxWidth: .infinity, alignment: .leading)
+                    }.frame(maxHeight: .infinity)
+                        .id(page).transition(.opacity)
+                }
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .motion(Motion.reveal, value: page)
             Divider()
             footer.padding(16).background(Theme.field)
         }
         .background(Theme.card)
+        .smoothlyResizes(when: message)
         .background(WindowKeyAnchor(handler: keys))
         .task {
             await reload()
+            guard !Task.isCancelled else { return }
             loading = false
             if catalog?.recovery != nil { page = .recovery; await reloadConflicts() }
             else {
@@ -121,9 +134,13 @@ struct BranchBrowserView: View {
             }
             focus = page == .branches ? "search" : "back"
         }
-        .task(id: selected?.id) { await loadPreview() }
-        .onAppear { keys.start { handleKey($0) } }
-        .onDisappear { keys.stop(); dialogs.restoreFocus() }
+        .task(id: "\(selected?.id ?? "")/\(previewRefresh)") { await loadPreview() }
+        .onAppear {
+            dialogID = dialogs.current?.id
+            if let dialogID { dialogs.setDismissalGuard(for: dialogID) { !busy } }
+            keys.start { handleKey($0) }
+        }
+        .onDisappear { previewGeneration += 1; keys.stop(); dialogs.restoreFocus() }
     }
 
     private var browser: some View {
@@ -141,8 +158,10 @@ struct BranchBrowserView: View {
                         .padding(14)
                     ScrollView {
                         LazyVStack(alignment: .leading, spacing: 4) {
-                            if visible.isEmpty {
-                                Text(loading ? "Reading branches…" : "No branches match your search. Try another name or create a branch.")
+                            if loading && catalog == nil {
+                                ChangesLoadingPlaceholder(title: "Reading branches…").padding(14)
+                            } else if visible.isEmpty {
+                                Text("No branches match your search. Try another name or create a branch.")
                                     .font(.system(size: 12)).foregroundStyle(.secondary).padding(14)
                             }
                             ForEach([false, true], id: \.self) { remote in
@@ -199,6 +218,8 @@ struct BranchBrowserView: View {
                                     }.accessibilityLabel("More actions for " + selected.name)
                                     .focused($focus, equals: "more").branchFocus(focus == "more")
                             }
+                        } else if loading {
+                            ChangesLoadingPlaceholder(title: "Reading branch details…")
                         } else {
                             Text("Select a branch to see its actions. Selection does not switch branches.")
                                 .font(.system(size: 13)).foregroundStyle(.secondary)
@@ -207,7 +228,9 @@ struct BranchBrowserView: View {
                             Text(policy.note).font(.system(size: 10)).foregroundStyle(.secondary)
                         }
                     }.padding(22).frame(maxWidth: .infinity, alignment: .leading)
-                }
+                        .id(selected?.id).transition(.opacity)
+                        .motion(Motion.reveal, value: previewing)
+                }.motion(Motion.reveal, value: selected?.id)
             }
         }.disabled(busy)
     }
@@ -226,7 +249,7 @@ struct BranchBrowserView: View {
             }.padding(10).frame(maxWidth: .infinity, alignment: .leading)
                 .background(selected?.id == branch.id ? Theme.accent.opacity(0.10) : .clear, in: RoundedRectangle(cornerRadius: 8))
                 .contentShape(Rectangle())
-        }.buttonStyle(.plain).focused($focus, equals: branch.id).branchFocus(focus == branch.id)
+        }.buttonStyle(.plain).hoverFill().focused($focus, equals: branch.id).branchFocus(focus == branch.id)
             .appTooltip(branch.name).accessibilityLabel(branch.name + (branch.ref == "refs/heads/" + current ? ", current branch" : ""))
             .accessibilityAddTraits(selected?.id == branch.id ? .isSelected : [])
     }
@@ -244,10 +267,20 @@ struct BranchBrowserView: View {
             }.padding(10).frame(maxWidth: .infinity, alignment: .leading)
                 .background(emphasis ? Theme.accent.opacity(0.10) : Theme.field, in: RoundedRectangle(cornerRadius: 8))
                 .contentShape(Rectangle())
-        }.buttonStyle(.plain).focused($focus, equals: id).branchFocus(focus == id)
+        }.buttonStyle(.plain).hoverFill().focused($focus, equals: id).branchFocus(focus == id)
     }
 
-    @ViewBuilder private var previewContent: some View {
+    private var previewContent: some View {
+        ZStack(alignment: .topLeading) {
+            VStack(alignment: .leading, spacing: 18) {
+                previewBody
+            }.id(preview != nil).transition(.opacity)
+        }
+        .frame(maxWidth: .infinity, minHeight: 260, alignment: .topLeading)
+        .motion(Motion.reveal, value: previewing)
+    }
+
+    @ViewBuilder private var previewBody: some View {
         if let preview {
             HStack(alignment: .top, spacing: 12) {
                 branchCard(page == .rebase || page == .switchBranch ? "From current branch" : "From \(preview.source.remote ? "remote-tracking" : "local") branch",
@@ -324,8 +357,11 @@ struct BranchBrowserView: View {
                 }.padding(14).frame(maxWidth: .infinity, alignment: .leading)
                     .background(Theme.field, in: RoundedRectangle(cornerRadius: 9))
             }
+        } else if previewing {
+            ChangesLoadingPlaceholder(title: "Reading branch tips and checking for conflicts…")
+                .transition(.opacity)
         } else {
-            Text(previewing ? "Reading branch tips and checking for conflicts…" : "Select a branch or refresh to try again.")
+            Text("Select a branch or refresh to try again.")
                 .font(.system(size: 13)).foregroundStyle(.secondary)
         }
     }
@@ -474,7 +510,7 @@ struct BranchBrowserView: View {
                 ActionButton(title: "Back", tone: .outlined) { page = .branches; message = "" }
                     .disabled(busy).focused($focus, equals: "back")
                 if page == .merge || page == .compare || page == .rebase || page == .switchBranch {
-                    ActionButton(title: "Refresh", tone: .outlined) { Task { await loadPreview() } }
+                    ActionButton(title: "Refresh", tone: .outlined) { previewRefresh += 1 }
                         .disabled(busy || previewing).focused($focus, equals: "refresh")
                 }
                 Spacer(minLength: 0)
@@ -535,27 +571,33 @@ struct BranchBrowserView: View {
     }
 
     private func reload() async {
-        switch await GitBranches.catalog(at: root) {
+        let result = await GitBranches.catalog(at: root)
+        guard !Task.isCancelled else { return }
+        switch result {
         case .success(let value): catalog = value
         case .failure(let error): report(GitBranchResult(message: GitBranches.errorMessage(error), failed: true))
         }
     }
 
     private func loadPreview() async {
-        preview = nil
+        previewGeneration += 1
+        let generation = previewGeneration
+        if loadedPreview?.source.id != selected?.id { loadedPreview = nil }
         consent = false
         guard let selected, selected.ref != "refs/heads/" + current else { previewing = false; return }
         message = ""
         failed = false
         previewing = true
         let result = await GitBranches.preview(selected, at: root)
-        guard self.selected?.id == selected.id, !Task.isCancelled else { return }
+        guard self.selected?.id == selected.id, generation == previewGeneration, !Task.isCancelled else { return }
         previewing = false
         switch result {
         case .success(let value):
-            preview = value
+            loadedPreview = value
             method = value.policy.allowsMerge ? .merge : .squash
-        case .failure(let error): report(GitBranchResult(message: GitBranches.errorMessage(error), failed: true))
+        case .failure(let error):
+            loadedPreview = nil
+            report(GitBranchResult(message: GitBranches.errorMessage(error), failed: true))
         }
     }
 
@@ -611,7 +653,7 @@ struct BranchBrowserView: View {
             conflictContents = nil
             confirmedRecovery = false
             if catalog?.recovery != nil { page = .recovery; await reloadConflicts() }
-            else if !result.failed { page = .branches; selected = nil; preview = nil }
+            else if !result.failed { page = .branches; selected = nil; loadedPreview = nil }
         }
     }
 
@@ -630,14 +672,14 @@ struct BranchBrowserView: View {
     private func reloadConflicts() async { conflictPaths = await GitBranches.conflicts(at: root) }
 
     private func handleKey(_ event: NSEvent) -> Bool {
-        guard dialogs.current?.framesItself == true, !menus.isOpen else { return false }
+        guard dialogs.current?.id == dialogID, !menus.isOpen else { return false }
         if event.keyCode == 53 { if !busy { dialogs.dismiss() }; return true }
         let modifiers = event.modifierFlags.intersection([.command, .option, .control, .shift])
         if modifiers == .command, event.charactersIgnoringModifiers?.lowercased() == "b" {
             if !busy { page = .branches; focus = "search" }
             return true
         }
-        if page == .branches, modifiers.isEmpty, event.keyCode == 125 || event.keyCode == 126 {
+        if page == .branches, !busy, modifiers.isEmpty, event.keyCode == 125 || event.keyCode == 126 {
             let index = visible.firstIndex { $0.id == selected?.id } ?? (event.keyCode == 125 ? -1 : visible.count)
             let next = index + (event.keyCode == 125 ? 1 : -1)
             if visible.indices.contains(next) { selected = visible[next] }

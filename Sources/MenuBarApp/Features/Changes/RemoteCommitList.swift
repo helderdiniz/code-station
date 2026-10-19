@@ -8,17 +8,17 @@ struct RemoteCommitList: View {
         if commits.isEmpty {
             Text(emptyMessage)
                 .font(.system(size: 12))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(Theme.secondaryText)
         } else {
             VStack(alignment: .leading, spacing: 6) {
-                SectionLabel("COMMITS")
+                SectionLabel("COMMITS", tint: Theme.secondaryText)
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 4) {
-                        ForEach(commits) { commit in
+                        ForEach(Array(commits.enumerated()), id: \.element.id) { index, commit in
                             HStack(alignment: .firstTextBaseline, spacing: 10) {
                                 Text(commit.shortID)
                                     .font(.mono(11, .medium))
-                                    .foregroundStyle(.secondary)
+                                    .foregroundStyle(Theme.secondaryText)
                                 Text(commit.subject)
                                     .font(.system(size: 12))
                                     .lineLimit(2)
@@ -29,6 +29,7 @@ struct RemoteCommitList: View {
                             .padding(.vertical, 8)
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .background(RoundedRectangle(cornerRadius: 8).fill(Theme.field))
+                            .arrives(after: Double(min(index, 3)) * 0.028, rising: 4)
                         }
                     }
                 }

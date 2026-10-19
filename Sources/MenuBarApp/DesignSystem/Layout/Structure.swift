@@ -45,10 +45,12 @@ struct SectionLabel: View {
 
     let text: String
     var style: Style = .section
+    var tint: Color?
 
-    init(_ text: String, style: Style = .section) {
+    init(_ text: String, style: Style = .section, tint: Color? = nil) {
         self.text = text
         self.style = style
+        self.tint = tint
     }
 
     var body: some View {
@@ -59,7 +61,7 @@ struct SectionLabel: View {
                 Text(text)
                     .font(.system(size: 12, weight: .semibold))
                     .kerning(0.6)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(tint.map { AnyShapeStyle($0) } ?? AnyShapeStyle(.secondary))
             }
         case .field:
             Text(text)

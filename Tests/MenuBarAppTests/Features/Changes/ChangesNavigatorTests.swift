@@ -55,6 +55,44 @@ struct ChangesNavigatorTests {
 
 @MainActor
 struct ChangesLayoutTests {
+    @Test func historyDetailFitsNarrowPanesWithLargeDiffText() async throws {
+        let repo = try GitRepo()
+        try repo.write("README.md", "Updated content\nAnother line\n")
+        try repo.commit("Preserve the summary while reading commit details")
+        let commit = try #require(await GitInspector.recentCommits(at: repo.path).commits.first)
+        let navigation = ChangesNavigationMemory()
+        navigation.showingHistory = true
+        navigation.history(for: repo.path).select(commit)
+        let scratch = ScratchDirectory(prefix: "history-layout")
+        let settings = AppSettings(agentAvatarURL: scratch.path("avatar.png"),
+                                   preferences: UserDefaults(suiteName: "history-layout-\(UUID())")!)
+        settings.textSize = .larger
+        let host = NSHostingController(rootView: ChangesView(root: repo.path, navigation: navigation)
+            .environment(GitStatsCache()).environment(settings).environment(DialogPresenter()).appOverlays())
+        host.sizingOptions = []
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1000, height: 700),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.contentViewController = host
+        window.center()
+        window.layoutIfNeeded()
+        #expect(await waitUntil { navigation.history(for: repo.path).parent != nil })
+        for width: CGFloat in [1000, 600] {
+            let size = CGSize(width: width, height: 700)
+            window.setContentSize(size)
+            try await Task.sleep(for: .milliseconds(200))
+            host.view.layoutSubtreeIfNeeded()
+            #expect(host.sizeThatFits(in: size).width <= width)
+            #expect(navigation.history(for: repo.path).commit?.id == commit.id)
+            if let folder = ProcessInfo.processInfo.environment["WORKSPACE_REVIEW_DIRECTORY"] {
+                let bitmap = try #require(host.view.bitmapImageRepForCachingDisplay(in: host.view.bounds))
+                host.view.cacheDisplay(in: host.view.bounds, to: bitmap)
+                try #require(bitmap.representation(using: .png, properties: [:]))
+                    .write(to: URL(fileURLWithPath: folder).appendingPathComponent("history-large-\(Int(width)).png"))
+            }
+        }
+        window.contentViewController = nil
+    }
+
     @Test func returningToChangesKeepsTheSelectedFile() async throws {
         let repo = try GitRepo()
         try repo.write("first.txt", "First change")

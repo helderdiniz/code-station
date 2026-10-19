@@ -60,13 +60,13 @@ struct CommitHistoryView: View {
     let root: String
     @Bindable var selection: CommitHistorySelection
     var back: (() -> Void)?
-    @State private var loadedFiles: GitInspector.CommitFiles?
-    @State private var filesRequest: String?
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var fileResults: [String: GitInspector.CommitFiles] = [:]
     @State private var collapsed: Set<String> = []
     @State private var copied = false
 
     private var request: String { "\(selection.commit?.hash ?? "")/\(selection.parent ?? "")" }
-    private var result: GitInspector.CommitFiles? { filesRequest == request ? loadedFiles : nil }
+    private var result: GitInspector.CommitFiles? { fileResults[request] }
     private var comparison: String {
         "\(selection.parent.map { String($0.prefix(8)) } ?? "Empty tree") → \(selection.commit?.shortHash ?? "")"
     }
@@ -81,18 +81,17 @@ struct CommitHistoryView: View {
             }
             if let commit = selection.commit {
                 summary(commit)
-                if let result {
-                    if let note = result.note {
-                        PaneMessage(icon: "exclamationmark.triangle", title: "Could not read commit", detail: note)
-                    } else if result.files.isEmpty {
-                        PaneMessage(icon: "doc", title: "No file changes",
-                                    detail: "This commit has no file changes against the selected parent.")
+                ZStack(alignment: .topLeading) {
+                    if let result {
+                        loadedBody(commit, result)
+                            .transition(.opacity)
                     } else {
-                        page(commit, result.files)
+                        ChangesLoadingPlaceholder(title: "Reading commit details…", rows: 4)
+                            .padding(28).transition(.opacity)
                     }
-                } else {
-                    ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                .motion(Motion.reveal, value: result != nil)
             } else {
                 PaneMessage(icon: "clock", title: "Select a commit",
                             detail: "Pick a commit under a project in the Workspace navigator.")
@@ -104,18 +103,32 @@ struct CommitHistoryView: View {
         .accessibilityLabel("Commit")
         .task(id: request) {
             guard let commit = selection.commit else { return }
-            loadedFiles = nil
+            let requested = request
             collapsed = []
             copied = false
-            let loaded = await GitInspector.commitFiles(commit.hash, parent: selection.parent, root: root)
-            guard !Task.isCancelled else { return }
-            if selection.parent == nil, let parent = loaded.parents.first {
-                selection.parent = parent
+            if let cached = fileResults[requested] {
+                if selection.parent == nil { selection.parent = cached.parents.first }
                 return
             }
-            filesRequest = request
-            loadedFiles = loaded
+            let loaded = await GitInspector.commitFiles(commit.hash, parent: selection.parent, root: root)
+            guard !Task.isCancelled, request == requested else { return }
+            fileResults[requested] = loaded
+            if selection.parent == nil, let parent = loaded.parents.first {
+                fileResults["\(commit.hash)/\(parent)"] = loaded
+                selection.parent = parent
+            }
             if !loaded.files.contains(where: { $0.id == selection.fileID }) { selection.fileID = nil }
+        }
+    }
+
+    @ViewBuilder private func loadedBody(_ commit: GitCommitSummary, _ result: GitInspector.CommitFiles) -> some View {
+        if let note = result.note {
+            PaneMessage(icon: "exclamationmark.triangle", title: "Could not read commit", detail: note)
+        } else if result.files.isEmpty {
+            PaneMessage(icon: "doc", title: "No file changes",
+                        detail: "This commit has no file changes against the selected parent.")
+        } else {
+            page(commit, result.files)
         }
     }
 
@@ -150,10 +163,14 @@ struct CommitHistoryView: View {
                     Text("+\(added)").foregroundStyle(Theme.addition)
                     Text("-\(removed)").foregroundStyle(Theme.deletion)
                     proportion(added: added, removed: removed)
+                } else {
+                    Text(result == nil ? "Reading file changes…" : "No file changes")
+                        .foregroundStyle(.secondary)
                 }
                 Spacer(minLength: 0)
             }
             .font(.system(size: 11))
+            .frame(minHeight: 14)
         }
         .padding(.horizontal, 28).padding(.top, 22).padding(.bottom, 18)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -162,9 +179,9 @@ struct CommitHistoryView: View {
 
     // A menu when the commit is a merge and there is a parent to choose, plain text when not.
     @ViewBuilder private var parentPicker: some View {
-        let parents = result?.parents ?? []
+        let parents = result?.parents ?? fileResults["\(selection.commit?.hash ?? "")/"]?.parents ?? []
         let label = HStack(spacing: 5) {
-            Text(comparison).font(.mono(10))
+            Text(result == nil && selection.parent == nil ? "Reading parent…" : comparison).font(.mono(10))
             if parents.count > 1 { Image(systemName: "chevron.down").font(.system(size: 9)) }
         }.padding(6).contentShape(Rectangle())
         if parents.count > 1 {
@@ -206,7 +223,7 @@ struct CommitHistoryView: View {
                     fileSummary(files) { file in
                         selection.fileID = file.id
                         collapsed.remove(file.id)
-                        withAnimation(Motion.control) { proxy.scrollTo(file.id, anchor: .top) }
+                        withAnimation(reduceMotion ? nil : Motion.control) { proxy.scrollTo(file.id, anchor: .top) }
                         announce("Showing \(file.path)")
                     }
                     .padding(.bottom, 20)
@@ -361,8 +378,9 @@ private struct CommitFileDiff: View {
                     .padding(.horizontal, 14).padding(.vertical, 18)
             } else if let text {
                 DiffTextView(text: text, scroll: .hold, onExpand: expand, fitsContent: true)
+                    .transition(.opacity)
             } else {
-                ProgressView().controlSize(.small).frame(maxWidth: .infinity).padding(18)
+                ChangesLoadingPlaceholder(title: "Reading file diff…", rows: 2).padding(18)
             }
             if let diff, diff.truncated {
                 Text("Showing the first \(diff.lines.count - diff.revealed) lines of \(diff.totalLines). Run git show to see the rest.")
@@ -372,7 +390,8 @@ private struct CommitFileDiff: View {
                     .background(Theme.field)
             }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(maxWidth: .infinity, minHeight: 100, alignment: .topLeading)
+        .motion(Motion.reveal, value: text != nil || diff?.note != nil)
         .task(id: "\(hash)/\(parent ?? "")/\(file.id)") {
             diff = nil
             text = nil
@@ -413,7 +432,7 @@ private struct CommitFileDiff: View {
         let built = await DiffText.build(lines, language: CodeLanguage(fileExtension: (file.path as NSString).pathExtension),
                                          scale: settings.textSize.scale, numbered: true)
         // More of the file can have opened while the text was built.
-        guard self.diff?.lines == lines else { return }
+        guard !Task.isCancelled, self.diff?.lines == lines else { return }
         text = built
     }
 }
