@@ -91,6 +91,35 @@ struct PullRequestTests {
             .repository == "api")
     }
 
+    // Being pointed at a pull request is as good as opening one: it is what the session
+    // is for.
+    @Test func keepsAPullRequestThePersonPointedTheSessionAt() {
+        // Arrange
+        var session = ChatSession(projectID: UUID())
+        session.messages = [
+            ChatMessage(role: .user, text: "Address the review on https://github.com/example/api/pull/226 please"),
+            ChatMessage(role: .assistant, text: "Looking at https://github.com/example/api/pull/999 first.")
+        ]
+
+        // Act
+        let found = PullRequestScanner.find(in: session)
+
+        // Assert
+        #expect(found.map(\.number) == [226])
+    }
+
+    @Test func readsTheHostAndOwnerOffTheLink() {
+        // Arrange
+        let pullRequest = PullRequest(number: 7, url: "https://git.example.com/platform/api/pull/7")
+
+        // Act
+        let pieces = [pullRequest.host, pullRequest.owner, pullRequest.repository]
+
+        // Assert
+        #expect(pieces == ["git.example.com", "platform", "api"])
+        #expect(PullRequest(number: 1, url: "nonsense").owner == nil)
+    }
+
     private func message(command: String, result: String?) -> ChatMessage {
         ChatMessage(role: .assistant,
                     tools: [ToolUse(id: UUID().uuidString,
