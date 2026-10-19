@@ -2112,6 +2112,7 @@ final class ProjectStore {
         }
     }
 
+    @discardableResult
     private func save(waiting: Bool) -> Bool {
         saveTask?.cancel()
         saveTask = nil
