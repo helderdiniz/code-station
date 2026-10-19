@@ -689,6 +689,40 @@ struct TranscriptSelectionTests {
         #expect(try parts(of: selection).contains(Self.second) == false)
     }
 
+    // MARK: - The pointer
+
+    // The copy pill and the second opinion float over the text, and the text view still
+    // hears every move beneath them. Over a control the pointer has to stay an arrow.
+    @Test func aControlOverTheTextKeepsTheArrow() throws {
+        let page = try Page(selection: TranscriptSelection()) {
+            Page.prose(markdown, separateBlocks: false)
+                .overlay(alignment: .topLeading) {
+                    Button {} label: {
+                        Color.clear.frame(width: 120, height: 40).contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                }
+        }
+        defer { page.close() }
+        let text = try #require(page.views.first)
+
+        NSCursor.iBeam.set()
+        text.mouseMoved(with: page.move(to: page.windowPoint(of: text, character: 2)))
+
+        #expect(NSCursor.current == NSCursor.arrow)
+    }
+
+    @Test func bareTextLeavesThePointerToTheTextView() throws {
+        let page = try Page(markdown: markdown, selection: TranscriptSelection())
+        defer { page.close() }
+        let text = try #require(page.views.first)
+
+        NSCursor.iBeam.set()
+        text.mouseMoved(with: page.move(to: page.windowPoint(of: text, character: 2)))
+
+        #expect(NSCursor.current != NSCursor.arrow)
+    }
+
     // MARK: - Blocks sharing a text view
 
     // Scrolling costs the whole view tree on every frame, so a transcript's paragraphs
@@ -922,6 +956,10 @@ private struct Page {
         let point = windowPoint(of: view, character: character)
         window.sendEvent(event(.leftMouseDown, at: point, time: 0))
         window.sendEvent(event(.leftMouseUp, at: point, time: 0.1))
+    }
+
+    func move(to point: CGPoint) -> NSEvent {
+        event(.mouseMoved, at: point, time: 0)
     }
 
     private func midpoint(_ a: CGPoint, _ b: CGPoint) -> CGPoint {

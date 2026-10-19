@@ -1207,9 +1207,31 @@ private final class LinkTextView: NSTextView {
         updateHoveredLink(with: event)
     }
 
+    // The tracking area reports moves even where a SwiftUI control, such as the copy
+    // pill, sits on top of the text. Over that control the text gives up its I-beam
+    // and link hover, so the pointer reads as a click target and not as text.
     override func mouseMoved(with event: NSEvent) {
+        if isCovered(at: event) {
+            NSCursor.arrow.set()
+            setHoveredLink(nil)
+            return
+        }
         super.mouseMoved(with: event)
         updateHoveredLink(with: event)
+    }
+
+    override func cursorUpdate(with event: NSEvent) {
+        if isCovered(at: event) {
+            NSCursor.arrow.set()
+            return
+        }
+        super.cursorUpdate(with: event)
+    }
+
+    private func isCovered(at event: NSEvent) -> Bool {
+        guard let frameView = window?.contentView?.superview,
+              let hit = frameView.hitTest(event.locationInWindow) else { return false }
+        return !hit.isDescendant(of: self)
     }
 
     override func mouseExited(with event: NSEvent) {
