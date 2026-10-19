@@ -33,6 +33,7 @@ struct HeaderTabDeck: View {
     var height: CGFloat = 40
     var scrollable = false
     @State private var scrolledTabID: HeaderTab.ID?
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         if scrollable {
@@ -66,8 +67,14 @@ struct HeaderTabDeck: View {
                 HeaderTabDeckItem(tab: tab, height: height)
                     .id(tab.id)
                     .anchorPreference(key: HeaderTabFrames.self, value: .bounds) { [tab.id: $0] }
+                    // A fade only: the item hosts AppKit views, which cannot be laid out
+                    // under a scale.
+                    .transition(.opacity)
             }
         }
+        // Tabs come and go as a session settles into its kind of work, and the row
+        // closes up around them rather than jumping.
+        .animation(reduceMotion ? nil : HeaderMotion.page, value: tabs.map(\.id))
         // Drawn over the row rather than inside a tab, so there is one line that travels
         // between tabs instead of one line per tab that comes and goes, and choosing a
         // tab still changes nothing the deck asks for in width.

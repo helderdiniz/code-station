@@ -263,6 +263,11 @@ struct SessionView: View {
             .background(terminalShortcut(directory: workingDirectory))
             .background(workingSetShortcut)
             .background(tabShortcuts(headerTabs(for: session)))
+            // A sent diagnosis has no brief form left to show; its findings are in the
+            // conversation, which the Troubleshoot tab stands for from then on.
+            .onChange(of: session.isTroubleshooting, initial: true) { _, troubleshooting in
+                if troubleshooting && tab == .troubleshoot { tab = .conversation }
+            }
             .task(id: designFilesURL) {
                 // Agents and external editors write artifacts without changing the store.
                 while !Task.isCancelled {
@@ -865,7 +870,21 @@ struct SessionView: View {
 
     // The deck in the order it is reached by ⌘1 through ⌘5: first what the agent is being
     // set to do, then what it did to the working tree.
+    //
+    // A session settles into one kind of work with its first prompt. A diagnosis takes
+    // over the conversation, so its findings are read under its own name and Chat and
+    // Design go. A chat or a design leaves no room for a diagnosis brief, so the
+    // Troubleshoot form goes. A tab already open stays, so the pane is never left
+    // without its tab.
     private func headerTabs(for session: ChatSession) -> [HeaderTab] {
+        if session.isTroubleshooting {
+            var tabs = [HeaderTab(label: "Troubleshoot", icon: "stethoscope",
+                                  selected: tab == .conversation) {
+                tab = .conversation
+            }]
+            if tab == .design { tabs.append(designTab(session)) }
+            return tabs + trailingTabs(session)
+        }
         var tabs: [HeaderTab] = [
             destination(session.isActivelyDesigning
                             ? "Design"
@@ -873,19 +892,29 @@ struct SessionView: View {
                         icon: "bubble.left.and.bubble.right",
                         value: .conversation)
         ]
-        let hasContent = designHasContent ?? store.hasDesignArtifacts(for: session)
         if session.isActivelyDesigning {
-            tabs[0].hasContent = hasContent
+            tabs[0].hasContent = designHasContent ?? store.hasDesignArtifacts(for: session)
         } else {
-            tabs.append(HeaderTab(
-                label: "Design",
-                icon: "paintbrush.pointed",
-                selected: tab == .design,
-                hasContent: hasContent,
-                activate: { openDesign(for: session) }))
+            tabs.append(designTab(session))
         }
-        tabs.append(destination("Troubleshoot", icon: "stethoscope", value: .troubleshoot))
-        tabs.append(changesTab(session))
+        let started = session.hasStarted || store.designSession(for: session.id)?.hasStarted == true
+        if !started || tab == .troubleshoot {
+            tabs.append(destination("Troubleshoot", icon: "stethoscope", value: .troubleshoot))
+        }
+        return tabs + trailingTabs(session)
+    }
+
+    private func designTab(_ session: ChatSession) -> HeaderTab {
+        HeaderTab(
+            label: "Design",
+            icon: "paintbrush.pointed",
+            selected: tab == .design,
+            hasContent: designHasContent ?? store.hasDesignArtifacts(for: session),
+            activate: { openDesign(for: session) })
+    }
+
+    private func trailingTabs(_ session: ChatSession) -> [HeaderTab] {
+        var tabs = [changesTab(session)]
         tabs.append(destination("Explorer", icon: "folder", value: .explorer))
         // Reviews come from a pull request, so without one there is nothing to go to. A
         // tab already open stays, so the pane is never left without its tab.
