@@ -162,6 +162,9 @@ struct HeaderDockSeat: View {
     var keys: [String] = []
     var detail: String? = nil
     var options: Options? = nil
+    // Drawn faint while there is nothing behind it yet, but still clickable. Pointing at it
+    // brings it back to full strength, which says it can still be used.
+    var isDimmed = false
     let action: () -> Void
 
     @Environment(\.isEnabled) private var isEnabled
@@ -210,7 +213,7 @@ struct HeaderDockSeat: View {
                     .allowsHitTesting(false)
             }
         }
-        .opacity(isEnabled ? 1 : 0.38)
+        .opacity(!isEnabled || (isDimmed && !hovering && !isOpen) ? 0.38 : 1)
         .onHover { hovering = $0 && isEnabled }
         .motion(Motion.hover, value: hovering)
         .motion(Motion.hover, value: caretHovering)

@@ -736,7 +736,8 @@ struct SessionView: View {
     }
 
     // Placed first: the rail keeps to the trailing edge, so the other seats do not move.
-    // It shows before the agent links an app, so any address can be typed in.
+    // It shows before the agent links an app, so any address can be typed in, but stays
+    // faint until there is an app to show.
     @ViewBuilder
     private func previewSeat(_ session: ChatSession, showsWord: Bool) -> some View {
         if !session.isActivelyDesigning {
@@ -750,7 +751,8 @@ struct SessionView: View {
                            count: pages > 1 ? pages : nil,
                            showsWord: showsWord,
                            detail: address.map { "The running app at \(LocalServerPreview.label(for: $0))" }
-                               ?? "Open a running app by its address") {
+                               ?? "Open a running app by its address",
+                           isDimmed: address == nil && previews.pages.isEmpty) {
                 if isOpen {
                     closePreview()
                 } else {
