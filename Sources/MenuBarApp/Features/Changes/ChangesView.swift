@@ -443,7 +443,11 @@ struct ChangesView: View {
             }
             pushButton(snapshot, compact: compact)
             Button {
-                Task { await reload(fetchOrigin: true) }
+                Task {
+                    await reload(fetchOrigin: true)
+                    announce(self.snapshot?.state != .ready ? "Could not read Git status. Try again."
+                        : refreshFailed ? "Fetch from origin failed. Try again." : "Git status refreshed.")
+                }
             } label: {
                 Image(systemName: "arrow.clockwise").padding(8).contentShape(Rectangle())
             }.buttonStyle(.plain).disabled(busy)
