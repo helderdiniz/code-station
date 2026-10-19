@@ -187,6 +187,7 @@ struct SessionScrollTests {
                     .environment(TerminalStore())
                     .environment(settings)
                     .environment(GitStatsCache())
+                    .environment(PullRequestReviewStore())
                     .environment(MobileAccessController(store: harness.store,
                                                         runner: harness.runner,
                                                         gitStats: GitStatsCache()))

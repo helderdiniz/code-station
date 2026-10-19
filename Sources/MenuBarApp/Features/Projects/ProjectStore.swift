@@ -29,6 +29,7 @@ enum SessionDestination: Hashable {
     case changes
     case change(root: String, path: String)
     case explorer
+    case reviews
 }
 
 struct SessionOpenRequest: Hashable {

@@ -34,10 +34,11 @@ struct SessionView: View {
     @Environment(GitStatsCache.self) private var gitStats
     @Environment(ShortcutStore.self) private var shortcuts
     @Environment(GlobalCommandPaletteController.self) private var commandPalette
+    @Environment(PullRequestReviewStore.self) private var pullRequestReviews
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let sessionID: UUID
 
-    private enum Tab: Hashable { case conversation, design, troubleshoot, changes, explorer }
+    private enum Tab: Hashable { case conversation, design, troubleshoot, changes, explorer, reviews }
 
     @State private var tab: Tab = .conversation
     @State private var terminalFocused = false
@@ -135,6 +136,9 @@ struct SessionView: View {
         case .change(let root, let path):
             _tab = State(initialValue: .changes)
             _requestedChange = State(initialValue: RequestedChange(root: root, path: path))
+        case .reviews:
+            _tab = State(initialValue: .reviews)
+            _requestedChange = State(initialValue: nil)
         }
         _workingSetVisible = State(
             initialValue: Preferences.workingSetVisibility()[sessionID] ?? false)
@@ -186,6 +190,9 @@ struct SessionView: View {
                         }
                     case .troubleshoot:
                         TroubleshootTabView(sessionID: session.id) { tab = .conversation }
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    case .reviews:
+                        PullRequestReviewsView(sessionID: session.id, openChanges: { tab = .changes })
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
                     case .changes:
                         VStack(spacing: 0) {
@@ -327,6 +334,9 @@ struct SessionView: View {
                 store.clearFinished(sessionID)
                 store.findPullRequests(in: sessionID)
             }
+            // Read now rather than on the next beat of the loop, so the tab's count is
+            // right as the session opens.
+            .task(id: sessionID) { await pullRequestReviews.load(sessionID, store: store) }
             // These folders only go missing while another program has the keyboard, so
             // coming back to this one is when the answer can have changed.
             .onReceive(NotificationCenter.default.publisher(
@@ -868,6 +878,10 @@ struct SessionView: View {
         tabs.append(destination("Troubleshoot", icon: "stethoscope", value: .troubleshoot))
         tabs.append(changesTab(session))
         tabs.append(destination("Explorer", icon: "folder", value: .explorer))
+        var reviewsTab = destination("Reviews", icon: "text.bubble", value: .reviews)
+        let waiting = pullRequestReviews.waitingCount(session.id)
+        reviewsTab.count = waiting > 0 ? waiting : nil
+        tabs.append(reviewsTab)
         return tabs
     }
 
@@ -884,6 +898,7 @@ struct SessionView: View {
         case .troubleshoot: .troubleshoot
         case .changes: requestedChange.map { .change(root: $0.root, path: $0.path) } ?? .changes
         case .explorer: .explorer
+        case .reviews: .reviews
         }
     }
 
@@ -921,7 +936,7 @@ struct SessionView: View {
             true
         case .conversation:
             session.isActivelyDesigning
-        case .troubleshoot, .changes, .explorer:
+        case .troubleshoot, .changes, .explorer, .reviews:
             false
         }
     }

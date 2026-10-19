@@ -8,11 +8,13 @@ import SwiftUI
 // own is a small thing to hit.
 struct DisclosureHeader<Label: View>: View {
     @Binding var isExpanded: Bool
-    let show: String
-    let hide: String
+    // Nil leaves the chevron to speak for itself, for a fold whose label already says
+    // what it hides.
+    let show: String?
+    let hide: String?
     @ViewBuilder let label: Label
 
-    init(isExpanded: Binding<Bool>, show: String, hide: String,
+    init(isExpanded: Binding<Bool>, show: String? = nil, hide: String? = nil,
          @ViewBuilder label: () -> Label) {
         _isExpanded = isExpanded
         self.show = show
@@ -35,6 +37,12 @@ struct DisclosureHeader<Label: View>: View {
         .hoverLift()
         .motion(Motion.control, value: isExpanded)
         .appTooltip(isExpanded ? hide : show)
+    }
+}
+
+private extension View {
+    @ViewBuilder func appTooltip(_ text: String?) -> some View {
+        if let text { appTooltip(text) } else { self }
     }
 }
 

@@ -15,6 +15,8 @@ struct HeaderTab: Identifiable {
     var diff: Diff?
     // Nil leaves ordinary tabs unchanged; false keeps the content indicator slot empty.
     var hasContent: Bool?
+    // One number the destination carries for itself: how much is waiting there.
+    var count: Int?
     let activate: () -> Void
 
     var id: String { label }
@@ -214,6 +216,12 @@ private struct HeaderTabDeckItem: View {
                              size: Self.countSize, spacing: Self.countSpacing)
                         .frame(width: Self.width(of: diff), alignment: .leading)
                 }
+                if let count = tab.count {
+                    Text(verbatim: "\(count)")
+                        .font(.mono(Self.countSize, .semibold))
+                        .foregroundStyle(Theme.attentionText)
+                        .frame(width: Self.width(ofCounts: "\(count)"), alignment: .leading)
+                }
             }
             .foregroundStyle(tab.selected || hovering ? Color.primary : Color.secondary)
             .padding(.horizontal, 11)
@@ -248,7 +256,8 @@ private struct HeaderTabDeckItem: View {
     // The counts are read out with the destination rather than left as two numbers beside
     // it, so the tab says the same thing whether it is seen or heard.
     private var accessibilityLabel: String {
-        let label = tab.hasContent == true ? "\(tab.label), has content" : tab.label
+        var label = tab.hasContent == true ? "\(tab.label), has content" : tab.label
+        if let count = tab.count { label += ", \(count) waiting" }
         guard let diff = tab.diff else { return label }
         return "\(label), \(diff.added) added, \(diff.removed) removed"
     }
@@ -269,9 +278,11 @@ private struct HeaderTabDeckItem: View {
 
     // The counts, measured the same way and for the same reason as the word beside them.
     static func width(of diff: HeaderTab.Diff) -> CGFloat {
+        width(ofCounts: "+\(diff.added)−\(diff.removed)")
+    }
+
+    private static func width(ofCounts text: String) -> CGFloat {
         let font = NSFont.monospacedSystemFont(ofSize: countSize, weight: .semibold)
-        let counts = "+\(diff.added)−\(diff.removed)"
-        let width = NSAttributedString(string: counts, attributes: [.font: font]).size().width
-        return ceil(width + countSpacing)
+        return ceil(NSAttributedString(string: text, attributes: [.font: font]).size().width + countSpacing)
     }
 }

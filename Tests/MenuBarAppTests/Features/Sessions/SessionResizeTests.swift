@@ -39,6 +39,7 @@ struct SessionResizeTests {
             .environment(TerminalStore())
             .environment(settings)
             .environment(GitStatsCache())
+            .environment(PullRequestReviewStore())
             .environment(MobileAccessController(store: store, runner: runner,
                                                 gitStats: GitStatsCache()))
             .environment(ShortcutStore(storageURL: scratch.path("shortcuts.json"),
