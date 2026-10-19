@@ -731,6 +731,12 @@ struct SessionView: View {
     private func utilities(session: ChatSession, project: Project,
                            recap: SessionRecap?, showsWords: Bool) -> some View {
         HStack(spacing: 6) {
+            if showsSecondOpinion(session) {
+                HeaderRailButton(icon: "eyes",
+                                 label: "Ask for a second opinion",
+                                 hint: "Other agents review these changes",
+                                 action: askForChangesOpinion)
+            }
             if let worktreePath = session.worktreePath, let app = WorktreeOpener.current {
                 openInButton(path: worktreePath, app: app, showsWord: showsWords)
             }
@@ -804,6 +810,9 @@ struct SessionView: View {
 
     private func utilityEntries(session: ChatSession, project: Project) -> [MenuEntry] {
         var entries: [MenuEntry] = []
+        if showsSecondOpinion(session) {
+            entries.append(.item("Ask for a second opinion", icon: "eyes", action: askForChangesOpinion))
+        }
         if let worktreePath = session.worktreePath, let current = WorktreeOpener.current {
             // Finder stays one click away whichever app was picked.
             var apps = [current]
@@ -838,7 +847,18 @@ struct SessionView: View {
 
     private func hasUtilities(session: ChatSession) -> Bool {
         session.worktreePath != nil || showsDesignMaterialExport(session)
-            || showsRecap
+            || showsRecap || showsSecondOpinion(session)
+    }
+
+    // Asking for one is about the diff, so it is offered only beside it, and only while
+    // there is a diff to read.
+    private func showsSecondOpinion(_ session: ChatSession) -> Bool {
+        tab == .changes && workingTreeChanges(session) != nil
+    }
+
+    // The Changes screen owns the dialog, the lineup and the scope it was last asked with.
+    private func askForChangesOpinion() {
+        changesNavigation.secondOpinionAsks += 1
     }
 
     // A design session is recapped through the conversation it belongs to, so what the

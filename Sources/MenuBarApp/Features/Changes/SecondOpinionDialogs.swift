@@ -1,9 +1,9 @@
 import AppKit
 import SwiftUI
 
-// The second opinion lives in three dialogs opened from one control in the review bar:
-// asking, watching the reviewers work, and going through what they found. The bar itself
-// only ever says what will be sent.
+// The second opinion lives in three dialogs: asking, opened from the session header, and
+// watching the reviewers work and going through what they found, opened from one control
+// in the review bar. The bar itself only ever says what will be sent.
 
 // What a second opinion is asked to read.
 enum SecondOpinionScopeChoice: Hashable {
@@ -156,16 +156,13 @@ private struct BadgedAvatar: View {
 struct SecondOpinionChip: View {
     let status: SecondOpinionStatus
     let open: () -> Void
-    let askAgain: () -> Void
 
     @State private var hovering = false
 
     var body: some View {
         switch status {
         case .ask:
-            ActionButton(title: "Ask for a second opinion", tone: .outlined, height: 28, size: 12,
-                         icon: "person.2", action: open)
-                .appTooltip("Ask other agents to review these changes")
+            EmptyView()
         case .reviewing(let agents, let started, let pending):
             chip(fill: Theme.card, border: Theme.border, ink: .primary) {
                 HStack(spacing: -5) {
@@ -200,24 +197,19 @@ struct SecondOpinionChip: View {
             }
             .accessibilityLabel("\(counted(pending, "finding")) to look at, open them")
         case .settled(let kept, let dismissed):
-            HStack(spacing: 2) {
-                Button(action: open) {
-                    Label(kept + dismissed == 0 ? "Second opinion: nothing to raise"
-                          : "Second opinion: \(kept) kept, \(dismissed) dismissed", systemImage: "checkmark")
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundStyle(hovering ? Color.primary : Color.secondary)
-                        .lineLimit(1).fixedSize()
-                        .padding(.horizontal, 8).frame(height: 28)
-                        .background(RoundedRectangle(cornerRadius: 9).fill(hovering ? Theme.field : .clear))
-                        .contentShape(RoundedRectangle(cornerRadius: 9))
-                }
-                .buttonStyle(.plain)
-                .onHover { hovering = $0 }
-                .appTooltip(kept + dismissed == 0 ? "See what the reviewers did" : "Open the findings")
-                GlyphButton(icon: "arrow.clockwise", side: 26, action: askAgain)
-                    .appTooltip("Ask again")
-                    .accessibilityLabel("Ask for a second opinion again")
+            Button(action: open) {
+                Label(kept + dismissed == 0 ? "Second opinion: nothing to raise"
+                      : "Second opinion: \(kept) kept, \(dismissed) dismissed", systemImage: "checkmark")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(hovering ? Color.primary : Color.secondary)
+                    .lineLimit(1).fixedSize()
+                    .padding(.horizontal, 8).frame(height: 28)
+                    .background(RoundedRectangle(cornerRadius: 9).fill(hovering ? Theme.field : .clear))
+                    .contentShape(RoundedRectangle(cornerRadius: 9))
             }
+            .buttonStyle(.plain)
+            .onHover { hovering = $0 }
+            .appTooltip(kept + dismissed == 0 ? "See what the reviewers did" : "Open the findings")
         }
     }
 

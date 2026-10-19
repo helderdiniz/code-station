@@ -31,7 +31,7 @@ struct ChangesReviewNavigator: View {
                             VStack(spacing: 6) {
                                 if reviewFilter == .reviewers {
                                     Text("Nothing from reviewers yet").font(.system(size: 12.5, weight: .semibold))
-                                    Text("Ask for a second opinion from the review bar. What you keep shows up here.")
+                                    Text("Ask for a second opinion from the button at the top of the screen. What you keep shows up here.")
                                 } else {
                                     Text("No changes waiting").font(.system(size: 12.5, weight: .semibold))
                                     Text("Click a line number and choose Request a change, turn a question's suggestion into a change, or ask another agent for a second opinion.")

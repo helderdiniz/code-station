@@ -254,6 +254,11 @@ struct ChangesView: View {
         .onChange(of: review.map { $0.reviews.runs($0.sessionID) } ?? []) { old, new in
             reportFinishedRuns(old: old, new: new)
         }
+        .onChange(of: navigation.secondOpinionAsks) { _, _ in
+            guard let review else { return }
+            mode = .changes
+            openAsk(review)
+        }
         // The screen opens on the last snapshot taken of this tree while a fresh one
         // is fetched, so the file list is there at first glance instead of after git.
         .task(id: root) {
@@ -2073,7 +2078,9 @@ struct ChangesView: View {
     // MARK: Review bar
 
     // One line that says what you will send. Everything a second opinion is doing lives
-    // behind its one control, and the finer details are in the title's tooltip.
+    // behind its one control, and the finer details are in the title's tooltip. Asking
+    // for one starts from the session header, so the control only shows once there is
+    // something to follow.
     @ViewBuilder private func reviewStrip(_ review: ReviewTarget) -> some View {
         let all = review.reviews.comments(review.sessionID)
         let kept = all.filter { !$0.isPending }
@@ -2119,10 +2126,11 @@ struct ChangesView: View {
                 .appTooltip("Open the next reply")
             }
             Spacer(minLength: 8)
-            SecondOpinionChip(status: secondOpinionStatus(review),
-                              open: { openSecondOpinion(review) },
-                              askAgain: { openAsk(review) })
-            Rectangle().fill(Theme.hairline).frame(width: 1, height: 20)
+            let opinion = secondOpinionStatus(review)
+            if opinion != .ask {
+                SecondOpinionChip(status: opinion, open: { openSecondOpinion(review) })
+                Rectangle().fill(Theme.hairline).frame(width: 1, height: 20)
+            }
             if !all.isEmpty {
                 InlineLink(title: "Clear", tint: Color.secondary) { confirmClear(review, kept: kept.count, pending: pending) }
             }
