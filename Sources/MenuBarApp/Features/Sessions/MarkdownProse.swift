@@ -736,6 +736,7 @@ struct SelectableText: View {
     @Environment(\.transcriptSelection) private var transcriptSelection
     @Environment(\.transcriptFind) private var transcriptFind
     @Environment(\.transcriptMessageID) private var transcriptMessageID
+    @Environment(\.transcriptReply) private var transcriptReply
     @Environment(\.explorerRoots) private var explorerRoots
     @Environment(\.previewsLocalServers) private var previewsLocalServers
     // Optional because a text view can sit in a sheet that has no menu layer of its own.
@@ -877,7 +878,8 @@ struct SelectableText: View {
             messageID: transcriptMessageID,
             openLink: openLink,
             linkHoverChanged: linkHoverChanged,
-            showMenu: menus.map { menus in { entries, point in menus.show(entries, at: point) } })
+            showMenu: menus.map { menus in { entries, point in menus.show(entries, at: point) } },
+            reply: transcriptReply)
             // NSViewRepresentable does not pass NSTextView's baseline to SwiftUI.
             // The font metric keeps this text on the baseline of whatever it sits
             // beside, such as the marker on a list row.
@@ -962,6 +964,7 @@ private final class LinkTextView: NSTextView {
     var openLink: ((URL) -> Void)?
     var linkHoverChanged: ((TranscriptLink.Hovered?) -> Void)?
     var showMenu: (([MenuEntry], CGPoint) -> Void)?
+    var reply: ((String) -> Void)?
     // Absent for a text view outside a transcript, such as one in a file preview,
     // which selects on its own exactly as AppKit intends.
     var selection: TranscriptSelection?
@@ -1107,6 +1110,9 @@ private final class LinkTextView: NSTextView {
         }
         if let text = selectedTextForMenu {
             entries.append(.item("Copy", icon: "doc.on.doc") { Pasteboard.copy(text) })
+            if let reply {
+                entries.append(.item("Reply", icon: "arrowshape.turn.up.left") { reply(text) })
+            }
         }
         if !entries.isEmpty { entries.append(.separator) }
         entries.append(.item("Select all", icon: "text.cursor") { [weak self] in
@@ -1284,6 +1290,7 @@ private struct LinkAwareText: NSViewRepresentable {
     let openLink: (URL) -> Void
     let linkHoverChanged: (TranscriptLink.Hovered?) -> Void
     let showMenu: (([MenuEntry], CGPoint) -> Void)?
+    var reply: ((String) -> Void)? = nil
 
     func makeCoordinator() -> Coordinator { Coordinator(openLink: openLink) }
 
@@ -1322,6 +1329,7 @@ private struct LinkAwareText: NSViewRepresentable {
         view.openLink = openLink
         view.linkHoverChanged = linkHoverChanged
         view.showMenu = showMenu
+        view.reply = reply
         view.selection = selection
         selection?.register(view, role: role)
         view.find = find
@@ -1334,6 +1342,7 @@ private struct LinkAwareText: NSViewRepresentable {
         (view as? LinkTextView)?.openLink = openLink
         (view as? LinkTextView)?.linkHoverChanged = linkHoverChanged
         (view as? LinkTextView)?.showMenu = showMenu
+        (view as? LinkTextView)?.reply = reply
         (view as? LinkTextView)?.selection = selection
         // Unconditional: this is how a block joins the selection that runs across the
         // page, and a view that stopped re-registering would drop out of it.

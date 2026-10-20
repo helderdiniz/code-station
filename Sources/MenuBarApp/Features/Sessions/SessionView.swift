@@ -1594,6 +1594,7 @@ struct SessionView: View {
                 }
                     .environment(\.transcriptSelection, transcriptSelection)
                     .environment(\.transcriptFind, transcriptFind)
+                    .environment(\.transcriptReply, reply)
                     .environment(\.explorerRoots, explorerRoots(for: session))
                     .padding(.horizontal, 26)
                     .padding(.vertical, 22)
@@ -2034,6 +2035,14 @@ struct SessionView: View {
         if let session = store.session(sessionID) { selectWorkspaceRoot(target.root, in: session) }
         requestedChange = target
         tab = .changes
+    }
+
+    // The picked-out text goes into the draft as a quote and the caret waits below it,
+    // so the answer to it is the next thing typed.
+    private func reply(_ text: String) {
+        runner.composer.editDraft(sessionID) { $0.text = ReplyQuote.appending(text, to: $0.text) }
+        transcriptSelection.clear()
+        composerFocused = true
     }
 
     private func explorerRoots(for session: ChatSession) -> [String] {
