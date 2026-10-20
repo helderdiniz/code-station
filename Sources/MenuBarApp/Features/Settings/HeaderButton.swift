@@ -4,7 +4,7 @@ enum HeaderButton: String, CaseIterable, Hashable {
 
     var title: String {
         switch self {
-        case .preview: "Preview"
+        case .preview: "Browser preview"
         }
     }
 
