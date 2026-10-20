@@ -9,7 +9,6 @@ enum SettingsSearchTarget: String, Hashable {
     case generalOldSessions
     case generalOrphanedWorktrees
     case generalSessionMemory
-    case generalDesign
     case generalSkills
     case generalSystem
     case appearanceTheme
@@ -64,8 +63,6 @@ enum SettingsSearchIndex {
                "git checkout prune automatically no session disk cleanup uncommitted branch"),
         result("Session memory", .general, .generalSessionMemory,
                "limit ram gigabytes gb stop turn protect mac build automatic out of memory"),
-        result("Design ambition", .general, .generalDesign,
-               "design restrained balanced all out showcase polish bold style canvas default"),
         result("Skills refresh", .general, .generalSkills,
                "skills marketplace refresh versions interval daily"),
         result("Terminal", .general, .generalSystem,

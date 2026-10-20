@@ -275,7 +275,6 @@ struct SettingsView: View {
                 oldSessions.id(SettingsSearchTarget.generalOldSessions.id)
                 orphanedWorktrees.id(SettingsSearchTarget.generalOrphanedWorktrees.id)
                 sessionMemory.id(SettingsSearchTarget.generalSessionMemory.id)
-                design.id(SettingsSearchTarget.generalDesign.id)
                 skillRefresh.id(SettingsSearchTarget.generalSkills.id)
                 system.id(SettingsSearchTarget.generalSystem.id)
             }
@@ -511,32 +510,6 @@ struct SettingsView: View {
                     }
                     .fixedSize(horizontal: true, vertical: false)
                     .accessibilityLabel("Session memory limit: \(limit.title)")
-                }
-                .padding(.horizontal, 14)
-                .padding(.vertical, 13)
-            }
-        }
-    }
-
-    private var design: some View {
-        ChoiceBlock("DESIGN") {
-            SettingsCard {
-                HStack(alignment: .center, spacing: 20) {
-                    settingCopy(
-                        title: "Ambition",
-                        detail: "\(settings.designAmbition.detail) Each Design session can choose its own from the composer.")
-                    Spacer(minLength: 0)
-                    HStack(spacing: 4) {
-                        ForEach(DesignAmbition.allCases) { ambition in
-                            ChoicePill(title: ambition.title,
-                                       selected: settings.designAmbition == ambition) {
-                                settings.designAmbition = ambition
-                            }
-                            .accessibilityLabel("Design ambition: \(ambition.title)")
-                            .accessibilityValue(settings.designAmbition == ambition ? "Selected" : "Not selected")
-                        }
-                    }
-                    .fixedSize()
                 }
                 .padding(.horizontal, 14)
                 .padding(.vertical, 13)
