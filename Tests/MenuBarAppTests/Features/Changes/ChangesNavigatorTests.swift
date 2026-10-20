@@ -119,6 +119,63 @@ struct ChangesLayoutTests {
         #expect(navigation.selections[repo.path]?.activeID == selected.id)
     }
 
+    @Test func pickingAFileInAnotherProjectKeepsTheNavigatorWhereItWas() async throws {
+        let first = try GitRepo()
+        for index in 0..<40 { try first.write("file-\(index).txt", "Change \(index)") }
+        let second = try GitRepo()
+        try second.write("README.md", "Updated content\n")
+        let cache = GitStatsCache()
+        cache.store(await GitInspector.snapshot(at: second.path, comparingToLastCommit: true), at: second.path)
+        let navigation = ChangesNavigationMemory()
+        let switcher = ProjectSwitcher(root: first.path)
+        let scratch = ScratchDirectory(prefix: "changes-switch")
+        let settings = AppSettings(agentAvatarURL: scratch.path("avatar.png"),
+                                   preferences: UserDefaults(suiteName: "changes-switch-\(UUID())")!)
+        let view = SwitchingChangesView(switcher: switcher, navigation: navigation, repositories: [
+            ChangesRepository(root: first.path, name: "first"),
+            ChangesRepository(root: second.path, name: "second")
+        ])
+        .environment(cache).environment(settings).environment(DialogPresenter()).appOverlays()
+        let hosting = NSHostingController(rootView: view)
+        hosting.sizingOptions = []
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1000, height: 700),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.contentViewController = hosting
+        window.setContentSize(NSSize(width: 1000, height: 700))
+        window.center()
+        window.layoutIfNeeded()
+        #expect(await waitUntil { navigation.selections[first.path]?.activeID != nil })
+
+        func navigator() -> NSScrollView? {
+            scrollViews(in: hosting.view).first { $0.convert($0.bounds, to: nil).minX < 100 && $0.bounds.width > 200 }
+        }
+        #expect(await waitUntil(timeout: .seconds(3)) {
+            hosting.view.layoutSubtreeIfNeeded()
+            return navigator().map { $0.documentView!.frame.height > 1000 } ?? false
+        })
+        let scrollView = try #require(navigator())
+        let bottom = scrollView.documentView!.frame.height - scrollView.contentView.bounds.height
+        #expect(bottom > 200)
+        let wheel = try #require(CGEvent(scrollWheelEvent2Source: nil, units: .pixel,
+                                         wheelCount: 1, wheel1: -200, wheel2: 0, wheel3: 0))
+        for _ in 0..<20 { scrollView.scrollWheel(with: try #require(NSEvent(cgEvent: wheel))) }
+        try await Task.sleep(for: .milliseconds(200))
+        let offset = scrollView.contentView.bounds.origin.y
+        // At the end of the list, where the other project's file is in view.
+        #expect(abs(offset - bottom) < 1)
+
+        switcher.request = ChangesNavigatorItem(root: second.path, path: "README.md")
+        switcher.root = second.path
+        #expect(await waitUntil { navigation.selections[second.path]?.activeID == "README.md" })
+        try await Task.sleep(for: .milliseconds(200))
+        hosting.view.layoutSubtreeIfNeeded()
+
+        let after = try #require(navigator())
+        #expect(after === scrollView)
+        #expect(abs(after.contentView.bounds.origin.y - offset) < 1)
+        window.contentViewController = nil
+    }
+
     @Test func longRepositoryAndBranchNamesFitNarrowAndWidePanes() async throws {
         let repo = try GitRepo()
         try repo.git("switch", "-c", "feature/a-long-branch-name-for-workspace-review")
@@ -155,4 +212,34 @@ struct ChangesLayoutTests {
             }
         }
     }
+}
+
+@MainActor @Observable
+private final class ProjectSwitcher {
+    var root: String
+    var request: ChangesNavigatorItem?
+    init(root: String) { self.root = root }
+}
+
+// Picks projects the way a session's Changes tab does: the screen is told which project is
+// open and which file was asked for in it.
+private struct SwitchingChangesView: View {
+    let switcher: ProjectSwitcher
+    let navigation: ChangesNavigationMemory
+    let repositories: [ChangesRepository]
+
+    var body: some View {
+        ChangesView(root: switcher.root, repositories: repositories,
+                    requestedPath: switcher.request?.root == switcher.root ? switcher.request?.path : nil,
+                    navigation: navigation) { root, path in
+            switcher.request = ChangesNavigatorItem(root: root, path: path)
+            switcher.root = root
+        }
+    }
+}
+
+@MainActor
+private func scrollViews(in view: NSView) -> [NSScrollView] {
+    let own = (view as? NSScrollView).map { [$0] } ?? []
+    return own + view.subviews.flatMap { scrollViews(in: $0) }
 }

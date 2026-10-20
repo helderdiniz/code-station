@@ -32,9 +32,10 @@ struct WorkspaceChangesView: View {
         return directories.contains(initialRoot) ? directories : [initialRoot] + directories
     }
 
-    // Only the open project gets a screen. The others are listed in its navigator from the
-    // shared git cache, and what a screen has to remember when you move between projects
-    // is kept in the navigation memory, so a project opens where it was left.
+    // One screen shows the open project and lists the others in its navigator from the
+    // shared git cache. Picking another project swaps what the screen shows rather than
+    // building a new screen, so the navigator stays where it was. What a project has to
+    // remember is kept in the navigation memory, so a project opens where it was left.
     var body: some View {
         ChangesView(root: selectedRoot,
                     repositories: roots.map { ChangesRepository(root: $0, name: name($0)) },
@@ -44,7 +45,6 @@ struct WorkspaceChangesView: View {
             request = ChangesNavigatorItem(root: root, path: path)
             selectedRoot = root
         }
-        .id(selectedRoot)
         .onChange(of: ChangesNavigatorItem(root: initialRoot, path: initialPath)) { _, item in
             if item.path != nil { request = item }
         }

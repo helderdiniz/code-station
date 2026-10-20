@@ -10,7 +10,11 @@ struct ChangesView: View {
     let initiallySelectedPath: String?
     let repositories: [ChangesRepository]
     let requestedPath: String?
-    @State private var model = ChangesModel()
+    // One screen serves every project in the workspace, so the navigator keeps its place
+    // when another project is picked. Each project still gets a model of its own: git work
+    // started for one project can only ever land in that project's model.
+    @State private var models = ChangesModels()
+    private var model: ChangesModel { models.model(for: root) }
     @State private var navigation: ChangesNavigationMemory
     private let isWorkspace: Bool
     let selectRepository: (String, String?) -> Void
@@ -71,7 +75,9 @@ struct ChangesView: View {
     private var refreshFailed: Bool { model.refreshFailed }
     private var latestCommit: GitCommitSummary? { model.latestCommit }
     @State private var openLatestCommit = false
-    private var snapshot: GitSnapshot? { model.snapshot }
+    // Until the project is read, it shows the last snapshot taken of its tree, so its
+    // files are listed at once instead of after git.
+    private var snapshot: GitSnapshot? { model.snapshot ?? gitStats.snapshot(at: root) }
     private var loading: Bool { model.loading }
     private var working: String? {
         get { model.working }
@@ -81,7 +87,7 @@ struct ChangesView: View {
         get { navigation.showingHistory ? .history : .changes }
         nonmutating set { navigation.showingHistory = newValue == .history }
     }
-    @State private var commitDraft: ChangesCommitDraft
+    private var commitDraft: ChangesCommitDraft { navigation.commitDraft(for: root) }
     @FocusState private var commitFocused: Bool
     @State private var commitSucceeded = false
     @FocusState private var pushFocused: Bool
@@ -109,7 +115,8 @@ struct ChangesView: View {
     @State private var diffScroll = DiffTextView.Scroll.top
     // Gap rows git is reading the hidden lines for right now.
     private var expanding: Set<String> { model.expanding }
-    @State private var appliedInitialSelection = false
+    // Projects whose first file has been picked, or that kept the one picked before.
+    @State private var appliedInitialSelection: Set<String>
 
     private var files: [GitChange] { snapshot?.files ?? [] }
     private var selected: GitChange? { files.first { $0.id == fileSelection.activeID } }
@@ -140,10 +147,10 @@ struct ChangesView: View {
         let memory = navigation ?? ChangesNavigationMemory()
         _ = memory.history(for: root)
         _navigation = State(initialValue: memory)
-        _commitDraft = State(initialValue: memory.commitDraft(for: root))
+        _ = memory.commitDraft(for: root)
         isWorkspace = navigation != nil
         _appliedInitialSelection = State(initialValue: navigation?.selections[root] != nil
-            && initiallySelectedPath == nil && requestedPath == nil)
+            && initiallySelectedPath == nil && requestedPath == nil ? [root] : [])
         self.root = root
         self.initiallySelectedPath = initiallySelectedPath
         self.repositories = repositories.isEmpty
@@ -241,13 +248,12 @@ struct ChangesView: View {
             mode = .changes
             openSecondOpinion(review)
         }
-        // The screen opens on the last snapshot taken of this tree while a fresh one
-        // is fetched, so the file list is there at first glance instead of after git.
         .task(id: root) {
-            if snapshot == nil { model.snapshot = gitStats.snapshot(at: root) }
+            if model.snapshot == nil { model.snapshot = gitStats.snapshot(at: root) }
             await reload()
             await refreshOtherProjects()
         }
+        .onChange(of: root) { _, root in switchedProject(root) }
         .onChange(of: requestedPath) { _, path in
             guard let file = files.first(where: { $0.id == path }) else { return }
             mode = .changes
@@ -1677,8 +1683,8 @@ struct ChangesView: View {
         // Keep the open file open across a refresh, but only if it still has changes.
         let orderedIDs = fresh.files.map(\.id)
         fileSelection.retain(Set(orderedIDs), in: orderedIDs)
-        if !appliedInitialSelection {
-            appliedInitialSelection = true
+        if !appliedInitialSelection.contains(root) {
+            appliedInitialSelection.insert(root)
             if let initial = (requestedPath ?? initiallySelectedPath).flatMap({ path in fresh.files.first { $0.id == path } }) ?? fresh.files.first {
                 fileSelection.select(initial.id, in: orderedIDs,
                                      extendingRange: false, toggling: false)
@@ -1690,6 +1696,22 @@ struct ChangesView: View {
         } else {
             closeDiff()
         }
+    }
+
+    // What was half done in the project before belongs to its files, so it goes.
+    private func switchedProject(_ root: String) {
+        if navigation.selections[root] != nil && requestedPath == nil {
+            appliedInitialSelection.insert(root)
+        } else {
+            appliedInitialSelection.remove(root)
+        }
+        commentDraft = nil
+        reattaching = nil
+        copied = nil
+        copiedPath = nil
+        commitSucceeded = false
+        openLatestCommit = false
+        diffScroll = .top
     }
 
     private func switchedMode() {

@@ -160,3 +160,17 @@ final class ChangesModel {
         expanding = []
     }
 }
+
+// The models of the projects a Changes screen has shown. Not observed: a model is made
+// the first time its project is drawn, and making one changes nothing on screen.
+@MainActor
+final class ChangesModels {
+    private var models: [String: ChangesModel] = [:]
+
+    func model(for root: String) -> ChangesModel {
+        if let model = models[root] { return model }
+        let model = ChangesModel()
+        models[root] = model
+        return model
+    }
+}
