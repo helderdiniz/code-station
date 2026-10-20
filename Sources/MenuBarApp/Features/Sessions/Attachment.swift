@@ -1,0 +1,387 @@
+import AppKit
+import ImageIO
+import SwiftUI
+import UniformTypeIdentifiers
+
+// A file that goes out with a prompt. Claude Code takes files by path, so anything that
+// arrives as raw bytes - a screenshot on the clipboard - has to be written to disk
+// before the turn can start.
+struct Attachment: Identifiable, Equatable {
+    let id = UUID()
+    let url: URL
+
+    var name: String { url.lastPathComponent }
+
+    var isImage: Bool {
+        let type = (try? url.resourceValues(forKeys: [.contentTypeKey]).contentType)
+            ?? UTType(filenameExtension: url.pathExtension)
+        return type?.conforms(to: .image) ?? false
+    }
+}
+
+enum Attachments {
+    // Pasted files only matter for as long as the conversation does, so they stay out of
+    // backups and are removed after old conversations have had time to resume.
+    static var folder: URL { AppPaths.directory("attachments", backedUp: false) }
+
+    // What the clipboard holds, if it is worth attaching. Files win over images:
+    // copying a file in Finder also puts its name on the clipboard as text and a
+    // preview of it as an image, and the file itself is what was meant.
+    static func fromClipboard(_ pasteboard: NSPasteboard = .general) -> [Attachment] {
+        let urls = Pasteboard.fileURLs(from: pasteboard)
+        if !urls.isEmpty {
+            return urls.map { Attachment(url: $0) }
+        }
+        // Apps that copy text often put a picture of it on the clipboard as well -
+        // spreadsheet cells arrive as both. Text is what was meant there, so an image
+        // only counts when it comes on its own.
+        guard pasteboard.string(forType: .string) == nil,
+              let image = pasteboard.readObjects(forClasses: [NSImage.self])?.first as? NSImage,
+              let pasted = fromImage(image) else { return [] }
+        return [pasted]
+    }
+
+    static func fromDrop(_ urls: [URL]) -> [Attachment] {
+        urls.filter(\.isFileURL).map { Attachment(url: $0) }
+    }
+
+    static func fromPastedText(_ text: String) -> Attachment? {
+        let name = "pasted-text-\(UUID().uuidString.prefix(8)).txt"
+        let url = folder.appendingPathComponent(name)
+        guard (try? text.write(to: url, atomically: true, encoding: .utf8)) != nil else { return nil }
+        return Attachment(url: url)
+    }
+
+    // A file sent from the paired phone. It keeps the name it had there, since that is what
+    // the agent and the transcript show, so each one gets a folder of its own rather than a
+    // name that could clash with another upload. Only the last part of the name is kept, so
+    // a crafted name cannot write outside that folder.
+    static func fromUpload(name: String, data: Data) -> Attachment? {
+        let cleaned = (name as NSString).lastPathComponent
+            .replacingOccurrences(of: ":", with: "-")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let safeName = cleaned.isEmpty || cleaned.hasPrefix(".") ? "phone-upload\(cleaned)" : cleaned
+        let directory = folder.appendingPathComponent("phone-\(UUID().uuidString.prefix(8))")
+        let url = directory.appendingPathComponent(safeName)
+        do {
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            try data.write(to: url, options: .atomic)
+        } catch {
+            return nil
+        }
+        return Attachment(url: url)
+    }
+
+    // An image arrives as whatever format the app that copied it used, so it is re-encoded
+    // as PNG under a name of our own.
+    static func fromImage(_ image: NSImage, prefix: String = "pasted") -> Attachment? {
+        guard let tiff = image.tiffRepresentation,
+              let bitmap = NSBitmapImageRep(data: tiff),
+              let png = bitmap.representation(using: .png, properties: [:]) else { return nil }
+        let url = folder.appendingPathComponent(
+            "\(prefix)-\(UUID().uuidString.prefix(8)).png")
+        guard (try? png.write(to: url, options: .atomic)) != nil else { return nil }
+        return Attachment(url: url)
+    }
+
+    // A pasted file is referenced by path in a conversation that can be resumed later,
+    // so it has to outlive the turn that sent it. A week is long enough for that and
+    // short enough that the folder does not grow forever.
+    static func pruneOldPastes(olderThan days: Int = 7) {
+        let files = FileManager.default
+        let cutoff = Date().addingTimeInterval(-Double(days) * 24 * 60 * 60)
+        let contents = (try? files.contentsOfDirectory(at: folder,
+                                                       includingPropertiesForKeys: [.contentModificationDateKey],
+                                                       options: .skipsHiddenFiles)) ?? []
+        for file in contents {
+            let modified = (try? file.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
+            if let modified, modified < cutoff { try? files.removeItem(at: file) }
+        }
+    }
+}
+
+// MARK: - Pasting into the composer
+
+// SwiftUI's onPasteCommand never fires while a text field has the keyboard: the field
+// claims paste: whatever the clipboard holds and quietly drops what it cannot read as
+// text. Nor is a view's own key handling early enough - Edit's Paste item runs first, and
+// a file copied in Finder puts its name on the clipboard as text too, so the menu would
+// take the shortcut and paste that name. A monitor sees the key before either of them.
+private struct PasteCatcher: ViewModifier {
+    let isEnabled: Bool
+    let onPaste: ([Attachment]) -> Void
+
+    @State private var monitor = WindowKeyMonitor(.command, "v")
+
+    func body(content: Content) -> some View {
+        content
+            .background(WindowAnchor(monitor: monitor))
+            .onChange(of: isEnabled, initial: true) { _, enabled in
+                guard enabled else { return monitor.stop() }
+                monitor.start {
+                    // Swallowed only when something was attached; plain text still belongs
+                    // to the text field.
+                    let found = Attachments.fromClipboard()
+                    guard !found.isEmpty else { return false }
+                    onPaste(found)
+                    return true
+                }
+            }
+            .onDisappear { monitor.stop() }
+    }
+}
+
+extension View {
+    func pasteAttachments(enabled: Bool, onPaste: @escaping ([Attachment]) -> Void) -> some View {
+        modifier(PasteCatcher(isEnabled: enabled, onPaste: onPaste))
+    }
+}
+
+// MARK: - Copying one
+
+extension View {
+    // The menu behind every drawn image, so a picture can be taken out of the app
+    // wherever it is shown - a composer chip, a message, the full preview.
+    func imageContextMenu(_ url: URL) -> some View {
+        appContextMenu {
+            [.item("Copy Image") { Pasteboard.copy(imageAt: url) },
+             .item("Copy Path") { Pasteboard.copy(url.path) },
+             .separator,
+             .item("Reveal in Finder") {
+                 NSWorkspace.shared.activateFileViewerSelecting([url])
+             },
+             .item("Open with default app") { NSWorkspace.shared.open(url) }]
+        }
+    }
+}
+
+// MARK: - Showing one
+
+// A small decoded copy of an image file. Screenshots are large, so anything that
+// draws one decodes a bounded copy instead of the whole image.
+struct ImageThumbnail: @unchecked Sendable {
+    let image: CGImage
+
+    var aspectRatio: CGFloat { CGFloat(image.width) / CGFloat(image.height) }
+
+    nonisolated static func load(_ url: URL, maxPixelSize: Int) -> ImageThumbnail? {
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
+              let image = CGImageSourceCreateThumbnailAtIndex(source, 0, [
+                  kCGImageSourceCreateThumbnailFromImageAlways: true,
+                  kCGImageSourceCreateThumbnailWithTransform: true,
+                  kCGImageSourceThumbnailMaxPixelSize: maxPixelSize,
+              ] as CFDictionary) else { return nil }
+        return ImageThumbnail(image: image)
+    }
+}
+
+// A file on its way out, or one that already went. Images show a thumbnail, everything
+// else shows an icon and its name. `onRemove` is what makes it a composer chip rather
+// than a record of what was sent.
+struct AttachmentChip: View {
+    @Environment(DialogPresenter.self) private var dialogs
+
+    let url: URL
+    var onRemove: (() -> Void)?
+
+    @State private var thumbnail: ImageThumbnail?
+
+    var body: some View {
+        HStack(spacing: 6) {
+            if let thumbnail {
+                Button {
+                    AttachmentImagePreview.show(url, aspectRatio: thumbnail.aspectRatio, in: dialogs)
+                } label: {
+                    Image(decorative: thumbnail.image, scale: 1)
+                        .resizable()
+                        .aspectRatio(contentMode: .fill)
+                        .frame(width: 22, height: 22)
+                        .clipShape(RoundedRectangle(cornerRadius: 4))
+                        .contentShape(RoundedRectangle(cornerRadius: 4))
+                }
+                .buttonStyle(.plain)
+                .hoverLift(amount: Motion.smallLift)
+                .appTooltip("View full image")
+                .accessibilityLabel("View \(url.lastPathComponent)")
+                .imageContextMenu(url)
+            } else {
+                Image(systemName: missing ? "questionmark.square.dashed" : "doc")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 22, height: 22)
+            }
+
+            // The name is what gets truncated, so it is also what answers where the file
+            // came from. The hint sits on the name rather than on the whole pill, so it
+            // does not fight the buttons on either side of it for the pointer.
+            Text(url.lastPathComponent)
+                .font(.system(size: 11, weight: .medium))
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .foregroundStyle(missing ? Color.secondary : Color.primary)
+                .appTooltip { Tooltip(title: url.lastPathComponent, subtitle: url.path) }
+
+            if let onRemove {
+                Button(action: onRemove) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 9, weight: .bold))
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .hoverLift(amount: Motion.smallLift)
+                .appTooltip("Remove")
+                .accessibilityLabel("Remove \(url.lastPathComponent)")
+            }
+        }
+        .padding(.leading, 5)
+        .padding(.trailing, 8)
+        .padding(.vertical, 4)
+        .background(RoundedRectangle(cornerRadius: 8).fill(Theme.card))
+        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.border))
+        .frame(maxWidth: 220)
+        .task(id: url) {
+            let thumbnail = await Task.detached(priority: .utility) {
+                ImageThumbnail.load(url, maxPixelSize: 96)
+            }.value
+            guard !Task.isCancelled else { return }
+            self.thumbnail = thumbnail
+        }
+    }
+
+    private var missing: Bool { !FileManager.default.fileExists(atPath: url.path) }
+}
+
+// An image shown at reading size in the transcript, with a click opening the full
+// preview. A file that decodes to nothing falls back to the plain chip, so a broken
+// image still says which file it was.
+struct InlineImageView: View {
+    @Environment(DialogPresenter.self) private var dialogs
+
+    let url: URL
+    var label: String?
+    var maximumWidth: CGFloat = 280
+
+    @State private var thumbnail: ImageThumbnail?
+    @State private var failed = false
+
+    private static let maxHeight: CGFloat = 200
+
+    var body: some View {
+        Group {
+            if let thumbnail {
+                let size = fit(thumbnail)
+                Button {
+                    AttachmentImagePreview.show(url, aspectRatio: thumbnail.aspectRatio, in: dialogs)
+                } label: {
+                    // The size it fits into is a cap, not a demand: an image that could
+                    // not be made narrower would hold the whole column open and push
+                    // whatever is docked beside it off the edge of the window.
+                    Image(decorative: thumbnail.image, scale: 1)
+                        .resizable()
+                        .aspectRatio(thumbnail.aspectRatio, contentMode: .fit)
+                        .frame(maxWidth: size.width, maxHeight: size.height)
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.border))
+                        .contentShape(RoundedRectangle(cornerRadius: 8))
+                }
+                .buttonStyle(.plain)
+                .hoverLift()
+                .appTooltip { Tooltip(title: label ?? url.lastPathComponent, subtitle: url.path) }
+                .accessibilityLabel("View \(label ?? url.lastPathComponent)")
+                .imageContextMenu(url)
+            } else if failed {
+                AttachmentChip(url: url)
+            } else {
+                // A quiet stand-in close to the finished size, so the page settles
+                // instead of jumping when the decode lands.
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(Theme.sunken)
+                    .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.border))
+                    .overlay {
+                        Image(systemName: "photo")
+                            .font(.system(size: 18, weight: .light))
+                            .foregroundStyle(.secondary)
+                    }
+                    .aspectRatio(220.0 / 140, contentMode: .fit)
+                    .frame(maxWidth: min(220, maximumWidth))
+            }
+        }
+        .task(id: url) {
+            let loaded = await Task.detached(priority: .utility) {
+                // Twice the widest it can draw, so it stays sharp on a Retina display
+                // without decoding a screenshot at full size.
+                ImageThumbnail.load(url, maxPixelSize: 640)
+            }.value
+            guard !Task.isCancelled else { return }
+            thumbnail = loaded
+            failed = loaded == nil
+        }
+    }
+
+    // Fits the reading box without blowing a small image up past its own pixels.
+    private func fit(_ thumbnail: ImageThumbnail) -> CGSize {
+        let width = min(maximumWidth, Self.maxHeight * thumbnail.aspectRatio,
+                        CGFloat(thumbnail.image.width))
+        return CGSize(width: width, height: width / thumbnail.aspectRatio)
+    }
+}
+
+private struct AttachmentImagePreview: View {
+    let url: URL
+    let aspectRatio: CGFloat
+
+    @State private var image: ImageThumbnail?
+    @State private var failed = false
+
+    // The full-size view, opened the same way from a chip and from an inline image.
+    static func show(_ url: URL, aspectRatio: CGFloat, in dialogs: DialogPresenter) {
+        dialogs.show(Dialog(
+            title: url.lastPathComponent,
+            content: AnyView(AttachmentImagePreview(url: url, aspectRatio: aspectRatio)),
+            actions: [.init(label: "Close", kind: .cancel)],
+            width: 760))
+    }
+
+    var body: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 8).fill(Theme.sunken)
+
+            if let image {
+                Image(decorative: image.image, scale: 1)
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+            } else if failed {
+                VStack(spacing: 8) {
+                    Image(systemName: "photo.badge.exclamationmark")
+                        .font(.system(size: 24, weight: .light))
+                    Text("This image could not be loaded.")
+                        .font(.system(size: 13))
+                }
+                .foregroundStyle(.secondary)
+            } else {
+                Image(systemName: "photo")
+                    .font(.system(size: 24, weight: .light))
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .frame(height: previewHeight)
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.border))
+        .imageContextMenu(url)
+        .task(id: url) {
+            // The popup is at most 720 points wide. A 1,440-pixel copy remains sharp on
+            // a Retina display without decoding a large screenshot at its full size.
+            let loaded = await Task.detached(priority: .userInitiated) {
+                ImageThumbnail.load(url, maxPixelSize: 1_440)
+            }.value
+            guard !Task.isCancelled else { return }
+            image = loaded
+            failed = loaded == nil
+        }
+    }
+
+    private var previewHeight: CGFloat {
+        min(480, max(180, 720 / aspectRatio))
+    }
+}
