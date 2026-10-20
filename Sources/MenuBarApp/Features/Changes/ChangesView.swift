@@ -903,6 +903,7 @@ struct ChangesView: View {
                     }.padding(10)
                     .smoothlyResizes(when: mode == .history ? collapsedHistories : collapsedRepositories)
                     .smoothlyResizes(when: navigation.foldedNotes)
+                    .smoothlyResizes(when: filteringComments)
                 }
                 .accessibilityLabel(mode == .history ? "Workspace projects and commits"
                                                      : "Workspace repositories and changed files")
