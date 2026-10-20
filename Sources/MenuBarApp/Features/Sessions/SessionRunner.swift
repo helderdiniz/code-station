@@ -1462,7 +1462,7 @@ final class SessionRunner {
                         resumeSessionID: resume, presetSessionID: presetSessionID,
                         suggestsPrompts: suggestsPrompts, serverLaunch: serverLaunch,
                         historyDirectory: session.importedOrigin.flatMap {
-                            $0.agent == agent ? $0.configDirectory : nil
+                            $0.agent == agent ? $0.historyOverride() : nil
                         })
     }
 

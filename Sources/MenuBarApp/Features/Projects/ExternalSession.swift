@@ -8,6 +8,20 @@ struct ImportedSessionOrigin: Codable, Equatable, Sendable {
     static func key(agent: AgentKind, sessionID: String) -> String {
         "\(agent.rawValue):\(sessionID)"
     }
+
+    // The folder the agent must be pointed at to resume this session, or nil when it
+    // already looks there. Claude Code ties its Keychain sign-in to CLAUDE_CONFIG_DIR
+    // whenever the variable is set, even to the default folder, so setting it without
+    // need signs the user out.
+    func historyOverride(environment: [String: String] = ProcessInfo.processInfo.environment,
+                         home: URL = FileManager.default.homeDirectoryForCurrentUser) -> String? {
+        let inherited = environment[agent.historyEnvironmentVariable].flatMap { $0.isEmpty ? nil : $0 }
+            ?? home.appendingPathComponent(".\(agent.rawValue)").path
+        func resolved(_ path: String) -> String {
+            URL(fileURLWithPath: path).standardizedFileURL.resolvingSymlinksInPath().path
+        }
+        return resolved(inherited) == resolved(configDirectory) ? nil : configDirectory
+    }
 }
 
 struct ExternalSessionCandidate: Identifiable, Hashable, Sendable {

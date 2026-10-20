@@ -331,3 +331,27 @@ struct ImportedSessionStoreTests {
         #expect(fork.knownAgentSessionIDs == made.knownAgentSessionIDs)
     }
 }
+
+struct ImportedSessionOriginTests {
+    private let home = URL(fileURLWithPath: "/Users/someone", isDirectory: true)
+
+    @Test func theDefaultFolderIsNotPassedOn() {
+        let origin = ImportedSessionOrigin(sessionID: "s", agent: .claudeCode, configDirectory: "/Users/someone/.claude")
+        #expect(origin.historyOverride(environment: [:], home: home) == nil)
+        let codex = ImportedSessionOrigin(sessionID: "s", agent: .codex, configDirectory: "/Users/someone/.codex/")
+        #expect(codex.historyOverride(environment: [:], home: home) == nil)
+    }
+
+    @Test func aFolderTheAgentAlreadyUsesIsNotPassedOn() {
+        let origin = ImportedSessionOrigin(sessionID: "s", agent: .claudeCode, configDirectory: "/work/claude")
+        #expect(origin.historyOverride(environment: ["CLAUDE_CONFIG_DIR": "/work/claude"], home: home) == nil)
+    }
+
+    @Test func anotherFolderIsPassedOn() {
+        let origin = ImportedSessionOrigin(sessionID: "s", agent: .claudeCode, configDirectory: "/work/claude")
+        #expect(origin.historyOverride(environment: [:], home: home) == "/work/claude")
+        let home = ImportedSessionOrigin(sessionID: "s", agent: .claudeCode, configDirectory: "/Users/someone/.claude")
+        #expect(home.historyOverride(environment: ["CLAUDE_CONFIG_DIR": "/work/claude"], home: self.home)
+            == "/Users/someone/.claude")
+    }
+}
