@@ -63,11 +63,14 @@ struct HeaderTabDeckRoomTests {
         #expect(widths.allSatisfy { $0 == widths.first })
     }
 
-    // The chosen Changes tab widens to show its counts, and it has to ask for the same
-    // width before and after it is drawn, or the band around it never settles.
-    @Test func lineCountsWidenOnlyTheChosenChangesTabAndHoldTheirWidth() {
-        let counts = HeaderTabLineCounts(added: 412, removed: 271)
-        func width(selecting selected: String) -> CGFloat {
+    // The chosen Changes tab widens to show its counts. The deck keeps that room at its
+    // end while another tab is chosen, so the header beside it never has to fit itself
+    // again, and the deck gives the same answer before and after it is drawn.
+    @Test(arguments: [HeaderTabLineCounts(added: 412, removed: 271),
+                      HeaderTabLineCounts(added: 18_349, removed: 0),
+                      HeaderTabLineCounts(added: 3, removed: 183_499)])
+    func lineCountsDoNotChangeTheDecksWidth(counts: HeaderTabLineCounts) {
+        let widths = ["Chat", "Changes", "Explorer"].map { selected in
             let deck = NSHostingView(rootView: HeaderTabDeck(
                 tabs: tabs(selecting: selected, lineCounts: counts))
                 .environment(TooltipPresenter()))
@@ -76,10 +79,12 @@ struct HeaderTabDeckRoomTests {
             #expect(deck.fittingSize.width == asked)
             return asked
         }
-        let onChanges = width(selecting: "Changes")
-        let onChat = width(selecting: "Chat")
-        #expect(onChanges > onChat)
-        #expect(width(selecting: "Explorer") == onChat)
+        #expect(widths.allSatisfy { $0 == widths.first })
+
+        let withoutCounts = NSHostingView(rootView: HeaderTabDeck(
+            tabs: tabs(selecting: "Chat", changesHaveContent: true))
+            .environment(TooltipPresenter()))
+        #expect(widths[0] > withoutCounts.fittingSize.width)
     }
 
     @Test func lineCountsShortenFromTenThousand() {

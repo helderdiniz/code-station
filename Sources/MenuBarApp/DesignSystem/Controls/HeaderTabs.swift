@@ -97,6 +97,14 @@ struct HeaderTabDeck: View {
                     .transition(.opacity)
             }
         }
+        // The deck asks for the same width whichever tab is chosen, so the header beside
+        // it never has to lay itself out again: a header that fits its rail to what is
+        // left would otherwise swap to a different rail halfway through the change. A tab
+        // that only shows its counts while chosen keeps their room at the end of the row
+        // when it is not, where it reads as part of the gap before the rail. A scrolling
+        // deck is the header's last resort, so there is nothing to swap to and the room
+        // would only push a tab out of view.
+        .padding(.trailing, scrollable ? 0 : roomKeptForLineCounts)
         // Tabs come and go as a session settles into its kind of work, and the row
         // closes up around them rather than jumping.
         .animation(reduceMotion ? nil : HeaderMotion.page, value: tabs.map(\.id))
@@ -104,8 +112,8 @@ struct HeaderTabDeck: View {
         // making them jump.
         .animation(reduceMotion ? nil : HeaderMotion.page, value: tabs.map(\.showsLineCounts))
         // Drawn over the row rather than inside a tab, so there is one line that travels
-        // between tabs instead of one line per tab that comes and goes, and the line
-        // itself never changes what the deck asks for in width.
+        // between tabs instead of one line per tab that comes and goes, and choosing a
+        // tab still changes nothing the deck asks for in width.
         .overlayPreferenceValue(HeaderTabFrames.self) { anchors in
             GeometryReader { proxy in
                 HeaderTabInk(frames: anchors.mapValues { proxy[$0] },
@@ -114,6 +122,13 @@ struct HeaderTabDeck: View {
         }
         .scrollTargetLayout(isEnabled: scrollable)
         .fixedSize(horizontal: true, vertical: false)
+    }
+
+    private var roomKeptForLineCounts: CGFloat {
+        tabs.reduce(0) { room, tab in
+            guard let counts = tab.lineCounts, !tab.showsLineCounts else { return room }
+            return room + HeaderTabDeckItem.widening(for: counts, hasContentSlot: tab.hasContent != nil)
+        }
     }
 }
 
@@ -223,7 +238,7 @@ private struct HeaderTabDeckItem: View {
 
     private var button: some View {
         Button(action: tab.activate) {
-            HStack(spacing: 7) {
+            HStack(spacing: Self.labelSpacing) {
                 Image(systemName: tab.icon)
                     .font(.system(size: 13, weight: .semibold))
                     .actOut(tab.icon, trigger: actOuts)
@@ -234,16 +249,18 @@ private struct HeaderTabDeckItem: View {
                     .frame(width: Self.width(of: tab.label), alignment: .leading)
                 if tab.showsLineCounts, let lineCounts = tab.lineCounts {
                     lineCountsLabel(lineCounts)
+                        // Gone quickly on the way out, before the tab beside it slides
+                        // over the place where they were.
                         .transition(.asymmetric(
                             insertion: reduceMotion ? .opacity : .push(from: .bottom),
-                            removal: .opacity))
+                            removal: .opacity.animation(.easeOut(duration: 0.08))))
                 } else if let hasContent = tab.hasContent {
                     Circle()
                         .fill(Theme.dotOnText)
-                        .frame(width: 6, height: 6)
+                        .frame(width: Self.dotSize, height: Self.dotSize)
                         .opacity(hasContent ? 1 : 0)
                         .animation(nil, value: hasContent)
-                        .padding(.leading, 1)
+                        .padding(.leading, Self.dotSlotWidth - Self.dotSize)
                         .accessibilityHidden(true)
                         .transition(.opacity)
                 }
@@ -323,6 +340,9 @@ private struct HeaderTabDeckItem: View {
     private static let wordSize: CGFloat = 12.5
     private static let countSize: CGFloat = 10.5
     private static let countSpacing: CGFloat = 5
+    private static let labelSpacing: CGFloat = 7
+    private static let dotSize: CGFloat = 6
+    private static let dotSlotWidth: CGFloat = 7
 
     // The word's width read from the type and rounded to a whole point, rather than taken
     // from the word once it is on screen. A width that only settles after the label has
@@ -335,6 +355,13 @@ private struct HeaderTabDeckItem: View {
     }
 
     // The count, measured the same way and for the same reason as the word beside it.
+    // How much wider the tab is with its counts than with the dot in their place.
+    static func widening(for counts: HeaderTabLineCounts, hasContentSlot: Bool) -> CGFloat {
+        let countsWidth = width(ofMono: "+" + HeaderTabLineCounts.short(counts.added)) + countSpacing
+            + width(ofMono: "\u{2212}" + HeaderTabLineCounts.short(counts.removed)) + countSpacing
+        return hasContentSlot ? countsWidth - dotSlotWidth : countsWidth + labelSpacing
+    }
+
     private static func width(ofCounts text: String) -> CGFloat {
         width(ofMono: text) + countSpacing
     }
