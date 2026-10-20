@@ -263,6 +263,56 @@ struct GitBranchesTests {
         #expect(rebasing.read("README.md") == "incoming\n")
     }
 
+    @Test func fastForwardMovesTheBranchWithoutANewCommitOnlyWhenItCan() async throws {
+        let repo = try GitRepo()
+        try feature(repo)
+        let tip = try repo.git("rev-parse", "feature")
+        let result = await GitBranches.integrate(try await preview("feature", repo), kind: .fastForward, consent: false, at: repo.path)
+        #expect(!result.failed, Comment(rawValue: result.message))
+        #expect(repo.head == tip)
+
+        let diverged = try GitRepo()
+        try feature(diverged, conflict: true)
+        let head = diverged.head
+        let blocked = await GitBranches.integrate(try await preview("feature", diverged), kind: .fastForward, consent: false, at: diverged.path)
+        #expect(blocked.failed)
+        #expect(diverged.head == head)
+    }
+
+    // Mirrors merging a worktree branch into main, which stays checked out in the main checkout.
+    @Test func mergingIntoAnotherCheckoutFinishesThereAndRefusesWhatItCannotUndo() async throws {
+        let repo = try GitRepo()
+        let worktree = FileManager.default.temporaryDirectory.appendingPathComponent("git-worktree-" + UUID().uuidString).path
+        defer { try? FileManager.default.removeItem(atPath: worktree) }
+        try repo.git("worktree", "add", "-q", "-b", "feature", worktree)
+        try "incoming\n".write(toFile: worktree + "/feature.txt", atomically: true, encoding: .utf8)
+        try repo.git("-C", worktree, "add", "feature.txt")
+        try repo.git("-C", worktree, "commit", "-q", "-m", "Incoming change")
+        let source = try await branch("feature", repo)
+        #expect(!source.worktree.isEmpty)
+
+        try repo.write("draft.txt", "main checkout work")
+        let dirty = await GitBranches.integrateIntoOtherCheckout(try await preview("feature", repo), kind: .fastForward, at: repo.path)
+        #expect(dirty.failed)
+        try FileManager.default.removeItem(at: repo.url.appendingPathComponent("draft.txt"))
+
+        let result = await GitBranches.integrateIntoOtherCheckout(try await preview("feature", repo), kind: .fastForward, at: repo.path)
+        #expect(!result.failed, Comment(rawValue: result.message))
+        #expect(repo.head == (try repo.git("rev-parse", "feature")))
+        #expect(repo.read("feature.txt") == "incoming\n")
+
+        try "worktree side\n".write(toFile: worktree + "/README.md", atomically: true, encoding: .utf8)
+        try repo.git("-C", worktree, "commit", "-q", "-am", "Worktree change")
+        try repo.write("README.md", "main side\n")
+        try repo.commit("Main change")
+        let head = repo.head
+        let conflicted = await GitBranches.integrateIntoOtherCheckout(try await preview("feature", repo), kind: .merge, at: repo.path)
+        #expect(conflicted.failed)
+        #expect(repo.head == head)
+        #expect(try repo.git("status", "--porcelain").isEmpty)
+        #expect(try await GitBranches.catalog(at: repo.path).get().recovery == nil)
+    }
+
     @Test func operationsRemainScopedToTheSelectedRepository() async throws {
         let first = try GitRepo()
         let second = try GitRepo()
