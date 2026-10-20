@@ -30,4 +30,19 @@ struct ReplyQuoteTests {
         #expect(ReplyQuote.appending("\n  Point.  \n\n", to: "") == "> Point.\n\n")
         #expect(ReplyQuote.appending(" \n ", to: "Draft") == "Draft")
     }
+
+    @Test func sentBubbleDrawsTheQuoteApartFromTheAnswer() {
+        let selection = "if retry {\n    wait()\n}\n\nThen log it."
+        let prompt = ReplyQuote.appending(selection, to: "About this:") + "Why wait here?"
+        #expect(SentPrompt.quoteRuns(prompt) == [
+            .init(isQuote: false, text: "About this:"),
+            .init(isQuote: true, text: "if retry {\n    wait()\n}\n\nThen log it."),
+            .init(isQuote: false, text: "Why wait here?"),
+        ])
+    }
+
+    @Test func promptWithoutQuotesIsOneRunAsTyped() {
+        #expect(SentPrompt.quoteRuns("  indented\nsecond line") ==
+                [.init(isQuote: false, text: "  indented\nsecond line")])
+    }
 }

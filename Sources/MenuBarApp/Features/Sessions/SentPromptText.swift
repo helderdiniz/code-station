@@ -39,10 +39,27 @@ struct SentPromptText: View {
                         .equatable()
                         .transcriptCopyButton(for: segment.text, tooltip: "Copy code", inset: 6)
                 } else {
-                    SelectableText(prose: SentPrompt.inline(segment.text,
-                                                           commandNames: segment.id == 0 ? commandNames : []),
-                                   lineSpacing: 3, width: .hugs, linksLocalServers: false)
-                        .fixedSize(horizontal: false, vertical: true)
+                    ForEach(Array(SentPrompt.quoteRuns(segment.text).enumerated()), id: \.offset) { offset, run in
+                        let prose = SelectableText(
+                            prose: SentPrompt.inline(run.text,
+                                                     commandNames: segment.id == 0 && offset == 0 ? commandNames : []),
+                            lineSpacing: 3, width: .hugs, linksLocalServers: false)
+                            .fixedSize(horizontal: false, vertical: true)
+                        if run.isQuote {
+                            // The bubble can be filled with the accent, so the bar and the dimmed
+                            // text take the bubble's own text colour rather than the accent.
+                            prose
+                                .opacity(0.75)
+                                .padding(.leading, 11)
+                                .overlay(alignment: .leading) {
+                                    RoundedRectangle(cornerRadius: 1.5)
+                                        .fill(.primary.opacity(0.3))
+                                        .frame(width: 3)
+                                }
+                        } else {
+                            prose
+                        }
+                    }
                 }
             }
         }
@@ -77,6 +94,43 @@ enum SentPrompt {
             attributed[range].inlinePresentationIntent = .stronglyEmphasized
         }
         return attributed
+    }
+
+    struct QuoteRun: Equatable {
+        let isQuote: Bool
+        let text: String
+    }
+
+    // A prompt is shown as typed, apart from its Markdown quotes, which Reply writes and
+    // which are drawn as quotes. Only the marker and the one space after it are taken off,
+    // so quoted code keeps its indentation.
+    static func quoteRuns(_ text: String) -> [QuoteRun] {
+        var runs: [QuoteRun] = []
+        var lines: [String] = []
+        var quoting = false
+
+        func flush() {
+            let body = lines.joined(separator: "\n").trimmingCharacters(in: .newlines)
+            if !body.isBlank { runs.append(QuoteRun(isQuote: quoting, text: body)) }
+            lines = []
+        }
+
+        for line in text.components(separatedBy: "\n") {
+            let marked = line.drop(while: { $0 == " " })
+            let isQuote = marked.first == ">"
+            if isQuote != quoting {
+                flush()
+                quoting = isQuote
+            }
+            guard isQuote else {
+                lines.append(line)
+                continue
+            }
+            let rest = marked.dropFirst()
+            lines.append(String(rest.first == " " ? rest.dropFirst() : rest))
+        }
+        flush()
+        return runs
     }
 
     // Prompts can quote Markdown fences. Only a fence on its own line opens a block,

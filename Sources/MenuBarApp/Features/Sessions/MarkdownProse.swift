@@ -1290,7 +1290,7 @@ private struct LinkAwareText: NSViewRepresentable {
     let openLink: (URL) -> Void
     let linkHoverChanged: (TranscriptLink.Hovered?) -> Void
     let showMenu: (([MenuEntry], CGPoint) -> Void)?
-    var reply: ((String) -> Void)? = nil
+    let reply: ((String) -> Void)?
 
     func makeCoordinator() -> Coordinator { Coordinator(openLink: openLink) }
 

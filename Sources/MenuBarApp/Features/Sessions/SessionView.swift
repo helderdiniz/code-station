@@ -1562,7 +1562,9 @@ struct SessionView: View {
     }
 
     private func conversationContent(session: ChatSession, project: Project) -> some View {
-        VStack(spacing: 0) {
+        let blocked = !FileManager.default.fileExists(atPath: session.worktreePath ?? project.path)
+            || !runner.isAvailable(session.agent)
+        return VStack(spacing: 0) {
             if transcriptFind.isPresented {
                 FindBar(placeholder: "Find in chat",
                         query: Binding(get: { transcriptFind.query },
@@ -1575,9 +1577,9 @@ struct SessionView: View {
                     // The field must be fully visible as soon as it takes focus.
                     .transition(.identity)
             }
-            transcript(session)
+            transcript(session, replies: !blocked)
             Divider().overlay(Theme.hairline)
-            composer(session: session, project: project)
+            composer(session: session, project: project, blocked: blocked)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -1598,10 +1600,12 @@ struct SessionView: View {
         setWorkingSetVisible(true)
     }
 
-    private func transcript(_ session: ChatSession) -> some View {
+    // Reply is offered only while the composer can take the quote and send it.
+    private func transcript(_ session: ChatSession, replies: Bool) -> some View {
         let state = runner.state(sessionID)
         let projectPath = store.workingDirectory(for: session) ?? ""
         let shape = transcriptShape(session, state: state)
+        let replyAction: ((String) -> Void)? = replies ? { reply($0) } : nil
 
         return ScrollViewReader { proxy in
             ScrollView {
@@ -1621,7 +1625,7 @@ struct SessionView: View {
                 }
                     .environment(\.transcriptSelection, transcriptSelection)
                     .environment(\.transcriptFind, transcriptFind)
-                    .environment(\.transcriptReply, reply)
+                    .environment(\.transcriptReply, replyAction)
                     .environment(\.explorerRoots, explorerRoots(for: session))
                     .padding(.horizontal, 26)
                     .padding(.vertical, 22)
@@ -2365,10 +2369,8 @@ struct SessionView: View {
         }
     }
 
-    private func composer(session: ChatSession, project: Project) -> some View {
+    private func composer(session: ChatSession, project: Project, blocked: Bool) -> some View {
         let state = runner.state(sessionID)
-        let blocked = !FileManager.default.fileExists(atPath: session.worktreePath ?? project.path)
-            || !runner.isAvailable(session.agent)
         return Composer(sessionID: sessionID,
                         agent: session.agent,
                         blocked: blocked,
