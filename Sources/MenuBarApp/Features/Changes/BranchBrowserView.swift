@@ -34,15 +34,25 @@ struct BranchBrowserView: View {
     @State private var keys = WindowKeyHandler(handlesTyping: true)
     @FocusState private var focus: String?
 
-    private enum Page: Equatable { case branches, merge, compare, switchBranch, rebase, create, rename, worktree, stashes, recovery }
+    private enum Page: Equatable { case branches, merge, mergeBack, compare, switchBranch, rebase, create, rename, worktree, stashes, recovery }
     private var visible: [GitBranch] {
         (catalog?.branches ?? []).filter { query.isEmpty || $0.name.localizedCaseInsensitiveContains(query) }
     }
     private var preview: GitBranchPreview? {
-        loadedPreview?.source.id == selected?.id ? loadedPreview : nil
+        guard let loadedPreview, let selected else { return nil }
+        if page == .mergeBack {
+            return loadedPreview.source.ref == "refs/heads/" + current && loadedPreview.destination == selected.name ? loadedPreview : nil
+        }
+        return loadedPreview.source.id == selected.id ? loadedPreview : nil
     }
     private var current: String { catalog?.current ?? "" }
     private var isCurrent: Bool { selected?.ref == "refs/heads/" + current }
+    // Git keeps a branch in one checkout at a time, so a branch open elsewhere,
+    // such as main in the main checkout, can only take new work in that checkout.
+    private var canMergeBack: Bool {
+        guard let selected, !isCurrent, !current.isEmpty else { return false }
+        return !selected.remote && !selected.worktree.isEmpty
+    }
     private var renamable: Bool {
         guard let selected, let policy = catalog?.policy else { return false }
         return !selected.remote && (selected.worktree.isEmpty || isCurrent) && policy.allowsRewrite && !policy.protectedNames.contains(selected.name)
@@ -55,6 +65,7 @@ struct BranchBrowserView: View {
         switch page {
         case .branches: "Branches"
         case .merge: "Merge branches"
+        case .mergeBack: "Merge into " + (selected?.name ?? "branch")
         case .compare: "Compare branches"
         case .switchBranch: "Switch branch"
         case .rebase: "Rebase current branch"
@@ -100,7 +111,7 @@ struct BranchBrowserView: View {
                     ScrollView {
                         VStack(alignment: .leading, spacing: 18) {
                             switch page {
-                            case .merge, .compare, .switchBranch, .rebase: previewContent
+                            case .merge, .mergeBack, .compare, .switchBranch, .rebase: previewContent
                             case .create, .rename, .worktree: nameForm
                             case .stashes: stashList
                             case .recovery: recoveryContent
@@ -134,7 +145,7 @@ struct BranchBrowserView: View {
             }
             focus = page == .branches ? "search" : "back"
         }
-        .task(id: "\(selected?.id ?? "")/\(previewRefresh)") { await loadPreview() }
+        .task(id: "\(selected?.id ?? "")/\(page == .mergeBack)/\(previewRefresh)") { await loadPreview() }
         .onAppear {
             dialogID = dialogs.current?.id
             if let dialogID { dialogs.setDismissalGuard(for: dialogID) { !busy } }
@@ -198,6 +209,9 @@ struct BranchBrowserView: View {
                                 Text(preview.map { "\(counted($0.incoming.count, "incoming commit")) · \(counted($0.outgoing, "current-only commit"))" } ?? "Reading branch differences…")
                                     .font(.system(size: 12)).foregroundStyle(.secondary)
                                 actionRow("Merge into " + current, detail: "Preview changes before merging", icon: "arrow.triangle.merge", id: "merge", emphasis: true) { open(.merge) }
+                                if canMergeBack {
+                                    actionRow("Merge \(current) into \(selected.name)", detail: "Runs in " + selected.worktree, icon: "arrow.triangle.merge", id: "mergeBack") { open(.mergeBack) }
+                                }
                                 actionRow("Compare with current branch", detail: "See commits and file differences", icon: "square.split.2x1", id: "compare") { open(.compare) }
                                 actionRow("Switch to " + selected.name, detail: selected.worktree.isEmpty ? "Make this your working branch" : "Open in another worktree", icon: "arrow.left.arrow.right", id: "switch") { open(.switchBranch) }
                                     .disabled(!selected.worktree.isEmpty)
@@ -283,10 +297,10 @@ struct BranchBrowserView: View {
     @ViewBuilder private var previewBody: some View {
         if let preview {
             HStack(alignment: .top, spacing: 12) {
-                branchCard(page == .rebase || page == .switchBranch ? "From current branch" : "From \(preview.source.remote ? "remote-tracking" : "local") branch",
+                branchCard(page == .rebase || page == .switchBranch || page == .mergeBack ? "From current branch" : "From \(preview.source.remote ? "remote-tracking" : "local") branch",
                            page == .rebase || page == .switchBranch ? preview.destination : preview.source.name)
                 Image(systemName: "arrow.right").foregroundStyle(Theme.accent).padding(.top, 26)
-                branchCard(page == .rebase ? "Replay onto" : page == .switchBranch ? "Switch to" : "Into your current branch",
+                branchCard(page == .rebase ? "Replay onto" : page == .switchBranch ? "Switch to" : page == .mergeBack ? "Into its own checkout" : "Into your current branch",
                            page == .rebase || page == .switchBranch ? preview.source.name : preview.destination)
             }
             if page != .switchBranch {
@@ -297,7 +311,12 @@ struct BranchBrowserView: View {
                           systemImage: !preview.remoteVerified || preview.conflictNote != nil || !preview.conflicts.isEmpty ? "exclamationmark.triangle" : "checkmark")
                         .font(.system(size: 11)).foregroundStyle(preview.remoteVerified && preview.conflicts.isEmpty && preview.conflictNote == nil ? Theme.accent : Theme.deletion)
                 }
-                if preview.incoming.isEmpty { Text("Nothing to merge. Choose another branch to bring in new work.").font(.system(size: 13)) }
+                if preview.incoming.isEmpty {
+                    Text(page == .rebase ? "\(preview.destination) already has everything on \(preview.source.name), so there is nothing to replay."
+                            + (canMergeBack ? " To put your work on \(preview.source.name), go back and choose Merge \(preview.destination) into \(preview.source.name)." : "")
+                         : page == .mergeBack ? "\(preview.destination) already has everything on \(preview.source.name)."
+                         : "Nothing to merge. Choose another branch to bring in new work.").font(.system(size: 13))
+                }
                 VStack(alignment: .leading, spacing: 0) {
                     ForEach(preview.incoming) { commit in
                         HStack(spacing: 10) {
@@ -328,24 +347,36 @@ struct BranchBrowserView: View {
                 if !preview.conflicts.isEmpty {
                     Text("Resolve changes in:\n" + preview.conflicts.joined(separator: "\n"))
                         .font(.system(size: 12)).foregroundStyle(Theme.deletion).textSelection(.enabled)
+                    if page == .mergeBack {
+                        Text("Merge \(preview.destination) into \(preview.source.name) first and resolve the conflicts here.")
+                            .font(.system(size: 12)).foregroundStyle(Theme.deletion)
+                    }
                 }
             }
-            if page == .merge && !preview.incoming.isEmpty {
+            if (page == .merge || page == .mergeBack) && !preview.incoming.isEmpty {
                 Text("How to merge").font(.system(size: 13, weight: .semibold))
                 HStack(spacing: 8) {
+                    if preview.outgoing == 0 {
+                        ChoicePill(title: "Fast-forward", selected: method == .fastForward) { method = .fastForward }
+                            .focused($focus, equals: "methodFastForward").branchFocus(focus == "methodFastForward")
+                    }
                     ChoicePill(title: "Create a merge commit", selected: method == .merge) { method = .merge }
                         .disabled(!preview.policy.allowsMerge).focused($focus, equals: "methodMerge").branchFocus(focus == "methodMerge")
                     ChoicePill(title: "Squash into one commit", selected: method == .squash) { method = .squash }
                         .disabled(!preview.policy.allowsSquash).focused($focus, equals: "methodSquash").branchFocus(focus == "methodSquash")
                 }
-                Text(method == .merge ? "Keep the full history of both branches." : "Combine the incoming changes into one local commit.")
+                Text(method == .fastForward ? "Move \(preview.destination) up to \(preview.source.name) without a new commit."
+                     : method == .merge ? "Keep the full history of both branches." : "Combine the incoming changes into one local commit.")
                     .font(.system(size: 11)).foregroundStyle(.secondary)
             }
             if page == .rebase {
                 Text("Rewrites \(preview.outgoing) commits on \(preview.destination). Published commits may require a force push. Conflicts pause the rebase for review.")
                     .font(.system(size: 12)).foregroundStyle(Theme.deletion)
             }
-            if preview.dirtyCount > 0 && page != .compare {
+            if preview.dirtyCount > 0 && page == .mergeBack {
+                Label("\(preview.destination) has uncommitted changes in \(selected?.worktree ?? ""). Commit or stash them there first.", systemImage: "archivebox")
+                    .font(.system(size: 12)).foregroundStyle(Theme.deletion)
+            } else if preview.dirtyCount > 0 && page != .compare {
                 VStack(alignment: .leading, spacing: 10) {
                     Label("You have uncommitted changes", systemImage: "archivebox").font(.system(size: 12, weight: .semibold))
                     Toggle(isOn: $consent) {
@@ -509,12 +540,12 @@ struct BranchBrowserView: View {
             } else {
                 ActionButton(title: "Back", tone: .outlined) { page = .branches; message = "" }
                     .disabled(busy).focused($focus, equals: "back")
-                if page == .merge || page == .compare || page == .rebase || page == .switchBranch {
+                if page == .merge || page == .mergeBack || page == .compare || page == .rebase || page == .switchBranch {
                     ActionButton(title: "Refresh", tone: .outlined) { previewRefresh += 1 }
                         .disabled(busy || previewing).focused($focus, equals: "refresh")
                 }
                 Spacer(minLength: 0)
-                if page == .merge || page == .rebase || page == .switchBranch {
+                if page == .merge || page == .mergeBack || page == .rebase || page == .switchBranch {
                     Button { executePreview() } label: {
                         Text(busy ? "Working…" : primaryTitle).font(.system(size: 12, weight: .semibold))
                             .lineLimit(2).fixedSize(horizontal: false, vertical: true).padding(.horizontal, 14).padding(.vertical, 9)
@@ -544,15 +575,24 @@ struct BranchBrowserView: View {
     private var primaryTitle: String {
         if page == .switchBranch { return "Switch branch" }
         if page == .rebase { return "Rebase onto " + (selected?.name ?? "branch") }
-        return (method == .squash ? "Squash " : "Merge ") + (selected?.name ?? "branch")
+        let name = selected?.name ?? "branch"
+        if page == .mergeBack { return (method == .fastForward ? "Fast-forward " : method == .squash ? "Squash into " : "Merge into ") + name }
+        return (method == .fastForward ? "Fast-forward to " : method == .squash ? "Squash " : "Merge ") + name
     }
 
     private var canExecute: Bool {
-        guard let preview, !busy, !previewing, preview.dirtyCount == 0 || consent else { return false }
+        guard let preview, !busy, !previewing else { return false }
+        if page == .mergeBack {
+            guard preview.dirtyCount == 0, preview.conflicts.isEmpty, preview.conflictNote == nil else { return false }
+        } else if preview.dirtyCount > 0 && !consent { return false }
         if page == .switchBranch { return preview.source.worktree.isEmpty }
         guard preview.remoteVerified, !preview.incoming.isEmpty else { return false }
         if page == .rebase { return preview.policy.allowsRewrite && !preview.policy.protectedNames.contains(preview.destination) }
-        return method == .merge ? preview.policy.allowsMerge : preview.policy.allowsSquash
+        return switch method {
+        case .fastForward: preview.outgoing == 0
+        case .merge: preview.policy.allowsMerge
+        default: preview.policy.allowsSquash
+        }
     }
 
     private func open(_ page: Page) {
@@ -582,19 +622,24 @@ struct BranchBrowserView: View {
     private func loadPreview() async {
         previewGeneration += 1
         let generation = previewGeneration
-        if loadedPreview?.source.id != selected?.id { loadedPreview = nil }
+        if preview == nil { loadedPreview = nil }
         consent = false
-        guard let selected, selected.ref != "refs/heads/" + current else { previewing = false; return }
+        let mergingBack = page == .mergeBack
+        guard let selected, selected.ref != "refs/heads/" + current,
+              let source = mergingBack ? catalog?.branches.first(where: { $0.ref == "refs/heads/" + current }) : selected else {
+            previewing = false
+            return
+        }
         message = ""
         failed = false
         previewing = true
-        let result = await GitBranches.preview(selected, at: root)
-        guard self.selected?.id == selected.id, generation == previewGeneration, !Task.isCancelled else { return }
+        let result = await GitBranches.preview(source, at: mergingBack ? selected.worktree : root)
+        guard self.selected?.id == selected.id, mergingBack == (page == .mergeBack), generation == previewGeneration, !Task.isCancelled else { return }
         previewing = false
         switch result {
         case .success(let value):
             loadedPreview = value
-            method = value.policy.allowsMerge ? .merge : .squash
+            method = value.outgoing == 0 && !value.incoming.isEmpty ? .fastForward : value.policy.allowsMerge ? .merge : .squash
         case .failure(let error):
             loadedPreview = nil
             report(GitBranchResult(message: GitBranches.errorMessage(error), failed: true))
@@ -606,6 +651,9 @@ struct BranchBrowserView: View {
         let consent = consent
         let kind = page == .rebase ? GitBranchRecovery.Kind.rebase : method
         if page == .switchBranch { run { await GitBranches.switchBranch(preview, consent: consent, at: root) } }
+        else if page == .mergeBack, let target = selected?.worktree {
+            run { await GitBranches.integrateIntoOtherCheckout(preview, kind: kind, at: target) }
+        }
         else { run { await GitBranches.integrate(preview, kind: kind, consent: consent, at: root) } }
     }
 
@@ -695,7 +743,9 @@ struct BranchBrowserView: View {
                 if selected != nil {
                     if isCurrent { order += ["stashes", "create"] }
                     else {
-                        order += ["merge", "compare"]
+                        order.append("merge")
+                        if canMergeBack { order.append("mergeBack") }
+                        order.append("compare")
                         if selected?.worktree.isEmpty == true { order.append("switch") }
                         if catalog?.policy.allowsRewrite == true && catalog?.policy.protectedNames.contains(current) != true { order.append("rebase") }
                     }
@@ -726,11 +776,12 @@ struct BranchBrowserView: View {
                 if catalog?.recovery?.restoring == false { order.append("abort") }
                 if conflictPaths.isEmpty && (catalog?.recovery?.restoring != true || confirmedRecovery) { order.append("primary") }
             default:
-                if page == .merge, let preview, !preview.incoming.isEmpty {
+                if page == .merge || page == .mergeBack, let preview, !preview.incoming.isEmpty {
+                    if preview.outgoing == 0 { order.append("methodFastForward") }
                     if preview.policy.allowsMerge { order.append("methodMerge") }
                     if preview.policy.allowsSquash { order.append("methodSquash") }
                 }
-                if page != .compare && (preview?.dirtyCount ?? 0) > 0 { order.append("consent") }
+                if page != .compare && page != .mergeBack && (preview?.dirtyCount ?? 0) > 0 { order.append("consent") }
                 order.append("back")
                 if !previewing { order.append("refresh") }
                 if canExecute || page == .compare && preview != nil { order.append("primary") }

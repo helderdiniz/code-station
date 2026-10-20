@@ -51,7 +51,7 @@ struct GitBranchPreview: Sendable {
 }
 
 struct GitBranchRecovery: Codable, Sendable, Equatable {
-    enum Kind: String, Codable, Sendable { case merge, squash, rebase, stash }
+    enum Kind: String, Codable, Sendable { case merge, squash, rebase, stash, fastForward = "fast-forward" }
     var kind: Kind
     var branch: String
     var originalHead: String
@@ -149,6 +149,9 @@ enum GitBranches {
             if kind == .merge && !policy.allowsMerge || kind == .squash && !policy.allowsSquash {
                 throw Failure(message: "Repository policy does not allow this merge method.")
             }
+            if kind == .fastForward && preview.outgoing > 0 {
+                throw Failure(message: "\(preview.destination) has commits that \(preview.source.name) does not. Create a merge commit instead.")
+            }
             if kind == .rebase && (!policy.allowsRewrite || policy.protectedNames.contains(preview.destination)) {
                 throw Failure(message: "Rebasing this branch is blocked by repository policy or unavailable policy information.")
             }
@@ -165,6 +168,7 @@ enum GitBranches {
             switch kind {
             case .merge: arguments = ["merge", "--no-ff", "--no-edit", "--no-autostash", "-m", state.message, state.sourceTip]
             case .squash: arguments = ["merge", "--squash", "--no-autostash", state.sourceTip]
+            case .fastForward: arguments = ["merge", "--ff-only", "--no-autostash", state.sourceTip]
             case .rebase: arguments = ["rebase", "--no-autostash", state.sourceTip]
             case .stash: throw Failure(message: "Choose a merge method.")
             }
@@ -178,6 +182,29 @@ enum GitBranches {
             }
             return try finish(state, tool, url)
         }
+    }
+
+    // The recovery screen only works in the checkout it was opened from, so a merge into
+    // another checkout must either finish or leave that checkout exactly as it was.
+    static func integrateIntoOtherCheckout(_ preview: GitBranchPreview, kind: GitBranchRecovery.Kind,
+                                           at root: String) async -> GitBranchResult {
+        guard preview.dirtyCount == 0 else {
+            return GitBranchResult(message: "\(preview.destination) has uncommitted changes in \(root). Commit or stash them there first.", failed: true)
+        }
+        guard preview.conflicts.isEmpty, preview.conflictNote == nil else {
+            return GitBranchResult(message: "This merge has conflicts. Merge \(preview.destination) into \(preview.source.name) and resolve them there first.", failed: true)
+        }
+        guard let tool = await GitInspector.tool() else { return GitBranchResult(message: "Git is unavailable.", failed: true) }
+        guard await GitInspector.offMain({ !blocksOtherActions(tool, URL(fileURLWithPath: root)) }) else {
+            return GitBranchResult(message: "Another Git operation is paused in \(root). Finish or abort it there first.", failed: true)
+        }
+        let result = await integrate(preview, kind: kind, consent: false, at: root)
+        guard result.recovery != nil else { return result }
+        let undo = await abort(at: root)
+        return GitBranchResult(message: undo.failed
+            ? "The merge into \(preview.destination) stopped and could not be undone. Open \(root) to finish or abort it.\n" + undo.message
+            : "The merge into \(preview.destination) stopped, so it was undone.\n" + result.message.components(separatedBy: "\n").dropFirst().joined(separator: "\n"),
+            failed: true)
     }
 
     static func switchBranch(_ preview: GitBranchPreview, consent: Bool, at root: String) async -> GitBranchResult {
@@ -538,6 +565,8 @@ enum GitBranches {
         try clearRecovery(tool, url)
         let summary = message ?? (state.kind == .rebase
             ? "Rebased \(state.branch) onto \(state.source). Saved locally; nothing was pushed."
+            : state.kind == .fastForward
+            ? "Fast-forwarded \(state.branch) to \(state.source). Saved locally; nothing was pushed."
             : "\(state.kind == .squash ? "Squashed" : "Merged") \(state.source) into \(state.branch). Saved locally; nothing was pushed.")
         return GitBranchResult(message: summary + (state.stash == nil ? "" : " Your uncommitted work has been restored."))
     }
