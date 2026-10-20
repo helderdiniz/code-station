@@ -601,8 +601,14 @@ struct ChangesView: View {
                     ChoicePill(title: "Files \(navigatorFileCount)", selected: navigation.list == .files) {
                         navigation.list = .files
                     }
+                    // Opening the list with a reply waiting lands on that reply, since the
+                    // dot is the only sign of it once the strip has gone.
                     ChoicePill(title: count > 0 ? "Review \(count)" : "Review", selected: showingReview,
-                               dot: unread ? Theme.plan : nil) { showingReview = true }
+                               dot: unread ? Theme.plan : nil) {
+                        if unread && !showingReview { nextUnread() } else { showingReview = true }
+                    }
+                    .appTooltip(reviewDetails(review).joined(separator: ". ") + ".")
+                    .accessibilityHint(reviewDetails(review).joined(separator: ". "))
                     ChoicePill(title: asked.isEmpty ? "Questions" : "Questions \(asked.count)", selected: showingQuestions,
                                dot: answering ? Theme.plan : nil) { showingQuestions = true }
                     Spacer(minLength: 0)
@@ -624,13 +630,13 @@ struct ChangesView: View {
         .background(Theme.card)
     }
 
-    // The strip only shows when it can do something: send kept comments, or show a round
-    // that went. Findings still waiting for a look do not count, since the header already
-    // offers them, and the coach mark covers how to start a review.
+    // The strip only shows while there is a comment to send or clear. Rounds that went
+    // live in the Review list, whose pill carries the unread dot and the details. Findings
+    // still waiting for a look do not count, since the header already offers them, and the
+    // coach mark covers how to start a review.
     private var showsReviewStrip: Bool {
         guard let review, mode == .changes else { return false }
-        return !review.reviews.kept(review.sessionID).isEmpty
-            || !review.reviews.rounds(review.sessionID).isEmpty
+        return !review.reviews.comments(review.sessionID).isEmpty
     }
 
     private var navigatorFileCount: Int {
@@ -2087,34 +2093,38 @@ struct ChangesView: View {
 
     // MARK: Review bar
 
-    // One line that says what you will send. Everything a second opinion is doing lives
-    // behind its one control, and the finer details are in the title's tooltip. Asking
-    // for one starts from the session header, so the control only shows once there is
-    // something to follow.
-    @ViewBuilder private func reviewStrip(_ review: ReviewTarget) -> some View {
+    // What the review covers so far, for the Review pill's tooltip.
+    private func reviewDetails(_ review: ReviewTarget) -> [String] {
         let all = review.reviews.comments(review.sessionID)
         let kept = all.filter { !$0.isPending }
-        let pending = all.count - kept.count
         let fileCount = Set(kept.map { $0.root + "/" + $0.path }).count
         let settled = settledComments(all)
         let unplaced = placement.unplaced.count
         let sent = review.reviews.threads(review.sessionID).count
-        let unread = review.reviews.unreadCount(review.sessionID)
-        let details = [
+        return [
             !kept.isEmpty ? "On \(counted(fileCount, "file")). Changes wait here until you send them"
                 : all.isEmpty ? "Click a line number to ask or comment" : "Nothing kept yet",
             sent > 0 ? "\(sent) sent" : nil,
             unplaced > 0 ? "\(unplaced) not on a line, because its code moved or was removed" : nil,
             settled > 0 ? "\(settled) on files with no changes left. They are still in the review, and the send dialog lists them" : nil
         ].compactMap { $0 }
+    }
+
+    // One line that says what you will send. Everything a second opinion is doing lives
+    // behind its one control, and the finer details are in the Review pill's tooltip.
+    // Asking for one starts from the session header, so the control only shows once
+    // there is something to follow.
+    @ViewBuilder private func reviewStrip(_ review: ReviewTarget) -> some View {
+        let all = review.reviews.comments(review.sessionID)
+        let kept = all.filter { !$0.isPending }
+        let pending = all.count - kept.count
+        let unread = review.reviews.unreadCount(review.sessionID)
         HStack(spacing: 10) {
             Label("Your review", systemImage: "text.bubble.fill")
                 .font(.system(size: 12, weight: .semibold))
                 .labelStyle(ReviewBarLabelStyle())
                 .lineLimit(1)
                 .fixedSize()
-                .appTooltip(details.joined(separator: ". ") + ".")
-                .accessibilityHint(details.joined(separator: ". "))
             if unread > 0 {
                 Button(action: nextUnread) {
                     Text(unread == 1 ? "1 reply to read" : "\(unread) replies to read")
