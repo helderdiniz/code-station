@@ -85,6 +85,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         // to one that has just exited raises SIGPIPE, which would take the app down with
         // it; ignored, the write fails as an error the runner can report instead.
         signal(SIGPIPE, SIG_IGN)
+        widenOpenFileLimit()
         // A turn that was mid-flight when the app died leaves no other trace, so the log
         // needs somewhere to show that the run it belonged to ended here.
         SessionLog.note("app launched")
@@ -106,6 +107,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
         showManager()
         scheduledTasks.start()
+    }
+
+    // macOS starts the app with room for 2560 open files. Watching a tree for changes
+    // holds its folder and every folder above it open, nine or so per tree, so a sidebar
+    // full of worktrees uses most of that room on its own. Past the limit no pipe to git
+    // or to an agent can be opened. The hard limit has no ceiling, so the soft one is
+    // widened to what the kernel allows a single process.
+    private func widenOpenFileLimit() {
+        var limit = rlimit()
+        guard getrlimit(RLIMIT_NOFILE, &limit) == 0 else { return }
+        var perProcess: Int32 = 0
+        var size = MemoryLayout<Int32>.size
+        let allowed = sysctlbyname("kern.maxfilesperproc", &perProcess, &size, nil, 0) == 0
+            ? rlim_t(perProcess) : rlim_t(OPEN_MAX)
+        let widened = min(limit.rlim_max, max(allowed, rlim_t(OPEN_MAX)))
+        guard widened > limit.rlim_cur else { return }
+        limit.rlim_cur = widened
+        if setrlimit(RLIMIT_NOFILE, &limit) != 0 {
+            limit.rlim_cur = min(limit.rlim_max, rlim_t(OPEN_MAX))
+            setrlimit(RLIMIT_NOFILE, &limit)
+        }
     }
 
     @objc func biggerText(_ sender: Any?) {

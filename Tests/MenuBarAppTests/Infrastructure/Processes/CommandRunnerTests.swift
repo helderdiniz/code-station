@@ -549,3 +549,45 @@ struct CommandRunnerTests {
         }
     }
 }
+
+struct ProcessPipeTests {
+    // Foundation's Pipe answers descriptor exhaustion with two handles on descriptor 0,
+    // which is stdin. A pipe that cannot be made has to fail instead.
+    @Test func failsRatherThanHandingOutStdinWhenNoDescriptorIsFree() throws {
+        var limit = rlimit()
+        try #require(getrlimit(RLIMIT_NOFILE, &limit) == 0)
+        let original = limit
+        defer { setrlimit(RLIMIT_NOFILE, &limit) }
+        var highest: Int32 = 0
+        for descriptor in Int32(0)..<Int32(limit.rlim_cur) where fcntl(descriptor, F_GETFD) >= 0 {
+            highest = descriptor
+        }
+        limit.rlim_cur = rlim_t(highest + 1)
+        try #require(setrlimit(RLIMIT_NOFILE, &limit) == 0)
+        // Numbers below the highest one may be free, so they are taken first.
+        var fillers: [Int32] = []
+        while true {
+            let filler = open("/dev/null", O_RDONLY)
+            guard filler >= 0 else { break }
+            fillers.append(filler)
+        }
+
+        let error = #expect(throws: CommandRunner.RunError.self) { try ProcessPipe() }
+        for filler in fillers { close(filler) }
+        limit = original
+        setrlimit(RLIMIT_NOFILE, &limit)
+
+        #expect(error?.errorDescription?.contains("Too many open files") == true)
+        #expect(fcntl(STDIN_FILENO, F_GETFD) >= 0)
+    }
+
+    @Test func opensTwoDistinctEnds() throws {
+        let pipe = try ProcessPipe()
+        let read = pipe.fileHandleForReading.fileDescriptor
+        let write = pipe.fileHandleForWriting.fileDescriptor
+        #expect(read >= 0 && write >= 0 && read != write)
+        try pipe.fileHandleForWriting.write(contentsOf: Data("ping".utf8))
+        try pipe.fileHandleForWriting.close()
+        #expect(try pipe.fileHandleForReading.readToEnd() == Data("ping".utf8))
+    }
+}

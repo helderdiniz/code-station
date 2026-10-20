@@ -1480,14 +1480,14 @@ final class SessionRunner {
         }
         if plan.suggestsPrompts { env["CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION"] = "1" }
 
-        let out = Pipe()
-        let errors = Pipe()
+        let out = try ProcessPipe()
+        let errors = try ProcessPipe()
 
         // The prompt goes in as a JSON line on stdin rather than as an argument, and the
         // pipe stays open for the rest of the turn: it is the way back for the answers to
         // whatever the agent asks. Prompts are not read as flags there either, which an
         // argument starting with a dash would be.
-        let input = Pipe()
+        let input = try ProcessPipe()
         _ = fcntl(input.fileHandleForWriting.fileDescriptor, F_SETNOSIGPIPE, 1)
         // A turn ends when this input pipe closes, so these are the descriptors a stray
         // copy in some other process strands: the CLI would wait on a stream that still
@@ -2758,9 +2758,9 @@ final class SessionRunner {
         // Where the reply is being written. A question answered mid-turn closes the
         // message the turn opened with and moves this on to the one after the answer.
         var messageID: UUID
-        let input: Pipe
-        let output: Pipe
-        let errorOutput: Pipe
+        let input: ProcessPipe
+        let output: ProcessPipe
+        let errorOutput: ProcessPipe
         var exitMonitor: DispatchSourceProcess?
         var memoryGuard: SessionMemoryGuard?
         var connection: AgentSessionConnection?
@@ -2847,8 +2847,8 @@ final class SessionRunner {
             try? input.fileHandleForWriting.close()
         }
 
-        init(processGroup: pid_t, agent: AgentKind, messageID: UUID, input: Pipe,
-             output: Pipe, errorOutput: Pipe, prompt: String, workingDirectory: String,
+        init(processGroup: pid_t, agent: AgentKind, messageID: UUID, input: ProcessPipe,
+             output: ProcessPipe, errorOutput: ProcessPipe, prompt: String, workingDirectory: String,
              attachments: [Attachment], resumedFrom: String?, avatarSequence: Int,
              canRetryWithoutResume: Bool, mcpConfigURL: URL?, summary: SummaryAttempt?) {
             self.processGroup = processGroup

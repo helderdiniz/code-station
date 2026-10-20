@@ -16,6 +16,8 @@ enum RunState: Equatable {
 @Observable
 final class ProcessManager {
     private var processes: [Server.ID: Process] = [:]
+    // The read end of each server's output, kept so its handler can be dropped on exit.
+    private var outputs: [Server.ID: FileHandle] = [:]
     // Only a server run in HTTP mode holds a port; its endpoint is read off it.
     private var ports: [Server.ID: Int] = [:]
     private(set) var states: [Server.ID: RunState] = [:]
@@ -56,10 +58,16 @@ final class ProcessManager {
         }
         process.environment = env
 
-        let pipe = Pipe()
+        let pipe: ProcessPipe
+        do {
+            pipe = try ProcessPipe()
+        } catch {
+            states[server.id] = .failed(error.localizedDescription)
+            return
+        }
         CommandRunner.closeOnExec(pipe)
-        process.standardOutput = pipe
-        process.standardError = pipe
+        process.standardOutput = pipe.fileHandleForWriting
+        process.standardError = pipe.fileHandleForWriting
         logs[server.id] = ""
 
         let id = server.id
@@ -84,6 +92,7 @@ final class ProcessManager {
         do {
             try process.run()
             processes[id] = process
+            outputs[id] = pipe.fileHandleForReading
             ports[id] = port
             states[id] = .running
         } catch {
@@ -91,6 +100,9 @@ final class ProcessManager {
             process.terminationHandler = nil
             states[id] = .failed(error.localizedDescription)
         }
+        // The child has its own copy of the write end now. Ours has to go, or the read end
+        // never reaches end of file once the server exits.
+        try? pipe.fileHandleForWriting.close()
     }
 
     func stop(_ id: Server.ID) {
@@ -135,7 +147,8 @@ final class ProcessManager {
     // exits on its own would otherwise keep its pipe, its dispatch source and the
     // closure's reference to this manager alive for the rest of the app's life.
     private func cleanup(_ id: Server.ID) {
-        (processes[id]?.standardOutput as? Pipe)?.fileHandleForReading.readabilityHandler = nil
+        outputs[id]?.readabilityHandler = nil
+        outputs[id] = nil
         processes[id] = nil
         ports[id] = nil
     }

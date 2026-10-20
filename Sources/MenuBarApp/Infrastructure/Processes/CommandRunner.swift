@@ -138,8 +138,8 @@ enum CommandRunner {
             throw error
         }
 
-        let outputPipe = Pipe()
-        let errorPipe = Pipe()
+        let outputPipe = try ProcessPipe()
+        let errorPipe = try ProcessPipe()
         closeOnExec(outputPipe, errorPipe)
         let readHandles = [outputPipe.fileHandleForReading, errorPipe.fileHandleForReading]
         for handle in readHandles {
@@ -151,9 +151,9 @@ enum CommandRunner {
         }
 
         let answersOutput = outputLineHandler != nil || outputChunkAction != nil
-        let inputPipe: Pipe?
+        let inputPipe: ProcessPipe?
         if input != nil || answersOutput {
-            let pipe = Pipe()
+            let pipe = try ProcessPipe()
             closeOnExec(pipe)
             _ = fcntl(pipe.fileHandleForWriting.fileDescriptor, F_SETNOSIGPIPE, 1)
             inputPipe = pipe
@@ -429,7 +429,7 @@ enum CommandRunner {
     // write end is enough to keep a pipe from ever reaching end of file, and then whoever
     // is reading it waits for a close that cannot come. dup2 clears the mark, so the child
     // a pipe was made for still receives it as one of its three streams.
-    static func closeOnExec(_ pipes: Pipe...) {
+    static func closeOnExec(_ pipes: ProcessPipe...) {
         for pipe in pipes {
             for handle in [pipe.fileHandleForReading, pipe.fileHandleForWriting] {
                 let flags = fcntl(handle.fileDescriptor, F_GETFD)
@@ -695,5 +695,23 @@ extension String {
             return self
         }
         return "'" + replacingOccurrences(of: "'", with: "'\\''") + "'"
+    }
+}
+
+// A pipe made with the pipe system call, so running out of descriptors is an error the
+// caller sees. Foundation's Pipe cannot fail: once the process has no descriptor left it
+// hands back two handles that both say descriptor 0, and everything done with them from
+// then on lands on stdin, or on whatever else has been given that number since.
+struct ProcessPipe {
+    let fileHandleForReading: FileHandle
+    let fileHandleForWriting: FileHandle
+
+    init() throws {
+        var ends: [Int32] = [-1, -1]
+        guard Darwin.pipe(&ends) == 0 else {
+            throw CommandRunner.RunError.launch(String(cString: strerror(errno)))
+        }
+        fileHandleForReading = FileHandle(fileDescriptor: ends[0], closeOnDealloc: true)
+        fileHandleForWriting = FileHandle(fileDescriptor: ends[1], closeOnDealloc: true)
     }
 }
