@@ -1,15 +1,6 @@
 import AppKit
 import SwiftUI
 
-struct ReviewBarLabelStyle: LabelStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        HStack(spacing: 6) {
-            configuration.icon.foregroundStyle(Theme.accent)
-            configuration.title
-        }
-    }
-}
-
 // A changed picture side by side with its last committed version. A file with only one
 // side, new or deleted, gets that side on its own.
 struct ImageDiffView: View {

@@ -1976,7 +1976,7 @@ struct SessionView: View {
             fileName: { ($0.path as NSString).lastPathComponent },
             openInChanges: {
                 changesNavigation.showingHistory = false
-                changesNavigation.showingReview = true
+                changesNavigation.onlyCommented = true
                 openChanges()
             },
             reply: { comment, text in
@@ -1991,7 +1991,6 @@ struct SessionView: View {
             showInDiff: { comment in
                 reviews.markRead(comment.id, in: sessionID)
                 changesNavigation.showingHistory = false
-                changesNavigation.showingReview = true
                 changesNavigation.focusedComment = comment.id
                 openChange(comment.path, root: comment.root)
             },
@@ -2006,7 +2005,6 @@ struct SessionView: View {
                 reviews.startSecondOpinion(sessionID, reviewer: seat, request: SecondOpinionRequest(
                     scope: .sinceReview(trees: round.trees), repositories: repositories, executable: executable))
                 changesNavigation.showingHistory = false
-                changesNavigation.showingReview = true
                 openChanges()
             })
             // Answers read here are read: the thread is open in front of the person.

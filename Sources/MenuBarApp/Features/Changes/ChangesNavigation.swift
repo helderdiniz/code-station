@@ -77,6 +77,8 @@ enum RowStep {
 struct ChangesNavigatorItem: Hashable {
     let root: String
     let path: String?
+    // A comment listed under the file, which the arrow keys step onto like a file.
+    var note: UUID? = nil
 
     static func next(after current: Self?, step: Int, in items: [Self]) -> Self? {
         guard let index = RowStep.destination(from: current.flatMap { items.firstIndex(of: $0) },
@@ -105,27 +107,21 @@ final class ChangesNavigationMemory {
     var commits: [String: [GitCommitSummary]] = [:]
     var collapsedHistories: Set<String> = []
     var historyFilter = ""
-    // The navigator lists the review instead of the files. Kept here, with the comment in
-    // focus, because each project gets a screen of its own and stepping through a review
-    // moves between them.
-    var list = NavigatorList.files
-    var reviewFilter = ReviewFilter.all
+    // Narrows the changed files by name, and to those with comments.
+    var fileFilter = ""
+    var onlyCommented = false
+    // Files whose comments are folded away, and files showing their resolved ones too,
+    // keyed by repository and path.
+    var foldedNotes: Set<String> = []
+    var resolvedShown: Set<String> = []
+    // Kept here, with the comment in focus, because each project gets a screen of its own
+    // and stepping through a review moves between them.
     var focusedComment: UUID?
     var secondOpinionFocus = Set(SecondOpinion.Focus.standard)
     // Count asks, and clicks on a run under way, from the session header, which sits
     // outside the screen that opens the dialogs.
     var secondOpinionAsks = 0
     var secondOpinionOpens = 0
-
-    var showingReview: Bool {
-        get { list == .review }
-        set { list = newValue ? .review : .files }
-    }
-
-    var showingQuestions: Bool {
-        get { list == .questions }
-        set { list = newValue ? .questions : .files }
-    }
 
     func history(for root: String) -> CommitHistorySelection {
         if let selection = histories[root] { return selection }
@@ -144,25 +140,6 @@ struct ChangesRepository: Identifiable {
         guard let snapshot else { return "Checking" }
         guard snapshot.state == .ready else { return "Unavailable" }
         return snapshot.files.isEmpty ? "Clean" : "\(snapshot.files.count) changed"
-    }
-}
-
-// What the navigator lists: the changed files, the review, or the questions asked here.
-enum NavigatorList: Hashable {
-    case files, review, questions
-}
-
-// Which comments the review list shows. Findings still to look at are not in it: they
-// wait in the second opinion's own dialog until they are kept.
-enum ReviewFilter: Hashable {
-    case all, yours, reviewers
-
-    func admits(_ comment: ReviewComment) -> Bool {
-        switch self {
-        case .all: true
-        case .yours: comment.reviewer == nil
-        case .reviewers: comment.reviewer != nil
-        }
     }
 }
 

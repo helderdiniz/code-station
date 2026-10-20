@@ -59,15 +59,8 @@ struct ChangesView: View {
     @State private var revealSerial = 0
     @State private var reviewKeys = WindowKeyHandler(handlesTyping: true)
     @AppStorage("changes.reviewCoachSeen") private var coachSeen = false
-    private var showingReview: Bool {
-        get { navigation.showingReview }
-        nonmutating set { navigation.showingReview = newValue }
-    }
-    private var showingQuestions: Bool {
-        get { navigation.showingQuestions }
-        nonmutating set { navigation.showingQuestions = newValue }
-    }
     @State private var wholeQuestion = ""
+    @State private var askingWhole = false
     private var focusedComment: UUID? {
         get { navigation.focusedComment }
         nonmutating set { navigation.focusedComment = newValue }
@@ -205,29 +198,13 @@ struct ChangesView: View {
                     }
                 }
             }
-            if let review, showsReviewStrip {
-                // The toast sits in a ZStack that is always there. When an overlay's
-                // content is a bare `if`, SwiftUI drops the overlay's alignment and the
-                // alignment guide, and the toast hangs down from the bar, off the screen.
-                reviewStrip(review)
-                    .overlay(alignment: .top) {
-                        ZStack {
-                            if let toast {
-                                ReviewToastView(toast: toast) { self.toast = nil }
-                                    .transition(.opacity)
-                                    .id(toast.id)
-                            }
-                        }
-                        .alignmentGuide(.top) { $0[.bottom] + 10 }
-                    }
-                    .zIndex(1)
-            }
         }
         .background(Theme.background)
-        // Without a review strip to hang from, the toast floats over the bottom of the pane.
+        // The toast sits in a ZStack that is always there. When an overlay's content is a
+        // bare `if`, SwiftUI drops the overlay's alignment.
         .overlay(alignment: .bottom) {
             ZStack {
-                if !showsReviewStrip, let toast {
+                if let toast {
                     ReviewToastView(toast: toast) { self.toast = nil }
                         .transition(.opacity)
                         .id(toast.id)
@@ -546,10 +523,12 @@ struct ChangesView: View {
             }
         }
         return repositories.flatMap { repository in
-            let changes = repository.root == root ? files : gitStats.snapshot(at: repository.root)?.files ?? []
-            return [ChangesNavigatorItem(root: repository.root, path: nil)]
-                + (collapsedRepositories.contains(repository.root) ? [] : changes.map {
-                    ChangesNavigatorItem(root: repository.root, path: $0.id)
+            [ChangesNavigatorItem(root: repository.root, path: nil)]
+                + (collapsedRepositories.contains(repository.root) ? [] : shownChanges(repository.root).flatMap { file in
+                    [ChangesNavigatorItem(root: repository.root, path: file.id)]
+                        + listedNotes(file, in: repository.root).map {
+                            ChangesNavigatorItem(root: repository.root, path: file.id, note: $0.id)
+                        }
                 })
         }
     }
@@ -564,11 +543,19 @@ struct ChangesView: View {
             }
             return
         }
+        if mode == .changes, let item = navigatorCursor, let path = item.path, item.note == nil,
+           direction == .left || direction == .right {
+            let key = notesKey(item.root, path)
+            if direction == .left { navigation.foldedNotes.insert(key) } else { navigation.foldedNotes.remove(key) }
+            return
+        }
         guard direction == .up || direction == .down,
               let next = ChangesNavigatorItem.next(after: navigatorCursor,
                   step: direction == .up ? -1 : 1, in: navigatorItems) else { return }
         navigatorCursor = next
-        if mode == .history {
+        if let id = next.note {
+            if let note = note(id, at: next) { openNote(note) }
+        } else if mode == .history {
             if next.root == root, let commit = commits?.first(where: { $0.hash == next.path }) {
                 historySelection.select(commit)
                 announce(commit.subject)
@@ -581,7 +568,7 @@ struct ChangesView: View {
 
     private var modeChoices: some View {
         HStack(spacing: 4) {
-            ChoicePill(title: "Changes \(files.count)", selected: mode == .changes) { mode = .changes }
+            ChoicePill(title: "Changes \(navigatorFileCount)", selected: mode == .changes) { mode = .changes }
             ChoicePill(title: "History", selected: mode == .history) { mode = .history }
             Spacer(minLength: 0)
         }.padding(12)
@@ -591,57 +578,308 @@ struct ChangesView: View {
         VStack(spacing: 0) {
             modeChoices
             if mode == .history { historyFilterField }
-            if mode == .changes, let review {
-                let open = review.reviews.threads(review.sessionID).count { !$0.round.resolved.contains($0.comment.id) }
-                let count = review.reviews.kept(review.sessionID).count + open
-                let unread = review.reviews.unreadCount(review.sessionID) > 0
-                let asked = review.reviews.questions(review.sessionID)
-                let answering = asked.contains { $0.status == .answering }
-                HStack(spacing: 4) {
-                    ChoicePill(title: "Files \(navigatorFileCount)", selected: navigation.list == .files) {
-                        navigation.list = .files
-                    }
-                    // Opening the list with a reply waiting lands on that reply, since the
-                    // dot is the only sign of it once the strip has gone.
-                    ChoicePill(title: count > 0 ? "Review \(count)" : "Review", selected: showingReview,
-                               dot: unread ? Theme.plan : nil) {
-                        if unread && !showingReview { nextUnread() } else { showingReview = true }
-                    }
-                    .appTooltip(reviewDetails(review).joined(separator: ". ") + ".")
-                    .accessibilityHint(reviewDetails(review).joined(separator: ". "))
-                    ChoicePill(title: asked.isEmpty ? "Questions" : "Questions \(asked.count)", selected: showingQuestions,
-                               dot: answering ? Theme.plan : nil) { showingQuestions = true }
-                    Spacer(minLength: 0)
-                }
-                .padding(.horizontal, 12).padding(.top, 12)
-                .accessibilityElement(children: .contain)
-                .accessibilityLabel("Show")
-            }
-            if mode == .changes, showingReview, let review {
-                ChangesReviewNavigator(review: review, orderedComments: orderedComments,
-                                       navigation: navigation, fileLabel: fileLabel, focus: focus)
-            } else if mode == .changes, showingQuestions, let review {
-                questionsNavigator(review)
-            } else {
-                filesNavigator
-            }
+            if mode == .changes && navigatorFileCount > 0 { changesFilterRow }
+            filesNavigator
+            if mode == .changes, let review { unsentStrip(review) }
             if mode == .changes && !files.isEmpty { commitBar }
         }
         .background(Theme.card)
     }
 
-    // The strip only shows while there is a comment to send or clear. Rounds that went
-    // live in the Review list, whose pill carries the unread dot and the details. Findings
-    // still waiting for a look do not count, since the header already offers them, and the
-    // coach mark covers how to start a review.
-    private var showsReviewStrip: Bool {
-        guard let review, mode == .changes else { return false }
-        return !review.reviews.comments(review.sessionID).isEmpty
+    private var navigatorFileCount: Int {
+        repositories.reduce(0) { total, repository in total + changes(in: repository.root).count }
     }
 
-    private var navigatorFileCount: Int {
-        repositories.reduce(0) { total, repository in
-            total + ((repository.root == root ? snapshot : gitStats.snapshot(at: repository.root))?.files.count ?? 0)
+    // MARK: - Comments under their files
+
+    // The repository a project's comments are stored against, which is git's own root.
+    private func gitRoot(_ repositoryRoot: String) -> String {
+        repositoryRoot == root ? repoRoot : gitStats.snapshot(at: repositoryRoot)?.root ?? repositoryRoot
+    }
+
+    private func changes(in repositoryRoot: String) -> [GitChange] {
+        repositoryRoot == root ? files : gitStats.snapshot(at: repositoryRoot)?.files ?? []
+    }
+
+    private func notesKey(_ repositoryRoot: String, _ path: String) -> String {
+        gitRoot(repositoryRoot) + "/" + path
+    }
+
+    private func notes(_ file: GitChange, in repositoryRoot: String) -> FileNotes {
+        guard let review else { return FileNotes(unsent: [], sent: [], questions: []) }
+        return FileNotes.on(root: gitRoot(repositoryRoot), path: file.path, in: review.reviews, session: review.sessionID)
+    }
+
+    // The comments listed under a file right now: none while folded away.
+    private func listedNotes(_ file: GitChange, in repositoryRoot: String) -> [FileNote] {
+        let key = notesKey(repositoryRoot, file.path)
+        guard review != nil, !navigation.foldedNotes.contains(key) else { return [] }
+        return notes(file, in: repositoryRoot).shown(includingResolved: navigation.resolvedShown.contains(key))
+    }
+
+    private func note(_ id: UUID, at item: ChangesNavigatorItem) -> FileNote? {
+        guard let file = changes(in: item.root).first(where: { $0.id == item.path }) else { return nil }
+        return notes(file, in: item.root).notes.first { $0.id == id }
+    }
+
+    private func openNote(_ note: FileNote) {
+        switch note.source {
+        case .unsent(let comment), .sent(let comment, _): focus(comment)
+        case .question(let question): focus(question)
+        }
+    }
+
+    private var openNoteCount: Int {
+        guard review != nil else { return 0 }
+        return repositories.reduce(0) { total, repository in
+            total + changes(in: repository.root).reduce(0) { $0 + notes($1, in: repository.root).open.count }
+        }
+    }
+
+    // The filter only narrows the list while there is a comment for it to find.
+    private var filteringComments: Bool { navigation.onlyCommented && openNoteCount > 0 }
+
+    private func shownChanges(_ repositoryRoot: String) -> [GitChange] {
+        let query = navigation.fileFilter.trimmingCharacters(in: .whitespaces)
+        let commented = filteringComments
+        guard !query.isEmpty || commented else { return changes(in: repositoryRoot) }
+        return changes(in: repositoryRoot).filter { file in
+            (query.isEmpty || file.path.localizedCaseInsensitiveContains(query))
+                && (!commented || !notes(file, in: repositoryRoot).isEmpty)
+        }
+    }
+
+    private var isFilteringFiles: Bool {
+        filteringComments || !navigation.fileFilter.trimmingCharacters(in: .whitespaces).isEmpty
+    }
+
+    // One row above the list: the name filter, and the comments filter once there is a
+    // comment to filter by.
+    private var changesFilterRow: some View {
+        let open = openNoteCount
+        return HStack(spacing: 8) {
+            HStack(spacing: 7) {
+                Image(systemName: "magnifyingglass")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                    .accessibilityHidden(true)
+                TextField("Filter files", text: Binding(get: { navigation.fileFilter }, set: { navigation.fileFilter = $0 }))
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 12.5))
+                    .accessibilityLabel("Filter changed files by name")
+                    .onMoveCommand { direction in
+                        if direction == .up || direction == .down { moveNavigator(direction) }
+                    }
+            }
+            .padding(.horizontal, 10)
+            .frame(height: 30)
+            .background(RoundedRectangle(cornerRadius: 8).fill(Theme.field))
+            .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.border))
+            if open > 0 {
+                let on = filteringComments
+                Button { navigation.onlyCommented.toggle() } label: {
+                    Label("With comments \(open)", systemImage: "text.bubble")
+                        .font(.system(size: 12, weight: .semibold))
+                        .lineLimit(1).fixedSize()
+                        .foregroundStyle(on ? Theme.plan : Color.secondary)
+                        .padding(.horizontal, 10).frame(height: 30)
+                        .surface(on ? Theme.plan.opacity(0.10) : Theme.card, cornerRadius: 8,
+                                 border: on ? Theme.plan.opacity(0.28) : Theme.border)
+                        .contentShape(RoundedRectangle(cornerRadius: 8))
+                }
+                .buttonStyle(.plain)
+                .appTooltip(on ? "Show every changed file" : "Show only files with comments")
+                .accessibilityLabel("Only files with comments, \(open)")
+                .accessibilityAddTraits(on ? .isSelected : [])
+            }
+        }
+        .padding(.horizontal, 12).padding(.bottom, 2)
+    }
+
+    @ViewBuilder private func fileNotes(_ file: GitChange, in repositoryRoot: String) -> some View {
+        let key = notesKey(repositoryRoot, file.path)
+        let all = notes(file, in: repositoryRoot)
+        if review != nil, !all.isEmpty, !navigation.foldedNotes.contains(key) {
+            let showingResolved = navigation.resolvedShown.contains(key)
+            VStack(alignment: .leading, spacing: 2) {
+                ForEach(all.shown(includingResolved: showingResolved)) { note in
+                    noteRow(note, file: file, in: repositoryRoot)
+                }
+                if all.resolvedCount > 0 {
+                    InlineLink(title: showingResolved ? "Hide resolved" : "\(all.resolvedCount) resolved",
+                               size: 11.5, tint: Color.secondary) {
+                        if !navigation.resolvedShown.insert(key).inserted { navigation.resolvedShown.remove(key) }
+                    }
+                    .padding(.horizontal, 8).padding(.vertical, 3)
+                }
+            }
+            .padding(.leading, 10)
+            .overlay(alignment: .leading) {
+                Rectangle().fill(Theme.hairline).frame(width: 1.5)
+            }
+            .padding(.leading, 30).padding(.top, 1).padding(.bottom, 5)
+            .transition(.fold)
+        }
+    }
+
+    private func noteRow(_ note: FileNote, file: GitChange, in repositoryRoot: String,
+                         fileLabel: String? = nil) -> some View {
+        let item = ChangesNavigatorItem(root: repositoryRoot, path: file.id, note: note.id)
+        var stop: (() -> Void)?
+        if case .question(let question) = note.source, question.status == .answering, let review {
+            stop = { stopAnswering(question, review: review) }
+        }
+        return FileNoteRow(note: note, agentTitle: review?.agent.title ?? "Agent", fileLabel: fileLabel,
+                           focused: focusedComment == note.id, showsCursor: showsCursor(item),
+                           open: {
+                               navigatorCursor = item
+                               navigatorCursorVisible = false
+                               navigatorFocused = true
+                               openNote(note)
+                           }, stop: stop)
+            .id(item)
+    }
+
+    private func notesBadge(_ file: GitChange, in repositoryRoot: String) -> some View {
+        let key = notesKey(repositoryRoot, file.path)
+        let all = notes(file, in: repositoryRoot)
+        return Group {
+            if review != nil, !all.isEmpty {
+                FileNotesBadge(notes: all, expanded: !navigation.foldedNotes.contains(key)) {
+                    if !navigation.foldedNotes.insert(key).inserted { navigation.foldedNotes.remove(key) }
+                }
+            }
+        }
+    }
+
+    // Files that have since been committed or reverted but still have comments open on
+    // them. The comments still go with the review, so they stay reachable below the list.
+    private func settledFiles(_ review: ReviewTarget) -> [SettledFile] {
+        let changed = Set(repositories.flatMap { repository in
+            changes(in: repository.root).map { notesKey(repository.root, $0.path) }
+        })
+        let unsent: [SettledFile] = review.reviews.comments(review.sessionID).map { SettledFile(root: $0.root, path: $0.path) }
+        let sent: [SettledFile] = review.reviews.threads(review.sessionID)
+            .filter { !$0.round.resolved.contains($0.comment.id) }
+            .map { SettledFile(root: $0.comment.root, path: $0.comment.path) }
+        let asked: [SettledFile] = review.reviews.questions(review.sessionID)
+            .filter { !$0.isWhole && !$0.resolved }
+            .map { SettledFile(root: $0.root, path: $0.path) }
+        var seen = Set<String>()
+        return (unsent + sent + asked)
+            .filter { !changed.contains($0.id) && seen.insert($0.id).inserted }
+            .sorted { $0.id < $1.id }
+    }
+
+    @ViewBuilder private var settledNotes: some View {
+        if let review {
+            let settled = settledFiles(review)
+            if !settled.isEmpty {
+                sectionHeader("No changes left")
+                ForEach(settled) { settled in
+                    let file = GitChange(path: settled.path, kind: .modified, isStaged: false, isUnstaged: false, isBinary: false)
+                    let all = FileNotes.on(root: settled.root, path: settled.path, in: review.reviews, session: review.sessionID)
+                    ForEach(all.open) { note in
+                        noteRow(note, file: file, in: settled.root, fileLabel: fileLabel(root: settled.root, path: settled.path))
+                    }
+                }
+            }
+        }
+    }
+
+    // Questions about the whole change have no file to sit under, so they keep a group of
+    // their own at the end of the list, with the way to ask one.
+    @ViewBuilder private var wholeChangeQuestions: some View {
+        if let review {
+            let asked = review.reviews.questions(review.sessionID).filter(\.isWhole).sorted { $0.created > $1.created }
+            if !asked.isEmpty || askingWhole {
+                sectionHeader("Whole change")
+                ForEach(asked) { question in
+                    Group {
+                        if focusedComment == question.id {
+                            questionThread(question, review: review, showsBand: false)
+                        } else {
+                            questionItem(question, review: review)
+                        }
+                    }
+                    .id(question.id)
+                }
+            }
+            if askingWhole {
+                wholeChangeBox(review).padding(.top, 4)
+            } else {
+                InlineLink(title: "Ask about the whole change", size: 11.5, tint: Theme.plan, icon: "questionmark.bubble") {
+                    askingWhole = true
+                }
+                .padding(.horizontal, 6).padding(.top, 10)
+            }
+        }
+    }
+
+    private func sectionHeader(_ title: String) -> some View {
+        Text(title)
+            .font(.system(size: 11.5, weight: .semibold)).foregroundStyle(.secondary)
+            .padding(.horizontal, 6).padding(.top, 12).padding(.bottom, 2)
+            .accessibilityAddTraits(.isHeader)
+    }
+
+    // Comments not sent yet wait just above Commit, so they are not forgotten before the
+    // work is kept. Replies not yet read are pointed at from here too.
+    @ViewBuilder private func unsentStrip(_ review: ReviewTarget) -> some View {
+        let all = review.reviews.comments(review.sessionID)
+        let kept = all.filter { !$0.isPending }
+        let pending = all.count - kept.count
+        let unread = review.reviews.unreadCount(review.sessionID)
+        if !all.isEmpty || unread > 0 {
+            HStack(spacing: 8) {
+                if !all.isEmpty {
+                    Image(systemName: "text.bubble").font(.system(size: 11.5)).foregroundStyle(Theme.plan)
+                        .accessibilityHidden(true)
+                    Text(kept.isEmpty ? "\(counted(pending, "finding")) to look at"
+                         : "\(counted(kept.count, "comment")) not sent yet")
+                        .font(.system(size: 12, weight: .medium)).foregroundStyle(Theme.plan)
+                        .lineLimit(1).truncationMode(.tail)
+                    Image(systemName: "ellipsis").font(.system(size: 11)).foregroundStyle(.secondary)
+                        .padding(.horizontal, 4).frame(height: 22).contentShape(Rectangle())
+                        .appMenu {
+                            var entries: [MenuEntry] = []
+                            if !kept.isEmpty {
+                                entries.append(.item("Preview message") { previewSend(review, startsOnMessage: true) })
+                            }
+                            if pending > 0 {
+                                entries.append(.item("Look at findings") { openFindings(review) })
+                            }
+                            entries.append(.item("Clear review", kind: .destructive) {
+                                confirmClear(review, kept: kept.count, pending: pending)
+                            })
+                            return entries
+                        }
+                        .accessibilityLabel("Review actions")
+                }
+                if unread > 0 {
+                    Button(action: nextUnread) {
+                        Text(unread == 1 ? "1 reply" : "\(unread) replies")
+                            .font(.system(size: 12, weight: .semibold)).foregroundStyle(Theme.plan)
+                            .lineLimit(1).fixedSize()
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .appTooltip("Open the next reply")
+                    .accessibilityLabel(unread == 1 ? "1 reply to read" : "\(unread) replies to read")
+                }
+                Spacer(minLength: 4)
+                if !kept.isEmpty {
+                    ActionButton(title: "Send to \(review.agent.title)", tone: .green, height: 28, size: 12,
+                                 icon: "paperplane.fill") { previewSend(review) }
+                        .layoutPriority(1)
+                } else if pending > 0 {
+                    ActionButton(title: "Look at them", tone: .outlined, height: 28, size: 12) { openFindings(review) }
+                        .layoutPriority(1)
+                }
+            }
+            .padding(.horizontal, 14).padding(.vertical, 8)
+            .background(Theme.card)
+            .overlay(alignment: .top) { Rectangle().fill(Theme.hairline).frame(height: 1) }
         }
     }
 
@@ -653,8 +891,18 @@ struct ChangesView: View {
                         ForEach(repositories) { repository in
                             if mode == .history { historyProject(repository) } else { changesProject(repository) }
                         }
+                        if mode == .changes {
+                            if isFilteringFiles && repositories.allSatisfy({ shownChanges($0.root).isEmpty }) {
+                                Text("No matching files")
+                                    .font(.system(size: 11.5)).foregroundStyle(.secondary)
+                                    .frame(maxWidth: .infinity).padding(.vertical, 16)
+                            }
+                            settledNotes
+                            wholeChangeQuestions
+                        }
                     }.padding(10)
                     .smoothlyResizes(when: mode == .history ? collapsedHistories : collapsedRepositories)
+                    .smoothlyResizes(when: navigation.foldedNotes)
                 }
                 .accessibilityLabel(mode == .history ? "Workspace projects and commits"
                                                      : "Workspace repositories and changed files")
@@ -668,6 +916,10 @@ struct ChangesView: View {
                 .focusEffectDisabled()
                 .onMoveCommand(perform: moveNavigator)
                 .onKeyPress(.return) {
+                    if let item = navigatorCursor, let id = item.note {
+                        if let note = note(id, at: item) { openNote(note) }
+                        return .handled
+                    }
                     if mode == .history, let item = navigatorCursor {
                         if let commit = projectCommits(item.root)?.first(where: { $0.hash == item.path }) {
                             openCommit(commit, in: item.root)
@@ -689,6 +941,20 @@ struct ChangesView: View {
                     navigatorCursor = item
                     proxy.scrollTo(item)
                 }
+                // A comment put in focus from the diff, the chat or the keyboard is brought
+                // into view under its file, opening the file's comments if they were folded.
+                .onChange(of: focusedComment) { _, id in
+                    guard let id, mode == .changes else { return }
+                    if let item = navigatorItems.first(where: { $0.note == id }) {
+                        proxy.scrollTo(item)
+                    } else if let review, let comment = review.reviews.comment(id, in: review.sessionID)
+                                ?? review.reviews.threads(review.sessionID).first(where: { $0.comment.id == id })?.comment {
+                        navigation.foldedNotes.remove(comment.root + "/" + comment.path)
+                    } else if let review, let question = review.reviews.question(id, in: review.sessionID) {
+                        if question.isWhole { proxy.scrollTo(question.id) }
+                        else { navigation.foldedNotes.remove(question.root + "/" + question.path) }
+                    }
+                }
                 .onChange(of: historySelection.commit?.id) { _, hash in
                     guard mode == .history, let hash else { return }
                     let item = ChangesNavigatorItem(root: root, path: hash)
@@ -701,26 +967,28 @@ struct ChangesView: View {
     }
 
     @ViewBuilder private func changesProject(_ repository: ChangesRepository) -> some View {
-        let changes = repository.root == root ? files : gitStats.snapshot(at: repository.root)?.files ?? []
+        let changes = shownChanges(repository.root)
         let item = ChangesNavigatorItem(root: repository.root, path: nil)
-        WorkspaceProjectRow(name: repository.name,
-                            detail: repositoryStatus(repository),
-                            selected: repository.root == root,
-                            showsCursor: showsCursor(item),
-                            hasChildren: !changes.isEmpty,
-                            collapsed: collapsedRepositories.contains(repository.root)) {
-            if !collapsedRepositories.insert(repository.root).inserted {
-                collapsedRepositories.remove(repository.root)
+        if !isFilteringFiles || !changes.isEmpty {
+            WorkspaceProjectRow(name: repository.name,
+                                detail: repositoryStatus(repository),
+                                selected: repository.root == root,
+                                showsCursor: showsCursor(item),
+                                hasChildren: !changes.isEmpty,
+                                collapsed: collapsedRepositories.contains(repository.root)) {
+                if !collapsedRepositories.insert(repository.root).inserted {
+                    collapsedRepositories.remove(repository.root)
+                }
+            } select: {
+                navigatorCursor = item
+                navigatorCursorVisible = false
+                navigatorFocused = true
+                selectRepository(repository.root, nil)
             }
-        } select: {
-            navigatorCursor = item
-            navigatorCursorVisible = false
-            navigatorFocused = true
-            selectRepository(repository.root, nil)
+            .id(item)
         }
-        .id(item)
         // Each file is a row of the lazy stack itself, not part of one block per project,
-        // so only the rows on screen are built.
+        // so only the rows on screen are built. Its comments follow as a row of their own.
         if !collapsedRepositories.contains(repository.root) {
             ForEach(changes) { file in
                 Group {
@@ -730,14 +998,11 @@ struct ChangesView: View {
                         otherProjectRow(file, in: repository.root)
                     }
                 }
-                .padding(.leading, 9)
-                .overlay(alignment: .leading) {
-                    // Runs into the gaps between rows so the rule down the side is unbroken.
-                    Rectangle().fill(Theme.border).frame(width: 1).padding(.vertical, -1.5)
-                }
-                .padding(.leading, 21)
+                .modifier(ProjectRule())
                 .id(ChangesNavigatorItem(root: repository.root, path: file.id))
                 .transition(.fold)
+                fileNotes(file, in: repository.root)
+                    .modifier(ProjectRule())
             }
         }
     }
@@ -755,6 +1020,7 @@ struct ChangesView: View {
             HStack(spacing: 10) {
                 StatusChip(kind: file.kind)
                 fileName(file)
+                notesBadge(file, in: repositoryRoot)
                 counts(file)
             }
             .padding(.horizontal, 10)
@@ -1094,28 +1360,7 @@ struct ChangesView: View {
                     Text("partly staged").font(.system(size: 10)).foregroundStyle(.secondary)
                 }
 
-                if let review {
-                    let comments = review.reviews.comments(review.sessionID, root: repoRoot, path: file.path)
-                        + review.reviews.threads(review.sessionID, root: repoRoot, path: file.path)
-                            .filter { !$0.round.resolved.contains($0.comment.id) }.map(\.comment)
-                    if !comments.isEmpty {
-                        let pending = comments.contains(where: \.isPending)
-                        HStack(spacing: 3) {
-                            Label("\(comments.count)", systemImage: "text.bubble")
-                            if pending { Circle().fill(Theme.attention).frame(width: 5, height: 5) }
-                        }
-                        .font(.system(size: 10.5, weight: .semibold))
-                        .foregroundStyle(pending ? Theme.attentionText : Theme.accent)
-                        .appTooltip(counted(comments.count, "review comment") + (pending ? ", some still to look at" : ""))
-                    }
-                    let asked = review.reviews.questions(review.sessionID, root: repoRoot, path: file.path).count { !$0.resolved }
-                    if asked > 0 {
-                        Label("\(asked)", systemImage: "questionmark.bubble")
-                            .font(.system(size: 10.5, weight: .semibold))
-                            .foregroundStyle(Theme.plan)
-                            .appTooltip(counted(asked, "question") + ", answered here")
-                    }
-                }
+                notesBadge(file, in: root)
 
                 counts(file)
             }
@@ -2091,89 +2336,14 @@ struct ChangesView: View {
         .accessibilityElement(children: .contain)
     }
 
-    // MARK: Review bar
+    // MARK: Replies
 
-    // What the review covers so far, for the Review pill's tooltip.
-    private func reviewDetails(_ review: ReviewTarget) -> [String] {
-        let all = review.reviews.comments(review.sessionID)
-        let kept = all.filter { !$0.isPending }
-        let fileCount = Set(kept.map { $0.root + "/" + $0.path }).count
-        let settled = settledComments(all)
-        let unplaced = placement.unplaced.count
-        let sent = review.reviews.threads(review.sessionID).count
-        return [
-            !kept.isEmpty ? "On \(counted(fileCount, "file")). Changes wait here until you send them"
-                : all.isEmpty ? "Click a line number to ask or comment" : "Nothing kept yet",
-            sent > 0 ? "\(sent) sent" : nil,
-            unplaced > 0 ? "\(unplaced) not on a line, because its code moved or was removed" : nil,
-            settled > 0 ? "\(settled) on files with no changes left. They are still in the review, and the send dialog lists them" : nil
-        ].compactMap { $0 }
-    }
-
-    // One line that says what you will send. Everything a second opinion is doing lives
-    // behind its one control, and the finer details are in the Review pill's tooltip.
-    // Asking for one starts from the session header, so the control only shows once
-    // there is something to follow.
-    @ViewBuilder private func reviewStrip(_ review: ReviewTarget) -> some View {
-        let all = review.reviews.comments(review.sessionID)
-        let kept = all.filter { !$0.isPending }
-        let pending = all.count - kept.count
-        let unread = review.reviews.unreadCount(review.sessionID)
-        HStack(spacing: 10) {
-            Label("Your review", systemImage: "text.bubble.fill")
-                .font(.system(size: 12, weight: .semibold))
-                .labelStyle(ReviewBarLabelStyle())
-                .lineLimit(1)
-                .fixedSize()
-            if unread > 0 {
-                Button(action: nextUnread) {
-                    Text(unread == 1 ? "1 reply to read" : "\(unread) replies to read")
-                        .font(.system(size: 11.5, weight: .semibold))
-                        .foregroundStyle(Theme.plan)
-                        .lineLimit(1).fixedSize()
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .appTooltip("Open the next reply")
-            }
-            Spacer(minLength: 8)
-            if !all.isEmpty {
-                InlineLink(title: "Clear", tint: Color.secondary) { confirmClear(review, kept: kept.count, pending: pending) }
-            }
-            InlineLink(title: "Preview message", tint: Color.secondary) { previewSend(review, startsOnMessage: true) }
-                .disabled(kept.isEmpty)
-                .opacity(kept.isEmpty ? 0.5 : 1)
-                .appTooltip("The exact message \(review.agent.title) gets")
-            ActionButton(title: kept.isEmpty ? "Send to \(review.agent.title)"
-                         : "Send \(kept.count) to \(review.agent.title)",
-                         tone: .green, height: 28, size: 12, icon: "paperplane.fill") { previewSend(review) }
-                .disabled(kept.isEmpty)
-        }
-        .font(.system(size: 12))
-        .padding(.horizontal, 20).padding(.vertical, 8)
-        .background(Theme.card)
-        .overlay(alignment: .top) { Rectangle().fill(Theme.hairline).frame(height: 1) }
-    }
-
-    // The first thread with an answer not yet read, in the order the review list shows.
+    // The first thread with an answer not yet read.
     private func nextUnread() {
         guard let review,
               let next = review.reviews.threads(review.sessionID).first(where: { $0.round.unread.contains($0.comment.id) })
         else { return }
-        showingReview = true
         focus(next.comment)
-    }
-
-    // A file that has been committed or reverted leaves the list, and its comments with
-    // it. They still go with the review, so the strip says how many are out of sight.
-    private func settledComments(_ comments: [ReviewComment]) -> Int {
-        let changed = Set(repositories.flatMap { repository -> [String] in
-            let snapshot = repository.root == root ? snapshot : gitStats.snapshot(at: repository.root)
-            guard let snapshot else { return [] }
-            return snapshot.files.map { snapshot.root + "/" + $0.path }
-        })
-        guard !changed.isEmpty || snapshot != nil else { return 0 }
-        return comments.count { !changed.contains($0.root + "/" + $0.path) }
     }
 
     // Says once when each reviewer is done, with the way to its findings. The progress and
@@ -2507,43 +2677,9 @@ struct ChangesView: View {
         let question = ReviewQuestion.whole(root: repoRoot, agent: review.agent, question: wholeQuestion.trimmed)
         review.reviews.ask(question, context: questionContext(review), in: review.sessionID)
         wholeQuestion = ""
+        askingWhole = false
         focusedComment = question.id
         announce("Asked. The answer appears in this list and stays here.")
-    }
-
-    @ViewBuilder private func questionsNavigator(_ review: ReviewTarget) -> some View {
-        let asked = review.reviews.questions(review.sessionID).sorted { $0.created > $1.created }
-        ScrollViewReader { proxy in
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 6) {
-                    wholeChangeBox(review)
-                    ReviewGroupHeader(title: "Asked in this review", count: asked.count)
-                    if asked.isEmpty {
-                        VStack(spacing: 6) {
-                            Text("No questions yet").font(.system(size: 12.5, weight: .semibold))
-                            Text("Click a line number and choose Ask a question. The answer comes here, never in the chat.")
-                        }
-                        .font(.system(size: 11.5)).foregroundStyle(.secondary)
-                        .multilineTextAlignment(.center)
-                        .frame(maxWidth: .infinity).padding(.vertical, 24).padding(.horizontal, 12)
-                    }
-                    ForEach(asked) { question in
-                        Group {
-                            if question.isWhole && focusedComment == question.id {
-                                questionThread(question, review: review, showsBand: false)
-                            } else {
-                                questionItem(question, review: review)
-                            }
-                        }
-                        .id(question.id)
-                    }
-                }
-                .padding(10)
-            }
-            .onChange(of: focusedComment) { _, id in
-                if let id { proxy.scrollTo(id) }
-            }
-        }
     }
 
     private func wholeChangeBox(_ review: ReviewTarget) -> some View {
@@ -2688,4 +2824,22 @@ struct ChangesView: View {
     }
 }
 
-// The review bar's title: its icon in the accent, its words in the ink.
+
+// The rule down the side of a project's rows. It runs into the gaps between rows so the
+// line is unbroken.
+private struct ProjectRule: ViewModifier {
+    func body(content: Content) -> some View {
+        content
+            .padding(.leading, 9)
+            .overlay(alignment: .leading) {
+                Rectangle().fill(Theme.border).frame(width: 1).padding(.vertical, -1.5)
+            }
+            .padding(.leading, 21)
+    }
+}
+
+private struct SettledFile: Identifiable {
+    let root: String
+    let path: String
+    var id: String { root + "/" + path }
+}
