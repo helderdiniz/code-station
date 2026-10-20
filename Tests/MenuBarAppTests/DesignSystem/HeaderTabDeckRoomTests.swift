@@ -11,13 +11,17 @@ import Testing
 @MainActor
 struct HeaderTabDeckRoomTests {
     private func tabs(selecting selected: String,
-                      changesHaveContent: Bool? = nil) -> [HeaderTab] {
+                      changesHaveContent: Bool? = nil,
+                      lineCounts: HeaderTabLineCounts? = nil) -> [HeaderTab] {
         [("Chat", "bubble.left.and.bubble.right"), ("Design", "paintbrush.pointed"),
          ("Troubleshoot", "stethoscope"), ("Changes", "plusminus"),
          ("Explorer", "folder")].map { label, icon in
             var tab = HeaderTab(label: label, icon: icon, selected: label == selected,
                                 activate: {})
-            if label == "Changes" { tab.hasContent = changesHaveContent }
+            if label == "Changes" {
+                tab.hasContent = changesHaveContent ?? (lineCounts != nil ? true : nil)
+                tab.lineCounts = lineCounts
+            }
             return tab
         }
     }
@@ -57,6 +61,35 @@ struct HeaderTabDeckRoomTests {
             }
         }
         #expect(widths.allSatisfy { $0 == widths.first })
+    }
+
+    // The chosen Changes tab widens to show its counts, and it has to ask for the same
+    // width before and after it is drawn, or the band around it never settles.
+    @Test func lineCountsWidenOnlyTheChosenChangesTabAndHoldTheirWidth() {
+        let counts = HeaderTabLineCounts(added: 412, removed: 271)
+        func width(selecting selected: String) -> CGFloat {
+            let deck = NSHostingView(rootView: HeaderTabDeck(
+                tabs: tabs(selecting: selected, lineCounts: counts))
+                .environment(TooltipPresenter()))
+            let asked = deck.fittingSize.width
+            draw(deck)
+            #expect(deck.fittingSize.width == asked)
+            return asked
+        }
+        let onChanges = width(selecting: "Changes")
+        let onChat = width(selecting: "Chat")
+        #expect(onChanges > onChat)
+        #expect(width(selecting: "Explorer") == onChat)
+    }
+
+    @Test func lineCountsShortenFromTenThousand() {
+        #expect(HeaderTabLineCounts.short(0) == "0")
+        #expect(HeaderTabLineCounts.short(9_999) == "9999")
+        #expect(HeaderTabLineCounts.short(10_000) == "10.0k")
+        #expect(HeaderTabLineCounts.short(18_349) == "18.3k")
+        #expect(HeaderTabLineCounts.short(99_960) == "99.9k")
+        #expect(HeaderTabLineCounts.short(100_000) == "100k")
+        #expect(HeaderTabLineCounts.short(183_499) == "183k")
     }
 
     private func draw(_ view: NSView) {

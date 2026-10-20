@@ -14,9 +14,34 @@ struct HeaderTab: Identifiable {
     var hasContent: Bool?
     // One number the destination carries for itself: how much is waiting there.
     var count: Int?
+    // How far the diff behind the destination has moved. It stands where the content dot
+    // sits, but only while the tab is chosen: from another tab the dot says enough.
+    var lineCounts: HeaderTabLineCounts?
     let activate: () -> Void
 
     var id: String { label }
+
+    var showsLineCounts: Bool { selected && lineCounts != nil }
+}
+
+struct HeaderTabLineCounts: Equatable {
+    let added: Int
+    let removed: Int
+    // A stand-in that has not been checked against the tree yet, drawn quieter until it is.
+    var provisional = false
+
+    var spokenText: String { "\(added) lines added, \(removed) removed" }
+
+    // Exact below ten thousand, then one decimal, then none, so the tab never asks for
+    // more room than six characters a side. Truncated rather than rounded, so 99,960 reads
+    // as 99.9k and not as a 100.0k that is wider than the counts it stands for.
+    static func short(_ count: Int) -> String {
+        switch count {
+        case 100_000...: "\(count / 1_000)k"
+        case 10_000...: "\(count / 1_000).\(count % 1_000 / 100)k"
+        default: "\(count)"
+        }
+    }
 }
 
 // The header's destinations, each with its word beside its icon and a line under the one
@@ -75,9 +100,12 @@ struct HeaderTabDeck: View {
         // Tabs come and go as a session settles into its kind of work, and the row
         // closes up around them rather than jumping.
         .animation(reduceMotion ? nil : HeaderMotion.page, value: tabs.map(\.id))
+        // A tab that widens to show its counts pushes its neighbours over instead of
+        // making them jump.
+        .animation(reduceMotion ? nil : HeaderMotion.page, value: tabs.map(\.showsLineCounts))
         // Drawn over the row rather than inside a tab, so there is one line that travels
-        // between tabs instead of one line per tab that comes and goes, and choosing a
-        // tab still changes nothing the deck asks for in width.
+        // between tabs instead of one line per tab that comes and goes, and the line
+        // itself never changes what the deck asks for in width.
         .overlayPreferenceValue(HeaderTabFrames.self) { anchors in
             GeometryReader { proxy in
                 HeaderTabInk(frames: anchors.mapValues { proxy[$0] },
@@ -180,9 +208,12 @@ private struct HeaderTabDeckItem: View {
     @State private var hovering = false
     @State private var actOuts = 0
     @FocusState private var focused: Bool
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        if let hasContent = tab.hasContent {
+        if let lineCounts = tab.lineCounts {
+            button.appTooltip("\(tab.label), \(lineCounts.spokenText)", isFocused: focused)
+        } else if let hasContent = tab.hasContent {
             button.appTooltip(hasContent ? "\(tab.label) has content" : "Nothing in \(tab.label) yet",
                               isFocused: focused)
         } else {
@@ -201,14 +232,20 @@ private struct HeaderTabDeckItem: View {
                     .font(.system(size: Self.wordSize, weight: .semibold))
                     .fixedSize()
                     .frame(width: Self.width(of: tab.label), alignment: .leading)
-                if let hasContent = tab.hasContent {
+                if tab.showsLineCounts, let lineCounts = tab.lineCounts {
+                    lineCountsLabel(lineCounts)
+                        .transition(.asymmetric(
+                            insertion: reduceMotion ? .opacity : .push(from: .bottom),
+                            removal: .opacity))
+                } else if let hasContent = tab.hasContent {
                     Circle()
                         .fill(Theme.dotOnText)
                         .frame(width: 6, height: 6)
                         .opacity(hasContent ? 1 : 0)
+                        .animation(nil, value: hasContent)
                         .padding(.leading, 1)
                         .accessibilityHidden(true)
-                        .transaction { $0.animation = nil }
+                        .transition(.opacity)
                 }
                 if let count = tab.count {
                     Text(verbatim: "\(count)")
@@ -247,8 +284,38 @@ private struct HeaderTabDeckItem: View {
 
     private var showsHint: Bool { hovering && !tab.selected }
 
+    // Both sides always show, even at zero, so the counts keep one shape. Each side is
+    // framed to its measured width, so the tab does not wobble as the digits turn over.
+    private func lineCountsLabel(_ counts: HeaderTabLineCounts) -> some View {
+        let added = "+" + HeaderTabLineCounts.short(counts.added)
+        let removed = "\u{2212}" + HeaderTabLineCounts.short(counts.removed)
+        return HStack(spacing: Self.countSpacing) {
+            Text(verbatim: added)
+                .foregroundStyle(Theme.addition)
+                .frame(width: Self.width(ofMono: added), alignment: .leading)
+            Text(verbatim: removed)
+                .foregroundStyle(Theme.deletion)
+                .frame(width: Self.width(ofMono: removed), alignment: .leading)
+        }
+        .font(.mono(Self.countSize, .semibold).monospacedDigit())
+        .fixedSize()
+        .contentTransition(.numericText())
+        .opacity(counts.provisional ? 0.55 : 1)
+        .animation(reduceMotion ? nil : HeaderMotion.page, value: counts)
+        .padding(.trailing, Self.countSpacing)
+        .accessibilityHidden(true)
+    }
+
+    // The counts are spoken from every tab, not only the chosen one: the dot alone says
+    // less than a screen reader can.
     private var accessibilityLabel: String {
-        var label = tab.hasContent == true ? "\(tab.label), has content" : tab.label
+        var label = if let lineCounts = tab.lineCounts {
+            "\(tab.label), \(lineCounts.spokenText)"
+        } else if tab.hasContent == true {
+            "\(tab.label), has content"
+        } else {
+            tab.label
+        }
         if let count = tab.count { label += ", \(count) waiting" }
         return label
     }
@@ -269,7 +336,11 @@ private struct HeaderTabDeckItem: View {
 
     // The count, measured the same way and for the same reason as the word beside it.
     private static func width(ofCounts text: String) -> CGFloat {
+        width(ofMono: text) + countSpacing
+    }
+
+    private static func width(ofMono text: String) -> CGFloat {
         let font = NSFont.monospacedSystemFont(ofSize: countSize, weight: .semibold)
-        return ceil(NSAttributedString(string: text, attributes: [.font: font]).size().width + countSpacing)
+        return ceil(NSAttributedString(string: text, attributes: [.font: font]).size().width)
     }
 }

@@ -1072,7 +1072,13 @@ struct SessionView: View {
 
     private func changesTab(_ session: ChatSession) -> HeaderTab {
         var changes = destination("Changes", icon: "plusminus", value: .changes)
-        changes.hasContent = workingTreeChanges(session) != nil
+        let tree = workingTreeChanges(session)
+        changes.hasContent = tree != nil
+        // A file count of zero means git has not answered yet and the transcript's
+        // running total is standing in.
+        changes.lineCounts = tree.map {
+            HeaderTabLineCounts(added: $0.added, removed: $0.removed, provisional: $0.files == 0)
+        }
         return changes
     }
 
