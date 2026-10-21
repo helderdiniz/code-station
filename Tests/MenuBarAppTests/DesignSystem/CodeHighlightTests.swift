@@ -167,6 +167,49 @@ struct CodeHighlightTests {
         #expect(kind(of: "12", in: code, .json) == .number)
     }
 
+    @Test func jsonnetColoursKeywordsCommentsAndStrings() {
+        let code = "local name = 'ada'; # who\n{ [name]: if self.ok then 1 else null } // done"
+        #expect(kind(of: "local", in: code, .jsonnet) == .keyword)
+        #expect(kind(of: "'ada'", in: code, .jsonnet) == .string)
+        #expect(kind(of: "# who", in: code, .jsonnet) == .comment)
+        #expect(kind(of: "self", in: code, .jsonnet) == .keyword)
+        #expect(kind(of: "null", in: code, .jsonnet) == .keyword)
+        #expect(kind(of: "// done", in: code, .jsonnet) == .comment)
+    }
+
+    @Test func jsonnetTextBlockSpansLinesAndKeepsApostrophes() {
+        let code = "{ text: |||\n  it's a \\ block\n|||, ok: a || b }"
+        let found = tokens(code, .jsonnet)
+        #expect(found.contains { $0.text == "|||" && $0.kind == .string })
+        #expect(found.contains { $0.text == "  it's a \\ block" && $0.kind == .string })
+        #expect(found.filter { $0.kind == .string }.count == 3)
+    }
+
+    @Test func jsonnetColoursFieldNamesAndTheRootObject() {
+        let code = "{ name: $._config.name, hidden:: 1, base+: { x::: 2 }, n: f(a, b) }"
+        #expect(kind(of: "name", in: code, .jsonnet) == .type)
+        #expect(kind(of: "hidden", in: code, .jsonnet) == .type)
+        #expect(kind(of: "base", in: code, .jsonnet) == .type)
+        #expect(kind(of: "x", in: code, .jsonnet) == .type)
+        #expect(kind(of: "$", in: code, .jsonnet) == .keyword)
+        // A name that is not followed by a colon stays plain.
+        #expect(kind(of: "f", in: code, .jsonnet) == nil)
+        #expect(kind(of: "_config", in: code, .jsonnet) == nil)
+    }
+
+    @Test func jsonnetHashOpensACommentWithoutASpace() {
+        let code = "{ a: 1,# trailing }"
+        #expect(kind(of: "# trailing }", in: code, .jsonnet) == .comment)
+    }
+
+    @Test func jsonnetTextBlockEndsOnlyAtALineStartingWithItsMarker() {
+        let code = "x: |||\n  a ||| b\n  |||,\ny: 'after'"
+        let found = tokens(code, .jsonnet)
+        #expect(found.contains { $0.text == "  a ||| b" && $0.kind == .string })
+        #expect(found.contains { $0.text == "  |||" && $0.kind == .string })
+        #expect(found.contains { $0.text == "'after'" && $0.kind == .string })
+    }
+
     @Test func rustLifetimesAreNotStrings() {
         let code = "fn get<'a>(x: &'a str) -> &'a str { x }"
         let found = tokens(code, .rust)
@@ -212,6 +255,8 @@ struct CodeHighlightTests {
         #expect(CodeLanguage(fileExtension: "swift") == .swift)
         #expect(CodeLanguage(fileExtension: "kts") == .kotlin)
         #expect(CodeLanguage(fileExtension: "YML") == .yaml)
+        #expect(CodeLanguage(fileExtension: "jsonnet") == .jsonnet)
+        #expect(CodeLanguage(fileExtension: "libsonnet") == .jsonnet)
     }
 
     // MARK: - Rendering

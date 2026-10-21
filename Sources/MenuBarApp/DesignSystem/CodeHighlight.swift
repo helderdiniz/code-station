@@ -7,7 +7,8 @@ import SwiftUI
 // strings and numbers to land right. An unknown file extension gets nothing: a random
 // text file coloured as code looks broken.
 enum CodeLanguage: Sendable, Equatable {
-    case swift, json, yaml, shell, python, javascript, java, kotlin, go, rust, markup, sql, cLike
+    case swift, json, jsonnet, yaml, shell, python, javascript, java, kotlin, go, rust, markup, sql,
+         cLike
 
     init?(tag: String?) {
         guard let tag, !tag.isEmpty else { return nil }
@@ -23,6 +24,7 @@ enum CodeLanguage: Sendable, Equatable {
         switch name {
         case "swift": self = .swift
         case "json", "jsonc", "json5": self = .json
+        case "jsonnet", "libsonnet": self = .jsonnet
         case "yaml", "yml": self = .yaml
         case "bash", "sh", "zsh", "shell", "fish", "shellscript": self = .shell
         case "python", "py", "python3": self = .python
@@ -191,7 +193,7 @@ enum CodeHighlight {
             let c = line[i]
 
             if rules.lineComments.contains(where: { matches(line, at: i, $0) }),
-               c != "#" || hashCommentStarts(line, at: i) {
+               c != "#" || !rules.hashNeedsBoundary || hashCommentStarts(line, at: i) {
                 tokens.append(Token(range: i..<line.endIndex, kind: .comment))
                 i = line.endIndex
                 break
@@ -205,10 +207,11 @@ enum CodeHighlight {
                 continue
             }
 
-            if rules.quotes.contains(c) {
+            let tripled = matches(line, at: i, String(repeating: c, count: 3))
+            if rules.quotes.contains(c) || rules.tripleOnlyQuotes.contains(c) && tripled {
                 let start = i
                 var triple = false
-                if rules.tripleQuotes, matches(line, at: i, String(repeating: c, count: 3)) {
+                if rules.tripleQuotes || rules.tripleOnlyQuotes.contains(c), tripled {
                     triple = true
                     i = line.index(i, offsetBy: 3)
                 } else {
@@ -228,6 +231,13 @@ enum CodeHighlight {
                 continue
             }
 
+            if rules.keywordSymbols.contains(c) {
+                let next = line.index(after: i)
+                tokens.append(Token(range: i..<next, kind: .keyword))
+                i = next
+                continue
+            }
+
             if c.isLetter || c == "_" {
                 let start = i
                 var j = line.index(after: i)
@@ -240,6 +250,8 @@ enum CodeHighlight {
                 if rules.keywords.contains(key) {
                     tokens.append(Token(range: start..<j, kind: .keyword))
                 } else if rules.typesByCase, c.isUppercase {
+                    tokens.append(Token(range: start..<j, kind: .type))
+                } else if rules.fieldNames, fieldColonFollows(line, at: j) {
                     tokens.append(Token(range: start..<j, kind: .type))
                 }
                 i = j
@@ -266,6 +278,15 @@ enum CodeHighlight {
     // and yaml keeps its own reading.
     private static func hashCommentStarts(_ line: Substring, at i: String.Index) -> Bool {
         i == line.startIndex || line[line.index(before: i)].isWhitespace
+    }
+
+    // A Jsonnet field name is followed by :, :: or :::, or by +: and its kin when the
+    // field adds to an inherited one.
+    private static func fieldColonFollows(_ line: Substring, at start: String.Index) -> Bool {
+        var i = start
+        while i < line.endIndex, line[i] == " " || line[i] == "\t" { i = line.index(after: i) }
+        if i < line.endIndex, line[i] == "+" { i = line.index(after: i) }
+        return i < line.endIndex && line[i] == ":"
     }
 
     private static func scanBlockComment(_ line: Substring, from i: inout String.Index,
@@ -300,11 +321,15 @@ enum CodeHighlight {
                                    rules: Rules, state: inout State) {
         let escapes = !rules.rawQuotes.contains(quote)
         let terminator = String(repeating: quote, count: triple ? 3 : 1)
+        // A text block ends only at a line that starts with its |||, so a ||| inside
+        // the block's prose is still prose.
+        let closesAtLineStart = rules.tripleOnlyQuotes.contains(quote)
         while i < line.endIndex {
             if escapes, line[i] == "\\" {
                 i = line.index(after: i)
                 if i < line.endIndex { i = line.index(after: i) }
-            } else if matches(line, at: i, terminator) {
+            } else if matches(line, at: i, terminator),
+                      !closesAtLineStart || line[..<i].allSatisfy({ $0 == " " || $0 == "\t" }) {
                 i = line.index(i, offsetBy: terminator.count)
                 state = .normal
                 return
@@ -449,6 +474,12 @@ enum CodeHighlight {
         var nestsBlockComments = false
         var quotes: [Character] = ["\""]
         var tripleQuotes = false
+        // Quotes that open a string only when tripled, like Jsonnet's ||| text blocks,
+        // where a lone | is still an operator.
+        var tripleOnlyQuotes: [Character] = []
+        // Whether a # needs a word boundary to open a comment. Where # means nothing
+        // else, as in Jsonnet, it opens one anywhere.
+        var hashNeedsBoundary = true
         // Quotes whose strings run across lines even without tripling: raw strings in Go,
         // template literals in JavaScript.
         var multilineQuotes: [Character] = []
@@ -457,12 +488,17 @@ enum CodeHighlight {
         var keywords: Set<String> = []
         var caseInsensitiveKeywords = false
         var typesByCase = false
+        // Single characters read as keywords, like Jsonnet's $ for the outermost object.
+        var keywordSymbols: [Character] = []
+        // Whether a name followed by a colon is an object field, coloured like a type.
+        var fieldNames = false
     }
 
     private static func rules(for language: CodeLanguage) -> Rules {
         switch language {
         case .swift: swiftRules
         case .json: jsonRules
+        case .jsonnet: jsonnetRules
         case .yaml: yamlRules
         case .shell: shellRules
         case .python: pythonRules
@@ -501,6 +537,25 @@ enum CodeHighlight {
         blockComment: ("/*", "*/"),
         quotes: ["\""],
         keywords: ["true", "false", "null"])
+
+    // A ||| text block is verbatim and runs until the closing |||, so its prose can hold
+    // apostrophes and backslashes without opening or escaping anything. Field names are
+    // coloured, as in the Grafana grammar for VS Code, because they carry the shape of
+    // the object the file builds.
+    private static let jsonnetRules = Rules(
+        lineComments: ["//", "#"],
+        blockComment: ("/*", "*/"),
+        quotes: ["\"", "'"],
+        tripleOnlyQuotes: ["|"],
+        hashNeedsBoundary: false,
+        rawQuotes: ["|"],
+        keywords: [
+            "assert", "else", "error", "false", "for", "function", "if", "import",
+            "importbin", "importstr", "in", "local", "null", "self", "super",
+            "tailstrict", "then", "true"
+        ],
+        keywordSymbols: ["$"],
+        fieldNames: true)
 
     private static let yamlRules = Rules(
         lineComments: ["#"],
