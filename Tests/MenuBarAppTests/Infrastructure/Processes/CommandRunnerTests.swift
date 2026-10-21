@@ -277,7 +277,8 @@ struct CommandRunnerTests {
         let output = try await CommandRunner.run(
             executable: "/bin/sh",
             arguments: backgroundChildArguments(pidFile: pidFile),
-            timeout: .seconds(3)
+            // Far below the child's 30 seconds, and loose enough for a slow CI machine.
+            timeout: .seconds(10)
         )
 
         #expect(output.succeeded)
@@ -287,8 +288,10 @@ struct CommandRunnerTests {
 
     @Test func aProcessThatLeftTheGroupCannotHoldTheOutputOpen() async throws {
         let pidFile = scratch.path("escaped.pid")
-        let escape = "exit if fork; POSIX::setsid(); "
-            + "open my $f, '>', $ARGV[0]; print $f $$; close $f; sleep 30"
+        // The parent waits for the pid file, which the child writes only after it has left
+        // the group. Otherwise the group can be stopped before the child gets out of it.
+        let escape = "if (fork) { select(undef, undef, undef, 0.01) until -s $ARGV[0]; exit } "
+            + "POSIX::setsid(); open my $f, '>', $ARGV[0]; print $f $$; close $f; sleep 30"
         let started = ContinuousClock.now
 
         let output = try await CommandRunner.run(

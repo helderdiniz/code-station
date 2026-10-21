@@ -154,15 +154,24 @@ struct ChangesLayoutTests {
             return navigator().map { $0.documentView!.frame.height > 1000 } ?? false
         })
         let scrollView = try #require(navigator())
-        let bottom = scrollView.documentView!.frame.height - scrollView.contentView.bounds.height
-        #expect(bottom > 200)
-        let wheel = try #require(CGEvent(scrollWheelEvent2Source: nil, units: .pixel,
-                                         wheelCount: 1, wheel1: -200, wheel2: 0, wheel3: 0))
-        for _ in 0..<20 { scrollView.scrollWheel(with: try #require(NSEvent(cgEvent: wheel))) }
-        try await Task.sleep(for: .milliseconds(200))
-        let offset = scrollView.contentView.bounds.origin.y
+        func bottom() -> CGFloat { scrollView.documentView!.frame.height - scrollView.contentView.bounds.height }
+        #expect(bottom() > 200)
+        let wheelEvent = try #require(CGEvent(scrollWheelEvent2Source: nil, units: .pixel,
+                                              wheelCount: 1, wheel1: -200, wheel2: 0, wheel3: 0))
+        let wheel = try #require(NSEvent(cgEvent: wheelEvent))
+        // The list is lazy, so rows get their real height only as they come into view and the
+        // end moves while the list is scrolled down. It moves further with the always-shown
+        // scroll bars a Mac without a trackpad uses, because they make the rows narrower.
+        var lastBottom = -1.0
+        #expect(await waitUntil(timeout: .seconds(3)) {
+            for _ in 0..<20 { scrollView.scrollWheel(with: wheel) }
+            hosting.view.layoutSubtreeIfNeeded()
+            let settled = bottom() == lastBottom && abs(scrollView.contentView.bounds.origin.y - bottom()) < 1
+            lastBottom = bottom()
+            return settled
+        })
         // At the end of the list, where the other project's file is in view.
-        #expect(abs(offset - bottom) < 1)
+        let offset = scrollView.contentView.bounds.origin.y
 
         switcher.request = ChangesNavigatorItem(root: second.path, path: "README.md")
         switcher.root = second.path
