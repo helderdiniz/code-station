@@ -192,9 +192,15 @@ struct CodeHighlightTests {
         #expect(kind(of: "base", in: code, .jsonnet) == .type)
         #expect(kind(of: "x", in: code, .jsonnet) == .type)
         #expect(kind(of: "$", in: code, .jsonnet) == .keyword)
-        // A name that is not followed by a colon stays plain.
         #expect(kind(of: "f", in: code, .jsonnet) == nil)
         #expect(kind(of: "_config", in: code, .jsonnet) == nil)
+    }
+
+    @Test func jsonnetColonsOutsideFieldsDoNotMakeFieldNames() {
+        let code = "assert valid : 'bad config';\nlocal head = list[start:end];\n  indented: 1"
+        #expect(kind(of: "valid", in: code, .jsonnet) == nil)
+        #expect(kind(of: "start", in: code, .jsonnet) == nil)
+        #expect(kind(of: "indented", in: code, .jsonnet) == .type)
     }
 
     @Test func jsonnetHashOpensACommentWithoutASpace() {
@@ -202,12 +208,38 @@ struct CodeHighlightTests {
         #expect(kind(of: "# trailing }", in: code, .jsonnet) == .comment)
     }
 
-    @Test func jsonnetTextBlockEndsOnlyAtALineStartingWithItsMarker() {
-        let code = "x: |||\n  a ||| b\n  |||,\ny: 'after'"
+    @Test func jsonnetTextBlockEndsOnlyAtALessIndentedMarker() {
+        let code = "  x: |||-\n    a ||| b\n    |||\n    it's\n\n  |||,\n  y: 'after'"
         let found = tokens(code, .jsonnet)
-        #expect(found.contains { $0.text == "  a ||| b" && $0.kind == .string })
+        #expect(found.contains { $0.text == "    a ||| b" && $0.kind == .string })
+        #expect(found.contains { $0.text == "    |||" && $0.kind == .string })
+        #expect(found.contains { $0.text == "    it's" && $0.kind == .string })
         #expect(found.contains { $0.text == "  |||" && $0.kind == .string })
         #expect(found.contains { $0.text == "'after'" && $0.kind == .string })
+        #expect(found.contains { $0.text == "y" && $0.kind == .type })
+    }
+
+    @Test func jsonnetClosingMarkerAloneDoesNotOpenATextBlock() {
+        let code = "|||,\n  name: 'x',"
+        let found = tokens(code, .jsonnet)
+        #expect(found.contains { $0.text == "name" && $0.kind == .type })
+        #expect(found.contains { $0.text == "'x'" && $0.kind == .string })
+    }
+
+    @Test func jsonnetVerbatimStringsHaveNoEscapes() {
+        let code = #"local p = @'C:\dir\'; local q = @"say ""hi"""; local x = 1"#
+        let found = tokens(code, .jsonnet)
+        #expect(found.contains { $0.text == #"@'C:\dir\'"# && $0.kind == .string })
+        #expect(found.contains { $0.text == #"@"say ""hi""""# && $0.kind == .string })
+        #expect(found.contains { $0.text == "1" && $0.kind == .number })
+    }
+
+    @Test func jsonnetStringsSpanLines() {
+        let code = "msg: 'line one\n  # line two', next: 1"
+        let found = tokens(code, .jsonnet)
+        #expect(found.contains { $0.text == "  # line two'" && $0.kind == .string })
+        #expect(!found.contains { $0.kind == .comment })
+        #expect(found.contains { $0.text == "next" && $0.kind == .type })
     }
 
     @Test func rustLifetimesAreNotStrings() {

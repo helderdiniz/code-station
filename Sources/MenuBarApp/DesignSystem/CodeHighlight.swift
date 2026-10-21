@@ -95,6 +95,12 @@ enum CodeHighlight {
         case normal
         case blockComment(depth: Int)
         case string(quote: Character, triple: Bool)
+        // A string where a doubled quote stands for the quote and a backslash is just a
+        // backslash, like Jsonnet's @'...'.
+        case verbatimString(quote: Character)
+        // A Jsonnet ||| block. The indent is that of its first line of text, nil until
+        // that line is seen.
+        case textBlock(indent: String?)
         case tag
     }
 
@@ -185,6 +191,14 @@ enum CodeHighlight {
             let start = i
             scanString(line, from: &i, quote: quote, triple: triple, rules: rules, state: &state)
             if start < i { tokens.append(Token(range: start..<i, kind: .string)) }
+        case .verbatimString(let quote):
+            let start = i
+            scanVerbatimString(line, from: &i, quote: quote, rules: rules, state: &state)
+            if start < i { tokens.append(Token(range: start..<i, kind: .string)) }
+        case .textBlock(let indent):
+            let start = i
+            scanTextBlockLine(line, from: &i, indent: indent, state: &state)
+            if start < i { tokens.append(Token(range: start..<i, kind: .string)) }
         case .tag, .normal:
             state = .normal
         }
@@ -207,11 +221,36 @@ enum CodeHighlight {
                 continue
             }
 
-            let tripled = matches(line, at: i, String(repeating: c, count: 3))
-            if rules.quotes.contains(c) || rules.tripleOnlyQuotes.contains(c) && tripled {
+            // A ||| opens a text block only when nothing but a - follows it on the line,
+            // as Jsonnet requires. That keeps the closing ||| at the top of a diff hunk
+            // from opening a block that colours the rest of the hunk as text.
+            if rules.textBlocks, c == "|", matches(line, at: i, "|||") {
+                var j = line.index(i, offsetBy: 3)
+                if j < line.endIndex, line[j] == "-" { j = line.index(after: j) }
+                if line[j...].allSatisfy({ $0 == " " || $0 == "\t" }) {
+                    tokens.append(Token(range: i..<line.endIndex, kind: .string))
+                    state = .textBlock(indent: nil)
+                    i = line.endIndex
+                    break
+                }
+            }
+
+            if rules.verbatimStrings, c == "@" {
+                let quoteIndex = line.index(after: i)
+                if quoteIndex < line.endIndex, rules.quotes.contains(line[quoteIndex]) {
+                    let start = i
+                    i = line.index(after: quoteIndex)
+                    scanVerbatimString(line, from: &i, quote: line[quoteIndex], rules: rules,
+                                       state: &state)
+                    tokens.append(Token(range: start..<i, kind: .string))
+                    continue
+                }
+            }
+
+            if rules.quotes.contains(c) {
                 let start = i
                 var triple = false
-                if rules.tripleQuotes || rules.tripleOnlyQuotes.contains(c), tripled {
+                if rules.tripleQuotes, matches(line, at: i, String(repeating: c, count: 3)) {
                     triple = true
                     i = line.index(i, offsetBy: 3)
                 } else {
@@ -251,7 +290,8 @@ enum CodeHighlight {
                     tokens.append(Token(range: start..<j, kind: .keyword))
                 } else if rules.typesByCase, c.isUppercase {
                     tokens.append(Token(range: start..<j, kind: .type))
-                } else if rules.fieldNames, fieldColonFollows(line, at: j) {
+                } else if rules.fieldNames, fieldStartPrecedes(line, at: start),
+                          fieldColonFollows(line, at: j) {
                     tokens.append(Token(range: start..<j, kind: .type))
                 }
                 i = j
@@ -278,6 +318,20 @@ enum CodeHighlight {
     // and yaml keeps its own reading.
     private static func hashCommentStarts(_ line: Substring, at i: String.Index) -> Bool {
         i == line.startIndex || line[line.index(before: i)].isWhitespace
+    }
+
+    // A Jsonnet field name starts a line or comes right after the { or , before it. Other
+    // names followed by a colon are not fields: the condition in `assert ok : msg`, or
+    // the bound in a slice like `x[start:end]`.
+    private static func fieldStartPrecedes(_ line: Substring, at start: String.Index) -> Bool {
+        var i = start
+        while i > line.startIndex {
+            i = line.index(before: i)
+            let c = line[i]
+            if c == " " || c == "\t" { continue }
+            return c == "{" || c == ","
+        }
+        return true
     }
 
     // A Jsonnet field name is followed by :, :: or :::, or by +: and its kin when the
@@ -321,15 +375,11 @@ enum CodeHighlight {
                                    rules: Rules, state: inout State) {
         let escapes = !rules.rawQuotes.contains(quote)
         let terminator = String(repeating: quote, count: triple ? 3 : 1)
-        // A text block ends only at a line that starts with its |||, so a ||| inside
-        // the block's prose is still prose.
-        let closesAtLineStart = rules.tripleOnlyQuotes.contains(quote)
         while i < line.endIndex {
             if escapes, line[i] == "\\" {
                 i = line.index(after: i)
                 if i < line.endIndex { i = line.index(after: i) }
-            } else if matches(line, at: i, terminator),
-                      !closesAtLineStart || line[..<i].allSatisfy({ $0 == " " || $0 == "\t" }) {
+            } else if matches(line, at: i, terminator) {
                 i = line.index(i, offsetBy: terminator.count)
                 state = .normal
                 return
@@ -340,6 +390,52 @@ enum CodeHighlight {
         state = triple || rules.multilineQuotes.contains(quote)
             ? .string(quote: quote, triple: triple)
             : .normal
+    }
+
+    // Called with i just past the opening quote.
+    private static func scanVerbatimString(_ line: Substring, from i: inout String.Index,
+                                           quote: Character, rules: Rules, state: inout State) {
+        while i < line.endIndex {
+            guard line[i] == quote else {
+                i = line.index(after: i)
+                continue
+            }
+            i = line.index(after: i)
+            guard i < line.endIndex, line[i] == quote else {
+                state = .normal
+                return
+            }
+            i = line.index(after: i)
+        }
+        state = rules.multilineQuotes.contains(quote) ? .verbatimString(quote: quote) : .normal
+    }
+
+    // A text block ends at the first line indented less than its first line of text, and
+    // that line starts with the closing |||. A ||| at the body's own indent is still text.
+    private static func scanTextBlockLine(_ line: Substring, from i: inout String.Index,
+                                          indent: String?, state: inout State) {
+        let text = line.drop { $0 == " " || $0 == "\t" }
+        let lead = line[..<text.startIndex]
+        // Blank lines belong to the block whatever their indent.
+        if text.isEmpty {
+            i = line.endIndex
+            return
+        }
+        if let indent, line.hasPrefix(indent) {
+            i = line.endIndex
+            return
+        }
+        // Jsonnet needs the first line of text to be indented, and takes that indent for
+        // the whole block.
+        if indent == nil, !lead.isEmpty {
+            state = .textBlock(indent: String(lead))
+            i = line.endIndex
+            return
+        }
+        // A line that leaves the block without a ||| is broken code. Ending the block
+        // there still reads the rest of the file as code.
+        state = .normal
+        if text.hasPrefix("|||") { i = line.index(text.startIndex, offsetBy: 3) }
     }
 
     private static func scanNumber(_ line: Substring, from i: inout String.Index) {
@@ -404,7 +500,7 @@ enum CodeHighlight {
                 state = .tag
             }
             if start < i { tokens.append(Token(range: start..<i, kind: .string)) }
-        case .tag, .normal:
+        case .tag, .normal, .verbatimString, .textBlock:
             break
         }
 
@@ -474,9 +570,9 @@ enum CodeHighlight {
         var nestsBlockComments = false
         var quotes: [Character] = ["\""]
         var tripleQuotes = false
-        // Quotes that open a string only when tripled, like Jsonnet's ||| text blocks,
-        // where a lone | is still an operator.
-        var tripleOnlyQuotes: [Character] = []
+        // Jsonnet's ||| text blocks and @'...' verbatim strings.
+        var textBlocks = false
+        var verbatimStrings = false
         // Whether a # needs a word boundary to open a comment. Where # means nothing
         // else, as in Jsonnet, it opens one anywhere.
         var hashNeedsBoundary = true
@@ -538,17 +634,17 @@ enum CodeHighlight {
         quotes: ["\""],
         keywords: ["true", "false", "null"])
 
-    // A ||| text block is verbatim and runs until the closing |||, so its prose can hold
-    // apostrophes and backslashes without opening or escaping anything. Field names are
-    // coloured, as in the Grafana grammar for VS Code, because they carry the shape of
-    // the object the file builds.
+    // Jsonnet strings may run across lines, so both quotes are multi-line. Field names
+    // are coloured, as in the Grafana grammar for VS Code, because they carry the shape
+    // of the object the file builds.
     private static let jsonnetRules = Rules(
         lineComments: ["//", "#"],
         blockComment: ("/*", "*/"),
         quotes: ["\"", "'"],
-        tripleOnlyQuotes: ["|"],
+        textBlocks: true,
+        verbatimStrings: true,
         hashNeedsBoundary: false,
-        rawQuotes: ["|"],
+        multilineQuotes: ["\"", "'"],
         keywords: [
             "assert", "else", "error", "false", "for", "function", "if", "import",
             "importbin", "importstr", "in", "local", "null", "self", "super",
