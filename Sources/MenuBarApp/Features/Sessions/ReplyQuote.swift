@@ -19,8 +19,17 @@ enum ReplyQuote {
     }
 }
 
+// What Reply does with the text picked out of the transcript. Two are equal while they
+// quote into the same session, so the fresh closure each update brings does not redraw
+// every run of text in the transcript.
+struct TranscriptReply: Equatable {
+    let sessionID: UUID
+    let action: (String) -> Void
+
+    static func == (lhs: Self, rhs: Self) -> Bool { lhs.sessionID == rhs.sessionID }
+}
+
 extension EnvironmentValues {
-    // What Reply does with the text picked out of the transcript. Absent wherever there is
-    // no composer to take it, so the menu leaves the entry out there.
-    @Entry var transcriptReply: ((String) -> Void)? = nil
+    // Absent wherever there is no composer to take the quote, so the menu leaves Reply out there.
+    @Entry var transcriptReply: TranscriptReply? = nil
 }

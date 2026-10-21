@@ -879,7 +879,7 @@ struct SelectableText: View {
             openLink: openLink,
             linkHoverChanged: linkHoverChanged,
             showMenu: menus.map { menus in { entries, point in menus.show(entries, at: point) } },
-            reply: transcriptReply)
+            reply: transcriptReply?.action)
             // NSViewRepresentable does not pass NSTextView's baseline to SwiftUI.
             // The font metric keeps this text on the baseline of whatever it sits
             // beside, such as the marker on a list row.

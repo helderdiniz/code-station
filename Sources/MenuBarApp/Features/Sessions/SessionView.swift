@@ -1611,7 +1611,7 @@ struct SessionView: View {
         let state = runner.state(sessionID)
         let projectPath = store.workingDirectory(for: session) ?? ""
         let shape = transcriptShape(session, state: state)
-        let replyAction: ((String) -> Void)? = replies ? { reply($0) } : nil
+        let replyAction = replies ? TranscriptReply(sessionID: sessionID) { reply($0) } : nil
 
         return ScrollViewReader { proxy in
             ScrollView {
