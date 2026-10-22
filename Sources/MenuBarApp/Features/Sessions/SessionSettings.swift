@@ -654,6 +654,16 @@ struct RateLimit: Equatable, Sendable {
     // A fraction of the window that has been used. The CLI only sends it once a window
     // is far enough along to be worth warning about, so it is usually missing.
     var utilization: Double?
+    // Every window the account has, by kind, as the response headers of the turn read
+    // them. These come with each turn whatever the status, so they are what keeps a
+    // reading current between threshold warnings.
+    var windows: [String: Window] = [:]
+
+    struct Window: Equatable, Sendable {
+        // A fraction of the window that has been used.
+        var utilization: Double
+        var resetsAt: Date?
+    }
 
     var title: String {
         switch kind {

@@ -8,6 +8,8 @@ struct AccountUsageWindow: Equatable, Sendable, Identifiable {
     let title: String
     let usedPercent: Int
     let resetsAt: Date?
+    // What the window is called where a line is short, like a hint's row.
+    var shortTitle: String? = nil
 
     var usedFraction: Double { Double(usedPercent) / 100 }
 }
@@ -43,21 +45,44 @@ struct CodexUsage: Equatable, Sendable {
     private static func windows(in bucket: [String: Any], id: String) -> [AccountUsageWindow] {
         let title = (bucket["limitName"] as? String).flatMap { $0.isEmpty ? nil : $0 }
             ?? (id == "codex" ? "Current limit" : id.replacingOccurrences(of: "_", with: " ").capitalized)
+        // A hint's row has room for a word or two. The default limit goes by the length of
+        // its window when Codex gives it, and another model's limit leads with its name.
+        let isDefault = id == "codex"
         var windows: [AccountUsageWindow] = []
-        if let primary = window(bucket["primary"], id: "\(id)-primary", title: title) {
+        if let primary = window(bucket["primary"], id: "\(id)-primary", title: title,
+                                shortTitle: isDefault ? nil : title, fallback: "Limit") {
             windows.append(primary)
         }
-        if let secondary = window(bucket["secondary"], id: "\(id)-secondary", title: "\(title) - secondary") {
+        if let secondary = window(bucket["secondary"], id: "\(id)-secondary", title: "\(title) - secondary",
+                                  shortTitle: isDefault ? nil : title, fallback: "Second limit") {
             windows.append(secondary)
         }
         return windows
     }
 
-    private static func window(_ raw: Any?, id: String, title: String) -> AccountUsageWindow? {
+    private static func window(_ raw: Any?, id: String, title: String,
+                               shortTitle name: String?, fallback: String) -> AccountUsageWindow? {
         guard let raw = raw as? [String: Any], let usedPercent = integer(raw["usedPercent"]) else { return nil }
         let resetsAt = integer(raw["resetsAt"]).map { Date(timeIntervalSince1970: TimeInterval($0)) }
+        let duration = integer(raw["windowDurationMins"]).flatMap { Self.span(minutes: $0) }
+        let shortTitle = switch (name, duration) {
+        case (let name?, let duration?): "\(name) · \(duration)"
+        case (let name?, nil): name
+        case (nil, let duration?): duration
+        case (nil, nil): fallback
+        }
         return AccountUsageWindow(id: id, title: title,
-                                  usedPercent: min(100, max(0, usedPercent)), resetsAt: resetsAt)
+                                  usedPercent: min(100, max(0, usedPercent)), resetsAt: resetsAt,
+                                  shortTitle: shortTitle)
+    }
+
+    // How long a window runs, in a word: "5h", "Week".
+    static func span(minutes: Int) -> String? {
+        guard minutes > 0 else { return nil }
+        if minutes == 7 * 1_440 { return "Week" }
+        if minutes % 1_440 == 0 { return "\(minutes / 1_440)d" }
+        if minutes % 60 == 0 { return "\(minutes / 60)h" }
+        return "\(minutes)m"
     }
 
     private static func integer(_ value: Any?) -> Int? {

@@ -289,8 +289,16 @@ extension StreamEvent {
                   let kind = info["rateLimitType"] as? String,
                   let status = info["status"] as? String else { return [] }
             let resetsAt = (info["resetsAt"] as? Double).map(Date.init(timeIntervalSince1970:))
+            var windows: [String: RateLimit.Window] = [:]
+            for case let (name, raw as [String: Any]) in info["unifiedWindows"] as? [String: Any] ?? [:] {
+                guard let utilization = raw["utilization"] as? Double else { continue }
+                windows[name] = RateLimit.Window(
+                    utilization: utilization,
+                    resetsAt: (raw["resetsAt"] as? Double).map(Date.init(timeIntervalSince1970:)))
+            }
             return [.rateLimit(RateLimit(kind: kind, status: status, resetsAt: resetsAt,
-                                         utilization: info["utilization"] as? Double))]
+                                         utilization: info["utilization"] as? Double,
+                                         windows: windows))]
 
         case "result":
             // A failing turn still reports subtype "success" (a bad model, for example),

@@ -360,13 +360,17 @@ struct TooltipHost: View {
                                 .font(.mono(9, .semibold))
                                 .kerning(0.5)
                                 .foregroundStyle(.tertiary)
-                                .lineLimit(1)
+                                // A label too long for the row wraps rather than losing
+                                // the words that tell it apart from the next one.
+                                .lineLimit(2)
+                                .fixedSize(horizontal: false, vertical: true)
                             Spacer(minLength: 6)
                             Text(row.value)
                                 .font(.mono(10.5))
                                 .foregroundStyle(.secondary)
                                 .lineLimit(1)
                                 .truncationMode(.middle)
+                                .layoutPriority(1)
                         }
                     }
                 }
