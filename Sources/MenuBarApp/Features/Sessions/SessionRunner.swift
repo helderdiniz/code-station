@@ -26,6 +26,9 @@ final class SessionRunner {
     // account usage instead of allowing the last reporting CLI to replace the other.
     private(set) var rateLimits: [AgentKind: [String: RateLimit]] = [:]
     private(set) var rateLimitsUpdatedAt: [AgentKind: Date] = [:]
+    // Each event carries a snapshot of every window at the time it was sent, so only the
+    // newest one speaks for the account. Older events of another kind hold older snapshots.
+    private(set) var latestRateLimit: [AgentKind: RateLimit] = [:]
     // How many turns each agent has finished since launch. A finished turn is spend the
     // account's limits have not been read since, so this is what asks for a fresh read.
     private(set) var finishedTurns: [AgentKind: Int] = [:]
@@ -2015,6 +2018,7 @@ final class SessionRunner {
 
             case .rateLimit(let limit):
                 rateLimits[turn.agent, default: [:]][limit.kind] = limit
+                latestRateLimit[turn.agent] = limit
                 rateLimitsUpdatedAt[turn.agent] = Date()
 
             case .usage(let totals):

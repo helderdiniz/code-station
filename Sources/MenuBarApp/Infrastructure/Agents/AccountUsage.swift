@@ -116,8 +116,8 @@ final class AccountUsageMonitor {
 
     // What a running turn reports moves the reading on between reads, without a call of
     // its own.
-    func absorb(_ limits: [String: RateLimit], for agent: AgentKind) {
-        let live = Self.liveWindows(limits)
+    func absorb(_ limit: RateLimit, for agent: AgentKind) {
+        let live = Self.liveWindows(limit)
         guard !live.isEmpty else { return }
         usage[agent] = Self.merged(usage[agent], live: live, at: now())
     }
@@ -126,17 +126,13 @@ final class AccountUsageMonitor {
 
     // Claude Code reports the windows it read off the turn's responses. Only the windows
     // the usage endpoint also lists are taken, so both sources fill the same rows.
-    nonisolated static func liveWindows(_ limits: [String: RateLimit]) -> [AccountUsageWindow] {
+    nonisolated static func liveWindows(_ limit: RateLimit) -> [AccountUsageWindow] {
         var fractions: [String: RateLimit.Window] = [:]
-        for limit in limits.values {
-            if let utilization = limit.utilization {
-                fractions[limit.kind] = RateLimit.Window(utilization: utilization, resetsAt: limit.resetsAt)
-            }
+        if let utilization = limit.utilization {
+            fractions[limit.kind] = RateLimit.Window(utilization: utilization, resetsAt: limit.resetsAt)
         }
         // The headers speak for every window at once, so they win over a lone warning.
-        for limit in limits.values {
-            fractions.merge(limit.windows) { _, window in window }
-        }
+        fractions.merge(limit.windows) { _, window in window }
         return ClaudeUsage.kinds.compactMap { kind, title, shortTitle in
             fractions[kind].map {
                 AccountUsageWindow(id: kind, title: title,

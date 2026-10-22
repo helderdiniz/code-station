@@ -125,7 +125,7 @@ struct AccountUsageTests {
             utilization: 0.31, resetsAt: Date(timeIntervalSince1970: 1_792_249_200)))
         #expect(limit.windows["seven_day"]?.utilization == 0.12)
 
-        let live = AccountUsageMonitor.liveWindows([limit.kind: limit])
+        let live = AccountUsageMonitor.liveWindows(limit)
         #expect(live.map(\.id) == ["five_hour", "seven_day"])
         #expect(live.map(\.usedPercent) == [31, 12])
     }
@@ -143,6 +143,21 @@ struct AccountUsageTests {
         #expect(merged.windows.map(\.id) == ["five_hour", "seven_day", "seven_day_sonnet"])
         #expect(merged.windows.map(\.usedPercent) == [26, 11, 4])
         #expect(merged.checkedAt == Date(timeIntervalSince1970: 5))
+    }
+
+    @MainActor
+    @Test func anOlderEventDoesNotUndoANewerOne() {
+        let monitor = AccountUsageMonitor(sources: [])
+        let earlierWarning = RateLimit(kind: "seven_day", status: "allowed_warning", resetsAt: nil,
+                                       utilization: 0.8,
+                                       windows: ["five_hour": .init(utilization: 0.9, resetsAt: nil),
+                                                 "seven_day": .init(utilization: 0.8, resetsAt: nil)])
+        let later = RateLimit(kind: "five_hour", status: "allowed", resetsAt: nil, utilization: nil,
+                              windows: ["five_hour": .init(utilization: 0.1, resetsAt: nil),
+                                        "seven_day": .init(utilization: 0.82, resetsAt: nil)])
+        monitor.absorb(earlierWarning, for: .claudeCode)
+        monitor.absorb(later, for: .claudeCode)
+        #expect(monitor.usage[.claudeCode]?.windows.map(\.usedPercent) == [10, 82])
     }
 
     // MARK: - The pill

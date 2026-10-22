@@ -449,7 +449,7 @@ struct AgentSettingsView: View {
                 signedIn: claude.account != nil,
                 plan: claude.account?.plan,
                 usage: usageMonitor?.usage[.claudeCode]?.windows
-                    ?? AccountUsageMonitor.liveWindows(runner.rateLimits[.claudeCode] ?? [:]),
+                    ?? runner.latestRateLimit[.claudeCode].map(AccountUsageMonitor.liveWindows) ?? [],
                 usageCheckedAt: usageMonitor?.usage[.claudeCode]?.checkedAt
                     ?? runner.rateLimitsUpdatedAt[.claudeCode],
                 usageLoading: usageMonitor?.usage[.claudeCode] == nil

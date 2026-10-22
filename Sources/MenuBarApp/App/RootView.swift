@@ -148,7 +148,9 @@ struct RootView: View {
             // Only Claude's own report counts: another agent's would merge Claude's older
             // windows back over a newer read of the account.
             .onChange(of: runner.rateLimitsUpdatedAt[.claudeCode]) { _, _ in
-                accountUsage.absorb(runner.rateLimits[.claudeCode] ?? [:], for: .claudeCode)
+                if let limit = runner.latestRateLimit[.claudeCode] {
+                    accountUsage.absorb(limit, for: .claudeCode)
+                }
             }
             .task(id: skillsRefreshRule) { await refreshSkillsAutomatically() }
             .task(id: sweepRule) { await deleteOldSessionsAutomatically() }
