@@ -1,0 +1,30 @@
+name: Tests
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: macos-26
+    timeout-minutes: 30
+    env:
+      SWIFTPM_MODULECACHE_OVERRIDE: /private/tmp/code-station-ci-module-cache
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Test
+        run: >-
+          swift test --build-system native --disable-sandbox --no-parallel
+          --cache-path /private/tmp/teya-swiftpm-cache
+          --config-path /private/tmp/code-station-ci-configuration
+          --security-path /private/tmp/code-station-ci-security

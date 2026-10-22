@@ -1,0 +1,488 @@
+import SwiftUI
+
+// Central palette and small style helpers so the whole UI reads as one system.
+enum Theme {
+    // Text falls through to SwiftUI's adaptive colours, so a surface that stays light in
+    // dark mode leaves white text on a white card. Values are Lemonade's neutral tokens.
+    static func isDark(_ appearance: NSAppearance) -> Bool {
+        appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+    }
+
+    static func adaptiveNSColor(light: NSColor,
+                                dark: NSColor) -> NSColor {
+        NSColor(name: nil) { isDark($0) ? dark : light }
+    }
+
+    static func adaptive(light: NSColor,
+                         dark: NSColor) -> Color {
+        Color(nsColor: adaptiveNSColor(light: light, dark: dark))
+    }
+
+    // The canvas a pane sits on. The sidebar is a shade under it and a card a shade over
+    // it, so the three surfaces separate without a single line between them.
+    static let canvasLightNSColor = NSColor(srgbRed: 0.961, green: 0.953, blue: 0.929, alpha: 1)
+    static let canvasDarkNSColor = NSColor(srgbRed: 0.082, green: 0.082, blue: 0.075, alpha: 1)
+    static let backgroundNSColor = adaptiveNSColor(light: canvasLightNSColor,
+                                                   dark: canvasDarkNSColor)
+    static let background = Color(nsColor: backgroundNSColor)
+    static let sidebar = adaptive(
+        light: NSColor(srgbRed: 0.937, green: 0.929, blue: 0.898, alpha: 1),
+        dark: NSColor(srgbRed: 0.067, green: 0.067, blue: 0.062, alpha: 1))
+    static let card = adaptive(
+        light: NSColor(srgbRed: 1, green: 0.992, blue: 0.965, alpha: 1),
+        dark: NSColor(srgbRed: 0.125, green: 0.122, blue: 0.114, alpha: 1))
+    static let secondaryText = adaptive(
+        light: NSColor(srgbRed: 106.0 / 255, green: 108.0 / 255, blue: 96.0 / 255, alpha: 1),
+        dark: .secondaryLabelColor)
+    static let field = adaptive(
+        light: NSColor(srgbRed: 0.102, green: 0.102, blue: 0.082, alpha: 0.05),
+        dark: NSColor(srgbRed: 1, green: 1, blue: 1, alpha: 0.05))
+    // The quieter fill under a row inside a card, where `field` would read as a control.
+    static let sunken = adaptive(
+        light: NSColor(srgbRed: 0.102, green: 0.102, blue: 0.082, alpha: 0.035),
+        dark: NSColor(srgbRed: 1, green: 1, blue: 1, alpha: 0.035))
+
+    // Filled controls stay deep enough for white labels. The adaptive accent is used on
+    // surfaces, where the same deep green would not have enough contrast in dark mode.
+    static let accentFill = Color(red: 0.184, green: 0.290, blue: 0.200)
+    static let accentNSColor = adaptiveNSColor(
+        light: NSColor(srgbRed: 0.184, green: 0.290, blue: 0.200, alpha: 1),
+        dark: NSColor(srgbRed: 0.58, green: 0.76, blue: 0.60, alpha: 1))
+    static let accent = Color(nsColor: accentNSColor)
+    static let dotOn = Color(red: 0.243, green: 0.478, blue: 0.275)
+    // The same green read as words on a green band, lifted in dark mode where the light
+    // itself sinks into the band behind it.
+    static let dotOnText = adaptive(
+        light: NSColor(srgbRed: 0.243, green: 0.478, blue: 0.275, alpha: 1),
+        dark: NSColor(srgbRed: 0.49, green: 0.72, blue: 0.52, alpha: 1))
+    static let dotOff = Color(red: 0.66, green: 0.66, blue: 0.63)
+    static let secret = Color(red: 0.72, green: 0.52, blue: 0.20)
+    // Something has stopped and is waiting to be looked at, as opposed to the green of
+    // something running on its own.
+    static let attention = Color(red: 0.788, green: 0.545, blue: 0.118)
+    // The same amber read as words rather than as a light, which has to carry on a
+    // pale card.
+    static let attentionText = adaptive(
+        light: NSColor(srgbRed: 0.541, green: 0.365, blue: 0.063, alpha: 1),
+        dark: NSColor(srgbRed: 0.90, green: 0.72, blue: 0.36, alpha: 1))
+
+    // An agent that only reads and proposes. Blue sits apart from the green, plain and
+    // amber of the levels that let it act, so a session that can change nothing is never
+    // mistaken for one that can. WarningContrastTests measures it on its own tint.
+    static let plan = adaptive(
+        light: NSColor(srgbRed: 0.190, green: 0.380, blue: 0.620, alpha: 1),
+        dark: NSColor(srgbRed: 0.498, green: 0.659, blue: 0.871, alpha: 1))
+
+    // A Design session set to go all out. Violet is the project wheel's ink, kept clear of
+    // the green, amber, blue and red the shield beside it uses to mean trust levels. The
+    // dark side is lifted until the pill's words read on its own tint.
+    static let showcase = adaptive(
+        light: NSColor(srgbRed: 0.361, green: 0.200, blue: 0.588, alpha: 1),
+        dark: NSColor(srgbRed: 0.690, green: 0.522, blue: 0.969, alpha: 1))
+
+    // The mark on anything the app itself owns: the brand tile, and Home wherever it
+    // needs a colour of its own.
+    static let brand = Color(red: 0.867, green: 0.878, blue: 0.282)
+
+    // The app listening through the microphone. Dictation is the app's own feature, so it
+    // wears the brand lime, kept apart from the green of an agent at work, the red of a
+    // turn that can be stopped and the amber of something waiting. Lime is only on screen
+    // while the app is listening, so it always means the microphone is open.
+    // WarningContrastTests measures the inks on their surfaces.
+    static let listenFill = brand
+    // Ink on the lime fill, which is the same lime in both appearances.
+    static let listenOnFill = Color(red: 0.173, green: 0.176, blue: 0.031)
+    // Words on the pale lime tint of the notice row.
+    static let listenInk = adaptive(
+        light: NSColor(srgbRed: 0.353, green: 0.365, blue: 0.071, alpha: 1),
+        dark: NSColor(srgbRed: 0.871, green: 0.882, blue: 0.420, alpha: 1))
+    static let listenTint = adaptive(
+        light: NSColor(srgbRed: 0.867, green: 0.878, blue: 0.282, alpha: 0.22),
+        dark: NSColor(srgbRed: 0.867, green: 0.878, blue: 0.282, alpha: 0.14))
+    static let listenEdgeNSColor = adaptiveNSColor(
+        light: NSColor(srgbRed: 0.520, green: 0.530, blue: 0.070, alpha: 1),
+        dark: NSColor(srgbRed: 0.800, green: 0.812, blue: 0.259, alpha: 1))
+    static let listenEdge = Color(nsColor: listenEdgeNSColor)
+    static let listenGlow = brand.opacity(0.38)
+
+    static let botStage = Color(red: 0.075, green: 0.463, blue: 0.459)
+    static let botSelection = adaptive(
+        light: NSColor(srgbRed: 0.898, green: 0.922, blue: 0.855, alpha: 1),
+        dark: NSColor(srgbRed: 0.188, green: 0.243, blue: 0.161, alpha: 1))
+
+    // Leaf, one of the colours a person's own messages can wear (see MessageColour). It
+    // is the brand yellow taken most of the way to a leaf green.
+    static let userMessage = adaptive(
+        light: NSColor(srgbRed: 0.902, green: 0.914, blue: 0.784, alpha: 1),
+        dark: NSColor(srgbRed: 0.180, green: 0.196, blue: 0.129, alpha: 1))
+    static let userMessageRing = Color(red: 0.471, green: 0.502, blue: 0.196).opacity(0.3)
+
+    // Diff colours, shared by the changes screen, the chat's edit cards, and the
+    // +N / -N counters everywhere.
+    static let addition = adaptive(
+        light: NSColor(srgbRed: 0.184, green: 0.420, blue: 0.227, alpha: 1),
+        dark: NSColor(srgbRed: 0.612, green: 0.769, blue: 0.416, alpha: 1))
+    static let deletion = adaptive(
+        light: NSColor(srgbRed: 0.639, green: 0.239, blue: 0.188, alpha: 1),
+        dark: NSColor(srgbRed: 0.851, green: 0.388, blue: 0.357, alpha: 1))
+
+    // A surface that carries a warning: a failed turn, a stalled agent, a configuration
+    // that could not be read. Both halves are adaptive, and WarningContrastTests measures
+    // the pair in each appearance, so anything drawing a warning must use these rather
+    // than its own colours.
+    static let warningText = adaptive(
+        light: NSColor(srgbRed: 0.55, green: 0.20, blue: 0.16, alpha: 1),
+        dark: NSColor(srgbRed: 0.95, green: 0.64, blue: 0.56, alpha: 1))
+    static let warningBackground = adaptive(
+        light: NSColor(srgbRed: 0.98, green: 0.90, blue: 0.88, alpha: 1),
+        dark: NSColor(srgbRed: 0.22, green: 0.11, blue: 0.10, alpha: 1))
+
+    // The terminal a command's output is read in. Dark in both appearances, so a command
+    // reads as a shell would print it rather than as another card, and so the same run of
+    // text looks the same whichever appearance the reader is in.
+    static let terminal = adaptive(
+        light: NSColor(srgbRed: 0.169, green: 0.173, blue: 0.149, alpha: 1),
+        dark: NSColor(srgbRed: 0.051, green: 0.055, blue: 0.047, alpha: 1))
+    static let terminalText = adaptive(
+        light: NSColor(srgbRed: 0.925, green: 0.914, blue: 0.867, alpha: 1),
+        dark: NSColor(srgbRed: 0.894, green: 0.886, blue: 0.847, alpha: 1))
+    static let terminalDim = adaptive(
+        light: NSColor(srgbRed: 0.612, green: 0.608, blue: 0.573, alpha: 1),
+        dark: NSColor(srgbRed: 0.545, green: 0.541, blue: 0.510, alpha: 1))
+    // The output of a command that failed. Lighter than `deletion`, which would sink into
+    // the dark surface; WarningContrastTests measures it there.
+    static let terminalFailure = adaptive(
+        light: NSColor(srgbRed: 0.886, green: 0.541, blue: 0.494, alpha: 1),
+        dark: NSColor(srgbRed: 0.851, green: 0.388, blue: 0.357, alpha: 1))
+
+    static let border = adaptive(
+        light: NSColor(srgbRed: 0.46, green: 0.42, blue: 0.34, alpha: 0.1),
+        dark: NSColor(srgbRed: 1, green: 1, blue: 1, alpha: 0.1))
+    static let hairline = adaptive(
+        light: NSColor(srgbRed: 0.46, green: 0.42, blue: 0.34, alpha: 0.06),
+        dark: NSColor(srgbRed: 1, green: 1, blue: 1, alpha: 0.06))
+    static let settingsBorder = adaptive(
+        light: NSColor(srgbRed: 0.46, green: 0.42, blue: 0.34, alpha: 0.18),
+        dark: NSColor(srgbRed: 1, green: 1, blue: 1, alpha: 0.14))
+    static let settingsHairline = adaptive(
+        light: NSColor(srgbRed: 0.46, green: 0.42, blue: 0.34, alpha: 0.10),
+        dark: NSColor(srgbRed: 1, green: 1, blue: 1, alpha: 0.08))
+
+    // The band across the top of a pane or sheet. Every one of them is exactly this tall.
+    // Grown from padding instead, each band ends up the height of whatever text it happens
+    // to hold, and the rules closing two bands that sit side by side land a few points
+    // apart.
+    static let headerHeight: CGFloat = 60
+
+    // A band that sits under one of those rather than at the top of a pane. It is shorter
+    // so the two read as a heading and its sub-heading instead of two headings.
+    static let subHeaderHeight: CGFloat = 48
+
+    // The line of state under a header: a shade off both the card above it and the canvas
+    // below, so it reads as a footnote to the heading rather than a band of its own.
+    static let statusBand = adaptive(
+        light: NSColor(srgbRed: 0.945, green: 0.937, blue: 0.910, alpha: 1),
+        dark: NSColor(srgbRed: 0.102, green: 0.102, blue: 0.094, alpha: 1))
+    static let statusBandHeight: CGFloat = 30
+
+    // A project's colour, used everywhere the project appears: its sidebar tile, the rail
+    // under its expanded sessions, and the square dot beside its name on every other
+    // screen. The tile is the colour at a low alpha behind the darker ink, which is what
+    // keeps a full column of them legible.
+    struct ProjectTint {
+        let colour: Color
+        let ink: Color
+
+        var fill: Color { colour.opacity(0.15) }
+        var ring: Color { colour.opacity(0.3) }
+
+        // Draws nothing, for holding a place in a column beside rows that do carry a
+        // colour.
+        static let blank = ProjectTint(colour: .clear, ink: .clear)
+    }
+
+    private static func tint(_ colour: (Double, Double, Double),
+                             _ ink: (Double, Double, Double)) -> ProjectTint {
+        // The ink is picked to carry on a pale tile, so in dark mode the tile is dark and
+        // the glyph has to come back up to the colour itself.
+        ProjectTint(colour: Color(red: colour.0, green: colour.1, blue: colour.2),
+                    ink: adaptive(light: NSColor(srgbRed: ink.0, green: ink.1, blue: ink.2, alpha: 1),
+                                  dark: NSColor(srgbRed: colour.0, green: colour.1, blue: colour.2,
+                                                alpha: 1)))
+    }
+
+    // Picked from the name so a project keeps the same colour between launches, which is
+    // what makes the tile readable as an identity rather than decoration. They walk the
+    // whole colour wheel rather than staying near the rest of the palette, because two
+    // projects sitting next to each other have to be told apart at a glance.
+    private static let projectTints = [
+        tint((0.184, 0.498, 0.851), (0.118, 0.329, 0.576)),
+        tint((0.337, 0.380, 0.851), (0.212, 0.247, 0.600)),
+        tint((0.541, 0.333, 0.851), (0.361, 0.200, 0.588)),
+        tint((0.737, 0.267, 0.737), (0.514, 0.184, 0.514)),
+        tint((0.851, 0.239, 0.467), (0.600, 0.145, 0.310)),
+        tint((0.851, 0.251, 0.184), (0.588, 0.161, 0.114)),
+        tint((0.878, 0.416, 0.122), (0.620, 0.282, 0.071)),
+        tint((0.851, 0.604, 0.043), (0.576, 0.404, 0.039)),
+        tint((0.631, 0.416, 0.239), (0.431, 0.271, 0.137)),
+        tint((0.549, 0.651, 0.075), (0.361, 0.431, 0.039)),
+        tint((0.184, 0.639, 0.333), (0.114, 0.431, 0.220)),
+        tint((0.071, 0.627, 0.659), (0.043, 0.420, 0.439))
+    ]
+
+    // A workspace is not one repository, so it sits outside the project wheel on the
+    // olive the rest of the app uses for a group.
+    static let workspaceTint = tint((0.494, 0.541, 0.243), (0.353, 0.392, 0.145))
+
+    // Hashed rather than summed: summing the scalars would be stable across launches too,
+    // but it lands names built from the same letters on the same tint, which is most of a
+    // project list.
+    static func projectTint(for name: String) -> ProjectTint {
+        projectTints[Int(StableHash.fnv1a(name) % UInt64(projectTints.count))]
+    }
+
+    static func monogram(for name: String) -> Color { projectTint(for: name).ink }
+
+    // The eight series slots a chart draws from, in a fixed order: the first series in a
+    // chart takes slot one, the second slot two, and so on. They are the project wheel
+    // above stepped for each surface, leaving out red and amber so a series can never be
+    // mistaken for `deletion` or `attention`.
+    //
+    // The order is not decoration. Neighbouring slots are the pair a reader has to tell
+    // apart, so the order was picked to push the worst neighbouring pair as far apart as
+    // possible under red-green colour blindness: the worst pair is 23 apart in light mode
+    // and 22 in dark, against a floor of 8, and every slot clears 3:1 against the card it
+    // sits on. Changing a value, the order, or the card colour means measuring again.
+    static let chartSeries: [Color] = [
+        chartSlot(light: (0.184, 0.498, 0.851), dark: (0.271, 0.580, 0.941)),
+        chartSlot(light: (0.878, 0.416, 0.122), dark: (0.882, 0.420, 0.129)),
+        chartSlot(light: (0.737, 0.267, 0.737), dark: (0.824, 0.349, 0.820)),
+        chartSlot(light: (0.514, 0.612, 0.000), dark: (0.525, 0.624, 0.000)),
+        chartSlot(light: (0.337, 0.380, 0.851), dark: (0.420, 0.478, 0.961)),
+        chartSlot(light: (0.184, 0.639, 0.333), dark: (0.227, 0.671, 0.365)),
+        chartSlot(light: (0.541, 0.333, 0.851), dark: (0.635, 0.431, 0.961)),
+        chartSlot(light: (0.643, 0.412, 0.216), dark: (0.745, 0.502, 0.310)),
+    ]
+
+    private static func chartSlot(light: (Double, Double, Double),
+                                  dark: (Double, Double, Double)) -> Color {
+        adaptive(light: NSColor(srgbRed: light.0, green: light.1, blue: light.2, alpha: 1),
+                 dark: NSColor(srgbRed: dark.0, green: dark.1, blue: dark.2, alpha: 1))
+    }
+
+    // Axis furniture sits one step off the surface so it never competes with the data.
+    static let chartGrid = adaptive(
+        light: NSColor(srgbRed: 0.102, green: 0.102, blue: 0.082, alpha: 0.10),
+        dark: NSColor(srgbRed: 1, green: 1, blue: 1, alpha: 0.10))
+
+    // Drawn by AppKit around the focused terminal, so it is an NSColor rather than a
+    // SwiftUI one.
+    static let focusRing = adaptiveNSColor(
+        light: NSColor(srgbRed: 0.20, green: 0.34, blue: 0.24, alpha: 0.22),
+        dark: NSColor(srgbRed: 0.58, green: 0.76, blue: 0.60, alpha: 0.32))
+}
+
+extension View {
+    // Lays a header out as a band of the shared height and draws the rule that closes it,
+    // along with anything else the band wants along that edge. The rule belongs to the
+    // band rather than sitting next to it, so a header cannot be given one twice or left
+    // without one.
+    //
+    // Every line is drawn under the row rather than over it. A row sits well clear of the
+    // bottom edge, so nothing is lost by it, and a card or menu hanging off the band no
+    // longer has the band's own lines running across its top.
+    func headerBand<Bottom: View>(_ background: Color = Theme.card,
+                                  height: CGFloat = Theme.headerHeight,
+                                  @ViewBuilder bottom: () -> Bottom) -> some View {
+        frame(maxWidth: .infinity, alignment: .leading)
+            .frame(height: height)
+            .background(alignment: .bottom) {
+                ZStack(alignment: .bottom) {
+                    background
+                    Rectangle()
+                        .fill(Theme.hairline)
+                        .frame(height: 1)
+                    bottom()
+                }
+            }
+    }
+
+    func headerBand(_ background: Color = Theme.card,
+                    height: CGFloat = Theme.headerHeight) -> some View {
+        headerBand(background, height: height) { EmptyView() }
+    }
+
+    // The strip of state that sits under a header. It takes the side padding of the band
+    // above it, so the first reading lines up with the name it describes.
+    func statusBand(padding: CGFloat) -> some View {
+        self.padding(.horizontal, padding)
+            .headerBand(Theme.statusBand, height: Theme.statusBandHeight)
+    }
+
+    // A fill with a hairline around it, which is how every card, field and pill in the
+    // app is drawn. Naming the pair keeps the stroke from being forgotten or doubled.
+    func surface(_ fill: Color, cornerRadius: CGFloat, border: Color = Theme.border) -> some View {
+        background(RoundedRectangle(cornerRadius: cornerRadius).fill(fill))
+            .overlay(RoundedRectangle(cornerRadius: cornerRadius).stroke(border))
+    }
+
+    func cardSurface(cornerRadius: CGFloat = 10) -> some View {
+        surface(Theme.card, cornerRadius: cornerRadius)
+    }
+
+    func fieldSurface(cornerRadius: CGFloat = 8) -> some View {
+        surface(Theme.field, cornerRadius: cornerRadius)
+    }
+
+    // A card lifted off the window: what a menu, a hint or a dialog floats on. One
+    // shadow for all of them, so they read as the same kind of thing.
+    func floatingCard(cornerRadius: CGFloat = 10) -> some View {
+        cardSurface(cornerRadius: cornerRadius)
+            .shadow(color: .black.opacity(0.16), radius: 18, y: 6)
+    }
+}
+
+extension Font {
+    static func serif(_ size: CGFloat, _ weight: Font.Weight = .semibold) -> Font {
+        .system(size: size, weight: weight, design: .serif)
+    }
+    static func mono(_ size: CGFloat, _ weight: Font.Weight = .regular) -> Font {
+        .system(size: size, weight: weight, design: .monospaced)
+    }
+    // The wordmark's own face, so the name next to the mark stays the same shape on any
+    // machine. Weight is a point on the axis, not a Font.Weight, because the file is a
+    // single variable font.
+    static func logo(_ size: CGFloat, weight: Double = 600) -> Font {
+        guard SoraFont.isRegistered,
+              let font = NSFont(descriptor: SoraFont.descriptor(weight: weight), size: size)
+        else { return .system(size: size, weight: .semibold) }
+        return Font(font)
+    }
+}
+
+// The reading sizes, which follow the size the user picked rather than being fixed like
+// the rest of the type. They are modifiers instead of Font values because the point size
+// they land on comes from the environment, and a modifier can read that where the view
+// holding it would otherwise need a property of its own.
+private struct ScaledFont: ViewModifier {
+    @Environment(\.textScale) private var scale
+
+    let size: CGFloat
+    let weight: Font.Weight
+    let design: Font.Design
+
+    func body(content: Content) -> some View {
+        content.font(.system(size: size * scale, weight: weight, design: design))
+    }
+}
+
+extension View {
+    func scaledText(_ size: CGFloat, _ weight: Font.Weight = .regular) -> some View {
+        modifier(ScaledFont(size: size, weight: weight, design: .default))
+    }
+
+    func scaledMono(_ size: CGFloat, _ weight: Font.Weight = .regular) -> some View {
+        modifier(ScaledFont(size: size, weight: weight, design: .monospaced))
+    }
+
+    func scaledSerif(_ size: CGFloat, _ weight: Font.Weight = .semibold) -> some View {
+        modifier(ScaledFont(size: size, weight: weight, design: .serif))
+    }
+}
+
+// Sora ships with the app instead of coming from the system, so Core Text has to be told
+// about the file before anything can ask for the family by name.
+private enum SoraFont {
+    // The name the file itself carries. Its named weights are separate faces that the
+    // variation axis picks between, so they are not asked for by name.
+    private static let family = "Sora-Regular"
+    private static let weightAxis = 0x77676874  // 'wght'
+
+    static let isRegistered: Bool = {
+        guard let url = AppResources.bundle.url(forResource: "Sora-Variable", withExtension: "ttf")
+        else { return false }
+        return CTFontManagerRegisterFontsForURL(url as CFURL, .process, nil)
+    }()
+
+    static func descriptor(weight: Double) -> NSFontDescriptor {
+        NSFontDescriptor(fontAttributes: [
+            .name: family,
+            NSFontDescriptor.AttributeName(kCTFontVariationAttribute as String): [weightAxis: weight]
+        ])
+    }
+}
+
+// What a pane says when it has nothing to show: no changes, no file picked, a folder that
+// is not there any more. Centred in whatever room it is given.
+struct PaneMessage<Action: View>: View {
+    let icon: String
+    let title: String
+    var detail: String
+    var mono = false
+    // An empty pane that names a way out should offer it here, so the sentence and the
+    // button that carries it out are read in one place.
+    @ViewBuilder let action: Action
+
+    init(icon: String, title: String, detail: String, mono: Bool = false,
+         @ViewBuilder action: () -> Action) {
+        self.icon = icon
+        self.title = title
+        self.detail = detail
+        self.mono = mono
+        self.action = action()
+    }
+
+    var body: some View {
+        VStack(spacing: 8) {
+            Image(systemName: icon)
+                .font(.system(size: 26, weight: .light))
+                .foregroundStyle(.secondary)
+            Text(title).font(.serif(17, .semibold))
+            if !detail.isEmpty {
+                Text(detail)
+                    .font(mono ? .mono(11) : .system(size: 13))
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .textSelection(.enabled)
+                    .frame(maxWidth: 420)
+            }
+            action
+        }
+        .padding(40)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+extension PaneMessage where Action == EmptyView {
+    init(icon: String, title: String, detail: String, mono: Bool = false) {
+        self.init(icon: icon, title: title, detail: detail, mono: mono) { EmptyView() }
+    }
+}
+
+struct UpdateIndicator: View {
+    var body: some View {
+        Circle()
+            .fill(Theme.deletion)
+            .frame(width: 7, height: 7)
+            .accessibilityLabel("Update available")
+    }
+}
+
+// How full something is, from a rate limit window to a context window. It takes the width
+// it is given, so the caller decides whether it is a full-width bar or a small inline one.
+struct Meter: View {
+    let fraction: Double
+    let colour: Color
+    var height: CGFloat = 6
+
+    var body: some View {
+        GeometryReader { geometry in
+            ZStack(alignment: .leading) {
+                Capsule().fill(Theme.field)
+                Capsule().fill(colour)
+                    .frame(width: max(2, geometry.size.width * min(1, max(0, fraction))))
+            }
+        }
+        .frame(height: height)
+    }
+}

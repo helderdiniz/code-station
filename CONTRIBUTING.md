@@ -44,7 +44,7 @@ swift test --build-system native --disable-sandbox --no-parallel --filter GitAct
 
 Run the suite serially because the AppKit, WebKit, process, and preference fixtures share host resources. The native build system avoids requiring the separate Metal shader toolchain.
 
-Tests live in `Tests/MenuBarAppTests`. They cover session and transcript behavior, CLI stream parsing, Git and worktree operations, terminal and PTY integration, file browsing, Dispatch and OAuth flows, skills, settings, persistence, and UI-facing presentation logic.
+Pull requests and pushes to `main` run the suite on macOS. Tests live in `Tests/MenuBarAppTests`. They cover session and transcript behavior, CLI stream parsing, Git and worktree operations, terminal and PTY integration, file browsing, Dispatch and OAuth flows, skills, settings, persistence, and UI-facing presentation logic.
 
 Live background-task tests are opt-in because they use the installed agents and their signed-in accounts. They start `sleep 600`, send a follow-up, and cancel the task. Set `CODE_STATION_LIVE_AGENT_TESTS=1` and filter to `AgentSessionLiveTests`; optionally set `CODE_STATION_LIVE_AGENT=codex` or `copilot` to test only one. Codex uses an account-advertised model for this disposable test. Normal test runs use protocol fixtures and make no model calls.
 
@@ -52,14 +52,15 @@ Add tests for behavior and business logic. Trivial view wiring, accessors, and f
 
 ## Project structure
 
-- `Package.swift` defines the macOS executable and test targets.
-- `Sources/MenuBarApp/MenuBarApp.swift` creates the application window and shared services.
-- `Sources/MenuBarApp/RootView.swift` owns the top-level navigation and tool sheets.
-- `Sources/MenuBarApp/Projects` contains projects, workspaces, sessions, Git support, the chat UI, the file explorer, and transcript persistence.
-- `Sources/MenuBarApp/Terminal` contains the PTY-backed terminal and SwiftTerm integration.
-- `Sources/MenuBarApp/Dispatch` contains saved HTTP requests, environments, OAuth, and response handling.
-- The remaining files in `Sources/MenuBarApp` contain MCP, skills, Docker, local AI, settings, logging, and shared UI components.
-- `Tests/MenuBarAppTests` mirrors the main behaviors with unit and integration tests.
+- `Package.swift` defines one macOS executable target and one test target.
+- `Sources/MenuBarApp/App` creates the window, owns shared service lifetimes, and composes the main navigation.
+- `Sources/MenuBarApp/Features` groups each feature's views and behavior: Projects, Sessions, Changes, Explorer, Design, Tasks, Home, Settings, MCP, Skills, Dispatch, Terminal, MobileAccess, Shortcuts, Docker, and Troubleshoot.
+- `Sources/MenuBarApp/Infrastructure` contains agent protocols, Git operations, persistence, process execution, and system integration.
+- `Sources/MenuBarApp/DesignSystem` contains the palette, typography, controls, layout components, and motion.
+- `Sources/MenuBarApp/Resources` contains bundled assets, including the mobile page's HTML, CSS, and JavaScript.
+- `Tests/MenuBarAppTests` follows the same folders. Shared fixtures live in `Support`.
+
+Folders describe ownership within the existing Swift target. Put behavior beside the feature that owns it, and move a type into shared infrastructure only when its callers need that boundary. A view keeps focus, hover, and presentation state; its model owns asynchronous reads and operations.
 
 ## Site defaults
 
@@ -82,19 +83,23 @@ Keep organisation-specific hostnames, client IDs, and repository URLs in that fi
 
 A project is a reference to a folder on disk. A workspace is a reusable group of projects with one lead project. When a session starts, it records its own project paths and worktree choices so later workspace edits do not change an existing conversation.
 
-`SessionRunner` owns agent connections, turn execution, and the prompt queue. `SessionComposerStore` keeps unsent drafts and prompt-history cursors. `ReviewCommentStore` keeps the comments left on a session's changes until they are sent back as one prompt, and runs second opinions: a read-only `SecondOpinion` run of another agent whose findings arrive as more comments. `AgentLaunchConfiguration` resolves settings once and supplies both command-line arguments and server parameters, so prompt text cannot be interpreted as an access setting. `AgentInstructions` holds the app guidance sent to agents.
+`SessionRunner` owns agent connections, turn execution, cancellation, and the prompt queue. `AgentCatalog` owns executable availability, model discovery, and agent defaults. `SessionFollowUps` decides when to request titles, recaps, and prompt suggestions; summary turns still run through the runner’s queue. `SessionComposerStore` keeps unsent drafts and prompt-history cursors. `ReviewCommentStore` keeps the comments left on a session's changes until they are sent back as one prompt, and runs second opinions: a read-only `SecondOpinion` run of another agent whose findings arrive as more comments. `AgentLaunchConfiguration` resolves settings once and supplies both command-line arguments and server parameters, so prompt text cannot be interpreted as an access setting. `AgentInstructions` holds the app guidance sent to agents.
 
-The runner launches the selected agent in its own process group. Claude uses its streaming CLI protocol, Codex uses `app-server` JSON-RPC, and Copilot uses its headless server with Content-Length framing. The adapters normalize these protocols into shared `StreamEvent` values for the transcript and session state.
+The runner launches the selected agent in its own process group. Claude uses its streaming CLI protocol, Codex uses `app-server` JSON-RPC, and Copilot uses its headless server with Content-Length framing. The adapters normalize these protocols into shared `StreamEvent` values for the transcript and session state. `AgentMessageFramer` handles JSON lines and Content-Length frames, while `AgentRequestTracker` matches replies and tracks timeouts. Event mapping consumes decoded objects directly and ignores unknown event kinds.
 
 A server stays open while the agent has background work. Task lists are refreshed every five seconds while waiting, and Copilot also reports task changes. Follow-up messages use that same conversation. Ending the wait asks the agent to cancel its tasks before closing the process and cleaning up its process groups. The selected model, workspace roots, access limits, and disabled MCP servers carry into the server session. See [the persistent agent sessions decision](adr/0001-persistent-agent-sessions.md).
 
-Git worktree sessions use a checkout and branch owned by that session. Workspace sessions may create a separate worktree for each Git project. A session using a project folder edits that folder directly. Git inspection is kept separate from the commands that switch, commit, pull, and push.
+Git worktree sessions use a checkout and branch owned by that session. Workspace sessions may create a separate worktree for each Git project. A session using a project folder edits that folder directly. Git inspection is kept separate from the commands that switch, commit, pull, and push. `ChangesModel` owns repository, history, and diff loading, including generation checks that discard stale results. `ChangesView` owns selection, focus, and dialogs; review-list rendering has its own view.
+
+`ScheduledTaskService` starts and stops with the application. It advances schedules and publishes pending confirmations; `ScheduledTaskConfirmation` only presents the person’s choices.
 
 The terminal uses a real pseudo-terminal through SwiftTerm. Each tab owns its shell process and remains alive while the drawer is closed.
 
 ## Persistence and local processes
 
-`ProjectStore` owns projects, sessions, and transcript lifetime. `ProjectNavigation` keeps selection, history, and sidebar reveal state. `ProjectPersistence` serializes transcript reads, writes, and removals so a queued write cannot recreate a deleted conversation. Ordinary metadata edits and streamed replies save in the background. Operations that require confirmed durability wait for a save and retain their rollback behavior.
+`ProjectStore` owns projects, sessions, and transcript lifetime. `ProjectNavigation` keeps selection, history, and sidebar reveal state. `SessionAttention` tracks finished and marked-unread sessions. Navigation and agent defaults take an injected `UserDefaults` store; tests use disposable domains. `ProjectPersistence` serializes transcript reads, writes, and removals so a queued write cannot recreate a deleted conversation. Ordinary metadata edits and streamed replies save in the background. Operations that require confirmed durability wait for a save and retain their rollback behavior.
+
+`ReviewCommentStore` reports read and write failures through the storage banner. An unreadable review file blocks saves to the review files so it can be recovered. A failed write retains the in-memory edits and can be retried with `flush()`.
 
 App-owned data lives under:
 

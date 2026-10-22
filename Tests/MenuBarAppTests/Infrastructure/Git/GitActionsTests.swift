@@ -1,0 +1,823 @@
+import Foundation
+import Testing
+@testable import MenuBarApp
+
+// The git commands behind the changes screen's header: commit, switch, push and pull.
+// They act on the user's real repository, so each one is checked against a throwaway
+// repo rather than trusted to pass its arguments through correctly.
+struct GitActionsTests {
+
+    @Test func commitsEverythingInOneGo() async throws {
+        let repo = try GitRepo()
+        try repo.write("README.md", "changed")
+        try repo.write("notes.txt", "untracked too")
+
+        let error = await GitActions.commitAll(message: "Keep the lot", at: repo.path)
+        #expect(error == nil)
+
+        let after = await GitInspector.snapshot(at: repo.path)
+        #expect(after.files.isEmpty)
+    }
+
+    @Test func discardPutsAModifiedFileBack() async throws {
+        let repo = try GitRepo()
+        try repo.write("README.md", "changed")
+
+        let file = try #require(await GitInspector.snapshot(at: repo.path).files.first)
+        #expect(await GitActions.discard([file], at: repo.path) == nil)
+
+        #expect(repo.read("README.md") == "hello")
+        #expect(await GitInspector.snapshot(at: repo.path).files.isEmpty)
+    }
+
+    // Staging half a file and leaving the rest is normal while a session works, and a
+    // discard that only cleared the working tree would leave the staged half behind.
+    @Test func discardClearsBothTheIndexAndTheWorkingTree() async throws {
+        let repo = try GitRepo()
+        try repo.write("README.md", "staged")
+        try repo.git("add", "README.md")
+        try repo.write("README.md", "and then some more")
+
+        let file = try #require(await GitInspector.snapshot(at: repo.path).files.first)
+        #expect(file.isStaged && file.isUnstaged)
+        #expect(await GitActions.discard([file], at: repo.path) == nil)
+
+        #expect(repo.read("README.md") == "hello")
+        #expect(await GitInspector.snapshot(at: repo.path).files.isEmpty)
+    }
+
+    // A rename is one row on the screen and two paths in git, so undoing it has to bring
+    // the old name back as well as take the new one away.
+    @Test func discardUndoesARename() async throws {
+        let repo = try GitRepo()
+        try repo.git("mv", "README.md", "NOTES.md")
+
+        let file = try #require(await GitInspector.snapshot(at: repo.path).files.first)
+        #expect(file.originalPath == "README.md")
+        #expect(await GitActions.discard([file], at: repo.path) == nil)
+
+        #expect(repo.read("README.md") == "hello")
+        #expect(await GitInspector.snapshot(at: repo.path).files.isEmpty)
+    }
+
+    @Test func discardBringsBackADeletedFile() async throws {
+        let repo = try GitRepo()
+        try FileManager.default.removeItem(at: repo.url.appendingPathComponent("README.md"))
+
+        let file = try #require(await GitInspector.snapshot(at: repo.path).files.first)
+        #expect(await GitActions.discard([file], at: repo.path) == nil)
+
+        #expect(repo.read("README.md") == "hello")
+    }
+
+    // Git has no copy of an untracked file, so the trash is the only version left of it.
+    @Test func discardTrashesAnUntrackedFile() async throws {
+        let repo = try GitRepo()
+        try repo.write("scratch.txt", "never committed")
+
+        let file = try #require(await GitInspector.snapshot(at: repo.path).files.first)
+        #expect(file.isUntracked)
+        #expect(await GitActions.discard([file], at: repo.path) == nil)
+
+        #expect(repo.read("scratch.txt") == nil)
+        #expect(await GitInspector.snapshot(at: repo.path).files.isEmpty)
+    }
+
+    @Test func discardRestoresSelectedFilesAndLeavesOtherChangesAlone() async throws {
+        let repo = try GitRepo()
+        try repo.write("rename.txt", "rename me")
+        try repo.write("delete.txt", "keep me")
+        try repo.write("keep.txt", "original")
+        try repo.commit("More files")
+        try repo.write("README.md", "staged")
+        try repo.git("add", "README.md")
+        try repo.write("README.md", "unstaged too")
+        try repo.git("mv", "rename.txt", "renamed.txt")
+        try repo.git("rm", "delete.txt")
+        try repo.write("keep.txt", "keep these staged changes")
+        try repo.git("add", "keep.txt")
+        try repo.write("keep.txt", "keep these unstaged changes too")
+
+        let before = await GitInspector.snapshot(at: repo.path)
+        let chosen = before.files.filter { $0.path != "keep.txt" }
+        #expect(chosen.count == 3)
+        #expect(await GitActions.discard(chosen, at: repo.path) == nil)
+
+        #expect(repo.read("README.md") == "hello")
+        #expect(repo.read("rename.txt") == "rename me")
+        #expect(repo.read("renamed.txt") == nil)
+        #expect(repo.read("delete.txt") == "keep me")
+        #expect(repo.read("keep.txt") == "keep these unstaged changes too")
+        #expect(try repo.git("show", ":keep.txt") == "keep these staged changes")
+        #expect(await GitInspector.snapshot(at: repo.path).files.map(\.path) == ["keep.txt"])
+    }
+
+    @Test(arguments: [false, true])
+    func discardTrashesSelectedUntrackedFiles(includeTracked: Bool) async throws {
+        let repo = try GitRepo()
+        try repo.write("one.txt", "first untracked file")
+        try repo.write("two.txt", "second untracked file")
+        try repo.write("keep.txt", "leave this untracked file alone")
+        if includeTracked { try repo.write("README.md", "changed") }
+
+        let chosen = await GitInspector.snapshot(at: repo.path).files.filter { $0.path != "keep.txt" }
+        #expect(chosen.count == (includeTracked ? 3 : 2))
+        #expect(await GitActions.discard(chosen, at: repo.path) == nil)
+
+        #expect(repo.read("one.txt") == nil)
+        #expect(repo.read("two.txt") == nil)
+        #expect(repo.read("README.md") == "hello")
+        #expect(repo.read("keep.txt") == "leave this untracked file alone")
+        #expect(await GitInspector.snapshot(at: repo.path).files.map(\.path) == ["keep.txt"])
+    }
+
+    @Test func discardTreatsSelectedPathsLiterally() async throws {
+        let repo = try GitRepo()
+        try repo.write("[ab].txt", "literal name")
+        try repo.write("a.txt", "other file")
+        try repo.commit("Files with similar names")
+        try repo.write("[ab].txt", "discard this")
+        try repo.write("a.txt", "keep this")
+        try repo.write("README.md", "discard this too")
+
+        let chosen = await GitInspector.snapshot(at: repo.path).files.filter { $0.path != "a.txt" }
+        #expect(await GitActions.discard(chosen, at: repo.path) == nil)
+
+        #expect(repo.read("[ab].txt") == "literal name")
+        #expect(repo.read("README.md") == "hello")
+        #expect(repo.read("a.txt") == "keep this")
+        #expect(await GitInspector.snapshot(at: repo.path).files.map(\.path) == ["a.txt"])
+    }
+
+    @Test func discardWithNoSelectionLeavesAllChangesAlone() async throws {
+        let repo = try GitRepo()
+        try repo.write("README.md", "keep this")
+
+        #expect(await GitActions.discard([], at: repo.path) == "No files are selected.")
+        #expect(repo.read("README.md") == "keep this")
+    }
+
+    @Test func discardReportsRestoreFailureBeforeTrashingUntrackedFiles() async throws {
+        let repo = try GitRepo(initialCommit: false)
+        try repo.write("staged.txt", "no committed version")
+        try repo.git("add", "staged.txt")
+        try repo.write("untracked.txt", "keep this")
+
+        let chosen = await GitInspector.snapshot(at: repo.path).files
+        let error = await GitActions.discard(chosen, at: repo.path)
+
+        #expect(error?.isEmpty == false)
+        #expect(repo.read("staged.txt") == "no committed version")
+        #expect(repo.read("untracked.txt") == "keep this")
+    }
+
+    @Test func switchesBetweenBranches() async throws {
+        let repo = try GitRepo()
+        try repo.git("branch", "feature")
+
+        let error = await GitActions.switchBranch("feature", at: repo.path)
+        #expect(error == nil)
+
+        let after = await GitInspector.snapshot(at: repo.path)
+        #expect(after.branch == "feature")
+        #expect(after.onBranch)
+    }
+
+    @Test func reportsWhyASwitchFailed() async throws {
+        let repo = try GitRepo()
+        let error = await GitActions.switchBranch("no-such-branch", at: repo.path)
+        #expect(error?.isEmpty == false)
+    }
+
+    @Test func createsAndSwitchesToANewBranch() async throws {
+        let repo = try GitRepo()
+
+        let error = await GitActions.createBranch("feature", at: repo.path)
+        #expect(error == nil)
+
+        let after = await GitInspector.snapshot(at: repo.path)
+        #expect(after.branch == "feature")
+        #expect(after.branches.contains("feature"))
+    }
+
+    @Test func reportsWhyCreatingABranchFailed() async throws {
+        let repo = try GitRepo()
+
+        let error = await GitActions.createBranch("main", at: repo.path)
+
+        #expect(error?.isEmpty == false)
+        #expect(await GitInspector.snapshot(at: repo.path).branch == "main")
+    }
+
+    @Test func pushPublishesABranchWithNoUpstream() async throws {
+        let repo = try GitRepo()
+        let remote = try GitRepo.bare()
+        try repo.addRemote(remote)
+
+        let before = await GitInspector.snapshot(at: repo.path)
+        #expect(before.upstream == nil)
+
+        let error = await GitActions.push(hasUpstream: false, at: repo.path)
+        #expect(error == nil)
+
+        let after = await GitInspector.snapshot(at: repo.path)
+        #expect(after.upstream == "origin/main")
+        #expect(after.ahead == 0)
+    }
+
+    @Test func listsCommitsAheadOfTheUpstreamBeforePushing() async throws {
+        let repo = try GitRepo()
+        let remote = try GitRepo.bare()
+        try repo.addRemote(remote)
+        try repo.git("push", "-q", "-u", "origin", "HEAD")
+        try repo.write("README.md", "ahead now")
+        try repo.git("commit", "-qam", "second")
+
+        let preview = await GitActions.commitsToPush(hasUpstream: true, at: repo.path)
+        guard case .commits(let commits) = preview else {
+            #expect(Bool(false))
+            return
+        }
+
+        #expect(commits.map(\.subject) == ["second"])
+        #expect(commits[0].shortID.count == 8)
+    }
+
+    @Test func listsUnpublishedCommitsBeforeTheFirstPush() async throws {
+        let repo = try GitRepo()
+        let remote = try GitRepo.bare()
+        try repo.addRemote(remote)
+
+        let preview = await GitActions.commitsToPush(hasUpstream: false, at: repo.path)
+        guard case .commits(let commits) = preview else {
+            #expect(Bool(false))
+            return
+        }
+
+        #expect(commits.map(\.subject) == ["first"])
+    }
+
+    @Test func listsOnlyTheNewCommitsForAnUnpublishedBranch() async throws {
+        let repo = try GitRepo()
+        let remote = try GitRepo.bare()
+        try repo.addRemote(remote)
+        try repo.git("push", "-q", "-u", "origin", "HEAD")
+        try repo.git("switch", "-qc", "session-branch")
+        try repo.write("session.txt", "new work")
+        try repo.git("add", "session.txt")
+        try repo.git("commit", "-qm", "session work")
+
+        let preview = await GitActions.commitsToPush(hasUpstream: false, at: repo.path)
+        guard case .commits(let commits) = preview else {
+            #expect(Bool(false))
+            return
+        }
+
+        #expect(commits.map(\.subject) == ["session work"])
+    }
+
+    @Test func pullBringsInTheRemoteCommits() async throws {
+        let remote = try GitRepo.bare()
+        let first = try GitRepo()
+        try first.addRemote(remote)
+        try first.git("push", "-q", "-u", "origin", "HEAD")
+
+        let second = try remote.clone()
+        try first.write("README.md", "moved on")
+        try first.git("commit", "-qam", "second")
+        try first.write("notes.txt", "more remote work")
+        try first.git("add", ".")
+        try first.git("commit", "-qm", "third")
+        try first.git("push", "-q")
+
+        // The behind count reads the tracking ref, so it only moves once a fetch has
+        // seen what the remote gained.
+        try second.git("fetch", "-q")
+        let behind = await GitInspector.snapshot(at: second.path)
+        #expect(behind.behind == 2)
+
+        guard case .updated(let commits) = await GitActions.pull(at: second.path) else {
+            #expect(Bool(false), "a successful pull has to report its commits")
+            return
+        }
+        #expect(commits.map(\.subject) == ["third", "second"])
+
+        let after = await GitInspector.snapshot(at: second.path)
+        #expect(after.behind == 0)
+    }
+
+    @Test func fetchRefreshesTheTrackingRefWithoutPulling() async throws {
+        let remote = try GitRepo.bare()
+        let first = try GitRepo()
+        try first.addRemote(remote)
+        try first.git("push", "-q", "-u", "origin", "HEAD")
+
+        let second = try remote.clone()
+        let headBeforeFetch = second.head
+        try first.write("README.md", "moved on")
+        try first.git("commit", "-qam", "second")
+        try first.git("push", "-q")
+
+        #expect(await GitInspector.snapshot(at: second.path).behind == 0)
+        #expect(await GitActions.fetchOrigin(at: second.path) == nil)
+
+        let after = await GitInspector.snapshot(at: second.path)
+        #expect(after.behind == 1)
+        #expect(second.head == headBeforeFetch)
+        #expect(second.read("README.md") == "hello")
+    }
+
+    @Test func fetchWithoutAnOriginLeavesTheRepositoryAlone() async throws {
+        let repo = try GitRepo()
+        let head = repo.head
+
+        #expect(await GitActions.fetchOrigin(at: repo.path) == nil)
+        #expect(repo.head == head)
+    }
+
+    // A tracking ref can be stale, so a pull that trusted it would decide there was
+    // nothing to do and quietly leave the branch behind.
+    @Test func pullReadsOriginBeforeDecidingThereIsNothingToDo() async throws {
+        let remote = try GitRepo.bare()
+        let first = try GitRepo()
+        try first.addRemote(remote)
+        try first.git("push", "-q", "-u", "origin", "HEAD")
+
+        let second = try remote.clone()
+        try first.write("README.md", "moved on")
+        try first.git("commit", "-qam", "second")
+        try first.git("push", "-q")
+
+        // As far as this clone knows, it is level with origin.
+        #expect(await GitInspector.snapshot(at: second.path).behind == 0)
+
+        guard case .updated(let commits) = await GitActions.pull(at: second.path) else {
+            #expect(Bool(false), "a successful pull has to report its commits")
+            return
+        }
+        #expect(commits.map(\.subject) == ["second"])
+        #expect(second.read("README.md") == "moved on")
+    }
+
+    @Test func pullSaysSoWhenThereIsNothingToBringIn() async throws {
+        let remote = try GitRepo.bare()
+        let repo = try GitRepo()
+        try repo.addRemote(remote)
+        try repo.git("push", "-q", "-u", "origin", "HEAD")
+
+        #expect(await GitActions.pull(at: repo.path) == .upToDate)
+    }
+
+    // Git refuses a divergent pull without a configured policy. The app must request a
+    // rebase explicitly instead of depending on the user's global Git configuration.
+    @Test func pullRebasesLocalCommitsOntoADivergedUpstream() async throws {
+        let remote = try GitRepo.bare()
+        let first = try GitRepo()
+        try first.addRemote(remote)
+        try first.git("push", "-q", "-u", "origin", "HEAD")
+
+        let second = try remote.clone()
+        try second.write("mine.txt", "local work")
+        try second.git("add", ".")
+        try second.git("commit", "-qm", "local work")
+        try first.write("README.md", "moved on")
+        try first.git("commit", "-qam", "second")
+        try first.git("push", "-q")
+
+        guard case .updated(let commits) = await GitActions.pull(at: second.path) else {
+            #expect(Bool(false), "a successful pull has to report its commits")
+            return
+        }
+        #expect(commits.map(\.subject) == ["second"])
+
+        let after = await GitInspector.snapshot(at: second.path)
+        #expect(after.behind == 0)
+        // The local commit is kept, replayed on top of what origin gained.
+        #expect(after.ahead == 1)
+        #expect(second.read("README.md") == "moved on")
+        #expect(second.read("mine.txt") == "local work")
+    }
+
+    // Sessions leave trees dirty, and a pull that refused to run until the folder was
+    // clean would be turned away most of the time it is pressed.
+    @Test func pullKeepsUncommittedWorkThroughTheUpdate() async throws {
+        let remote = try GitRepo.bare()
+        let first = try GitRepo()
+        try first.addRemote(remote)
+        try first.git("push", "-q", "-u", "origin", "HEAD")
+
+        let second = try remote.clone()
+        try second.write("scratch.txt", "half finished")
+        try first.write("README.md", "moved on")
+        try first.git("commit", "-qam", "second")
+        try first.git("push", "-q")
+
+        guard case .updated(let commits) = await GitActions.pull(at: second.path) else {
+            #expect(Bool(false), "a successful pull has to report its commits")
+            return
+        }
+        #expect(commits.map(\.subject) == ["second"])
+        #expect(second.read("scratch.txt") == "half finished")
+        #expect(second.read("README.md") == "moved on")
+    }
+
+    // A rebase that cannot finish leaves the branch parked halfway onto origin, which no
+    // part of this screen can carry on from, so the press has to undo itself.
+    @Test func pullPutsTheBranchBackWhenTheRebaseCannotFinish() async throws {
+        let remote = try GitRepo.bare()
+        let first = try GitRepo()
+        try first.addRemote(remote)
+        try first.git("push", "-q", "-u", "origin", "HEAD")
+
+        let second = try remote.clone()
+        try second.write("README.md", "my version")
+        try second.git("commit", "-qam", "local edit")
+        let before = second.head
+        try first.write("README.md", "their version")
+        try first.git("commit", "-qam", "their edit")
+        try first.git("push", "-q")
+
+        guard case .failed(let message) = await GitActions.pull(at: second.path) else {
+            #expect(Bool(false), "a conflicting rebase has to report a failure")
+            return
+        }
+        #expect(message.contains("README.md"))
+
+        #expect(second.head == before)
+        #expect(second.read("README.md") == "my version")
+        // No half-finished rebase and no stash left behind to find later.
+        #expect(!FileManager.default.fileExists(
+            atPath: second.url.appendingPathComponent(".git/rebase-merge").path))
+        let after = await GitInspector.snapshot(at: second.path)
+        #expect(after.files.isEmpty)
+    }
+
+    // Pushing from behind the upstream is refused by origin every time, so the screen is
+    // told before it sends one.
+    @Test func pushPreviewReportsABranchThatTrailsOrigin() async throws {
+        let remote = try GitRepo.bare()
+        let first = try GitRepo()
+        try first.addRemote(remote)
+        try first.git("push", "-q", "-u", "origin", "HEAD")
+
+        let second = try remote.clone()
+        try second.write("mine.txt", "local work")
+        try second.git("add", ".")
+        try second.git("commit", "-qm", "local work")
+        try first.write("README.md", "moved on")
+        try first.git("commit", "-qam", "second")
+        try first.git("push", "-q")
+
+        let preview = await GitActions.commitsToPush(hasUpstream: true, at: second.path)
+        guard case .behindUpstream(let incoming, let commits) = preview else {
+            #expect(Bool(false), "a trailing branch has to be reported as behind")
+            return
+        }
+        #expect(incoming.map(\.subject) == ["second"])
+        #expect(commits.map(\.subject) == ["local work"])
+    }
+
+    @Test func updateCheckoutMovesUpToTheRemoteTip() async throws {
+        let remote = try GitRepo.bare()
+        let first = try GitRepo()
+        try first.addRemote(remote)
+        try first.git("push", "-q", "-u", "origin", "HEAD")
+
+        let second = try remote.clone()
+        try first.write("README.md", "moved on")
+        try first.git("commit", "-qam", "second")
+        try first.git("push", "-q")
+
+        let error = await GitActions.updateCheckout(to: "main", at: second.path)
+        #expect(error == nil)
+
+        let after = await GitInspector.snapshot(at: second.path)
+        #expect(after.behind == 0)
+    }
+
+    // A checkout parked on a feature branch has to land on the default branch and on its
+    // latest revision; either half on its own leaves a session forking from stale code.
+    @Test func updateCheckoutSwitchesBranchesAndCatchesUp() async throws {
+        let remote = try GitRepo.bare()
+        let first = try GitRepo()
+        try first.addRemote(remote)
+        try first.git("push", "-q", "-u", "origin", "HEAD")
+
+        let second = try remote.clone()
+        try second.git("switch", "-qc", "feature")
+        try first.write("README.md", "moved on")
+        try first.git("commit", "-qam", "second")
+        try first.git("push", "-q")
+
+        let error = await GitActions.updateCheckout(to: "main", at: second.path)
+        #expect(error == nil)
+
+        let after = await GitInspector.snapshot(at: second.path)
+        #expect(after.branch == "main")
+        #expect(after.behind == 0)
+        #expect(after.ahead == 0)
+    }
+
+    @Test func updateCheckoutRebasesADivergedDefaultBranch() async throws {
+        let remote = try GitRepo.bare()
+        let first = try GitRepo()
+        try first.addRemote(remote)
+        try first.git("push", "-q", "-u", "origin", "HEAD")
+
+        let second = try remote.clone()
+        try second.write("local.txt", "diverged")
+        try second.git("add", ".")
+        try second.git("commit", "-qm", "local work")
+        try first.write("README.md", "moved on")
+        try first.git("commit", "-qam", "second")
+        try first.git("push", "-q")
+
+        let error = await GitActions.updateCheckout(to: "main", at: second.path)
+        #expect(error == nil)
+
+        let after = await GitInspector.snapshot(at: second.path)
+        #expect(after.ahead == 1)
+        #expect(after.behind == 0)
+        #expect(second.read("README.md") == "moved on")
+        #expect(second.read("local.txt") == "diverged")
+    }
+
+    @Test func updateCheckoutRestoresTheOriginalBranchWhenARebaseConflicts() async throws {
+        let remote = try GitRepo.bare()
+        let first = try GitRepo()
+        try first.addRemote(remote)
+        try first.git("push", "-q", "-u", "origin", "HEAD")
+
+        let second = try remote.clone()
+        try second.write("README.md", "local version")
+        try second.git("commit", "-qam", "local edit")
+        let mainBefore = second.head
+        try second.git("switch", "-qc", "feature")
+        try first.write("README.md", "remote version")
+        try first.git("commit", "-qam", "remote edit")
+        try first.git("push", "-q")
+
+        let error = await GitActions.updateCheckout(to: "main", at: second.path)
+        #expect(error?.contains("README.md") == true)
+
+        let after = await GitInspector.snapshot(at: second.path)
+        #expect(after.branch == "feature")
+        #expect(second.revision("main") == mainBefore)
+    }
+
+    @Test func snapshotListsBranchesAndCountsDrift() async throws {
+        let repo = try GitRepo()
+        let remote = try GitRepo.bare()
+        try repo.addRemote(remote)
+        try repo.git("push", "-q", "-u", "origin", "HEAD")
+        try repo.git("branch", "feature")
+        try repo.write("README.md", "ahead now")
+        try repo.git("commit", "-qam", "second")
+
+        let snapshot = await GitInspector.snapshot(at: repo.path)
+        #expect(Set(snapshot.branches) == ["main", "feature"])
+        #expect(snapshot.upstream == "origin/main")
+        #expect(snapshot.ahead == 1)
+        #expect(snapshot.behind == 0)
+    }
+
+    @Test func listsRemoteBranches() async throws {
+        let remote = try GitRepo.bare()
+        let first = try GitRepo()
+        try first.addRemote(remote)
+        try first.git("push", "-q", "-u", "origin", "HEAD")
+        try first.git("push", "-q", "origin", "HEAD:copycat/agent-work")
+
+        // A clone also gets origin/HEAD, which only points at main and is left out.
+        let second = try remote.clone()
+        let snapshot = await GitInspector.snapshot(at: second.path)
+        #expect(snapshot.branches == ["main"])
+        #expect(Set(snapshot.remoteBranches) == [RemoteBranch(remote: "origin", name: "main"),
+                                                 RemoteBranch(remote: "origin", name: "copycat/agent-work")])
+    }
+
+    @Test func checksOutARemoteBranchAsALocalTrackingBranch() async throws {
+        let remote = try GitRepo.bare()
+        let first = try GitRepo()
+        try first.addRemote(remote)
+        try first.git("push", "-q", "-u", "origin", "HEAD")
+        try first.git("push", "-q", "origin", "HEAD:feature")
+        let second = try remote.clone()
+
+        let error = await GitActions.checkoutRemoteBranch(
+            RemoteBranch(remote: "origin", name: "feature"), at: second.path)
+        #expect(error == nil)
+
+        let after = await GitInspector.snapshot(at: second.path)
+        #expect(after.branch == "feature")
+        #expect(after.upstream == "origin/feature")
+        #expect(after.branches.contains("feature"))
+    }
+
+    // MARK: - Selective commits
+
+    @Test func commitsOnlyTheSelectedFiles() async throws {
+        let repo = try GitRepo()
+        try repo.write("README.md", "chosen")
+        try repo.write("later.txt", "not yet")
+
+        let snapshot = await GitInspector.snapshot(at: repo.path)
+        let chosen = snapshot.files.filter { $0.path == "README.md" }
+        let error = await GitActions.commitSelected(message: "Just the pick", files: chosen,
+                                                    at: repo.path)
+        #expect(error == nil)
+
+        #expect(repo.committedFiles == ["README.md"])
+        let after = await GitInspector.snapshot(at: repo.path)
+        #expect(after.files.map(\.path) == ["later.txt"])
+        #expect(repo.read("later.txt") == "not yet")
+    }
+
+    @Test func selectedUntrackedFilesMakeItIntoTheCommit() async throws {
+        let repo = try GitRepo()
+        try repo.write("fresh.txt", "brand new")
+
+        let snapshot = await GitInspector.snapshot(at: repo.path)
+        let chosen = snapshot.files.filter { $0.path == "fresh.txt" }
+        #expect(chosen.first?.kind == .untracked)
+
+        let error = await GitActions.commitSelected(message: "Add fresh", files: chosen,
+                                                    at: repo.path)
+        #expect(error == nil)
+        #expect(repo.committedFiles == ["fresh.txt"])
+    }
+
+    // The trap in a partial commit: git add stages the picked paths next to whatever was
+    // staged before, and a plain git commit would then sweep the lot in.
+    @Test func stagedButUnselectedFilesStayOutOfTheCommitAndStayStaged() async throws {
+        let repo = try GitRepo()
+        try repo.write("staged.txt", "staged earlier")
+        try repo.git("add", "staged.txt")
+        try repo.write("chosen.txt", "picked")
+
+        let snapshot = await GitInspector.snapshot(at: repo.path)
+        let chosen = snapshot.files.filter { $0.path == "chosen.txt" }
+        let error = await GitActions.commitSelected(message: "Only the pick", files: chosen,
+                                                    at: repo.path)
+        #expect(error == nil)
+
+        #expect(repo.committedFiles == ["chosen.txt"])
+        // The unselected file is exactly where it was: staged, uncommitted, unchanged.
+        #expect(repo.stagedFiles == ["staged.txt"])
+        #expect(repo.read("staged.txt") == "staged earlier")
+    }
+
+    @Test func renameTravelsAsOnePairThroughASelectiveCommit() async throws {
+        let repo = try GitRepo()
+        try repo.git("mv", "README.md", "MANUAL.md")
+        try repo.write("other.txt", "left behind")
+
+        let snapshot = await GitInspector.snapshot(at: repo.path)
+        let renamed = snapshot.files.filter { $0.kind == .renamed }
+        #expect(renamed.first?.originalPath == "README.md")
+
+        let error = await GitActions.commitSelected(message: "Rename the readme",
+                                                    files: renamed, at: repo.path)
+        #expect(error == nil)
+
+        let record = try repo.git("show", "--name-status", "--format=", "-M", "HEAD")
+        #expect(record.contains("R"))
+        #expect(record.contains("README.md"))
+        #expect(record.contains("MANUAL.md"))
+        let after = await GitInspector.snapshot(at: repo.path)
+        #expect(after.files.map(\.path) == ["other.txt"])
+    }
+
+    // MARK: - Amend
+
+    @Test func amendFoldsTheChangesIntoTheLastCommit() async throws {
+        let repo = try GitRepo()
+        try repo.write("work.txt", "first pass")
+        #expect(await GitActions.commitAll(message: "Add work", at: repo.path) == nil)
+        try repo.write("work.txt", "second pass")
+
+        let error = await GitActions.commitAll(message: "Add finished work", amend: true,
+                                               at: repo.path)
+        #expect(error == nil)
+
+        #expect(repo.commitCount == 2)
+        let after = await GitInspector.snapshot(at: repo.path)
+        #expect(after.lastCommitSubject == "Add finished work")
+        #expect(after.files.isEmpty)
+    }
+
+    @Test func selectiveAmendKeepsUnselectedWorkOutOfTheFoldedCommit() async throws {
+        let repo = try GitRepo()
+        try repo.write("done.txt", "done")
+        #expect(await GitActions.commitAll(message: "Add done", at: repo.path) == nil)
+        try repo.write("extra.txt", "fold me in")
+        try repo.write("pending.txt", "still cooking")
+
+        let snapshot = await GitInspector.snapshot(at: repo.path)
+        let chosen = snapshot.files.filter { $0.path == "extra.txt" }
+        let error = await GitActions.commitSelected(message: "Add done and extra",
+                                                    files: chosen, amend: true, at: repo.path)
+        #expect(error == nil)
+
+        #expect(repo.commitCount == 2)
+        // The amended commit holds its original file and the folded one, nothing else.
+        #expect(Set(repo.committedFiles) == ["done.txt", "extra.txt"])
+        let after = await GitInspector.snapshot(at: repo.path)
+        #expect(after.lastCommitSubject == "Add done and extra")
+        #expect(after.files.map(\.path) == ["pending.txt"])
+    }
+
+    // MARK: - History
+
+    @Test func historyListsRecentCommitsNewestFirst() async throws {
+        let repo = try GitRepo()
+        try repo.write("README.md", "two")
+        try repo.git("commit", "-qam", "second")
+        try repo.write("README.md", "three")
+        try repo.git("commit", "-qam", "third")
+
+        let history = await GitInspector.recentCommits(at: repo.path)
+        #expect(history.note == nil)
+        #expect(history.commits.map(\.subject) == ["third", "second", "first"])
+
+        let newest = history.commits[0]
+        #expect(newest.hash.count == 40)
+        #expect(newest.hash.hasPrefix(newest.shortHash))
+        #expect(newest.author == "Test")
+        #expect(!newest.relativeDate.isEmpty)
+    }
+
+    @Test func historyHonoursItsLimit() async throws {
+        let repo = try GitRepo()
+        try repo.write("README.md", "two")
+        try repo.git("commit", "-qam", "second")
+        try repo.write("README.md", "three")
+        try repo.git("commit", "-qam", "third")
+
+        let history = await GitInspector.recentCommits(at: repo.path, limit: 2)
+        #expect(history.commits.map(\.subject) == ["third", "second"])
+    }
+
+    @Test func historyIsEmptyBeforeTheFirstCommit() async throws {
+        let repo = try GitRepo(initialCommit: false)
+        let history = await GitInspector.recentCommits(at: repo.path)
+        #expect(history.commits.isEmpty)
+        #expect(history.note == nil)
+    }
+
+    @Test func commitDiffShowsEachFileUnderItsOwnHeading() async throws {
+        let repo = try GitRepo()
+        try repo.write("README.md", "hello\nagain")
+        try repo.write("notes.txt", "fresh")
+        #expect(await GitActions.commitAll(message: "second", at: repo.path) == nil)
+
+        let history = await GitInspector.recentCommits(at: repo.path)
+        let diff = await GitInspector.commitDiff(history.commits[0].hash, root: repo.path)
+        #expect(diff.note == nil)
+
+        let sections = diff.lines.filter { $0.kind == .section }.map(\.text)
+        #expect(sections == ["README.md", "notes.txt"])
+        #expect(diff.lines.contains { $0.kind == .addition && $0.text == "+again" })
+        #expect(diff.lines.contains { $0.kind == .addition && $0.text == "+fresh" })
+    }
+
+    @Test func commitDiffRecordsARename() async throws {
+        let repo = try GitRepo()
+        try repo.git("mv", "README.md", "MANUAL.md")
+        try repo.git("commit", "-qm", "rename")
+
+        let history = await GitInspector.recentCommits(at: repo.path)
+        let diff = await GitInspector.commitDiff(history.commits[0].hash, root: repo.path)
+        #expect(diff.lines.contains { $0.kind == .meta && $0.text == "rename from README.md" })
+        #expect(diff.lines.contains { $0.kind == .meta && $0.text == "rename to MANUAL.md" })
+    }
+
+    @Test func commitDiffReportsAnUnknownHash() async throws {
+        let repo = try GitRepo()
+        let diff = await GitInspector.commitDiff("0000000000000000000000000000000000000000",
+                                                 root: repo.path)
+        #expect(diff.note?.isEmpty == false)
+    }
+}
+
+private extension GitRepo {
+    func revision(_ ref: String) -> String {
+        (try? git("rev-parse", ref)) ?? ""
+    }
+
+    // The files the newest commit touched, straight from git rather than a snapshot.
+    var committedFiles: [String] {
+        ((try? git("show", "--name-only", "--format=", "HEAD")) ?? "")
+            .split(separator: "\n").map(String.init)
+    }
+
+    var commitCount: Int {
+        Int((try? git("rev-list", "--count", "HEAD")) ?? "") ?? 0
+    }
+
+    var stagedFiles: [String] {
+        ((try? git("diff", "--cached", "--name-only")) ?? "")
+            .split(separator: "\n").map(String.init)
+    }
+
+}
