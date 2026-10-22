@@ -160,18 +160,34 @@ struct AccountUsageTests {
         #expect(monitor.usage[.claudeCode]?.windows.map(\.usedPercent) == [10, 82])
     }
 
-    // MARK: - The pill
+    // MARK: - The card
 
-    @Test func thePillShowsTheWindowClosestToStoppingWork() {
-        func usage(_ percents: [Int]) -> AccountUsage {
-            AccountUsage(windows: percents.enumerated().map {
-                AccountUsageWindow(id: "\($0.offset)", title: "\($0.offset)", usedPercent: $0.element, resetsAt: nil)
-            }, checkedAt: Date())
-        }
-        #expect(usage([30, 60]).headline?.id == "0")
-        #expect(usage([30, 80, 91]).headline?.id == "2")
-        #expect(usage([95, 80]).headline?.id == "0")
-        #expect(usage([]).headline == nil)
+    @Test func aResetSaysTheDayOnlyWhenItIsNotToday() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try #require(TimeZone(identifier: "UTC"))
+        let now = Date(timeIntervalSince1970: 1_792_195_200) // midnight UTC
+        let later = now.addingTimeInterval(9 * 3_600)
+        let friday = now.addingTimeInterval(4 * 86_400 + 9 * 3_600)
+        let nextMonth = now.addingTimeInterval(20 * 86_400)
+        let time = later.formatted(date: .omitted, time: .shortened)
+        #expect(AccountUsageWindow.resetLine(later, now: now, calendar: calendar) == time)
+        #expect(AccountUsageWindow.resetLine(friday, now: now, calendar: calendar).hasSuffix(time))
+        #expect(AccountUsageWindow.resetLine(friday, now: now, calendar: calendar) != time)
+        #expect(!AccountUsageWindow.resetLine(nextMonth, now: now, calendar: calendar).contains(":"))
+    }
+
+    @Test func theUsageRowSaysHowOldTheReadingIs() {
+        #expect(SessionFactsChip.usageStatus(checkedAt: nil, checking: false, hasProblem: false)
+                == "Not checked yet")
+        #expect(SessionFactsChip.usageStatus(checkedAt: nil, checking: false, hasProblem: true)
+                == "Could not check")
+        #expect(SessionFactsChip.usageStatus(checkedAt: Date(), checking: true, hasProblem: false)
+                == "Checking…")
+        #expect(SessionFactsChip.usageStatus(checkedAt: Date(), checking: false, hasProblem: false)
+                == "checked just now")
+        #expect(SessionFactsChip.usageStatus(checkedAt: Date().addingTimeInterval(-300),
+                                             checking: false, hasProblem: false)
+                == "checked 5m ago")
     }
 
     // MARK: - The monitor
@@ -189,11 +205,11 @@ struct AccountUsageTests {
         #expect(!monitor.supports(.codex))
 
         await monitor.refresh(.claudeCode)
-        #expect(monitor.usage[.claudeCode]?.headline?.usedPercent == 40)
+        #expect(monitor.usage[.claudeCode]?.windows.first?.usedPercent == 40)
         #expect(monitor.problems[.claudeCode] == nil)
 
         await monitor.refresh(.claudeCode)
-        #expect(monitor.usage[.claudeCode]?.headline?.usedPercent == 40)
+        #expect(monitor.usage[.claudeCode]?.windows.first?.usedPercent == 40)
         #expect(monitor.problems[.claudeCode] == "Claude's usage could not be reached.")
     }
 

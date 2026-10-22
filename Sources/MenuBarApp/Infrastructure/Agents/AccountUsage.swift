@@ -7,17 +7,6 @@ import SwiftUI
 struct AccountUsage: Equatable, Sendable {
     let windows: [AccountUsageWindow]
     let checkedAt: Date
-
-    // The window worth showing when there is room for one: the first, which each agent
-    // lists as its shortest, unless another is far enough along to be the one that will
-    // stop work first.
-    var headline: AccountUsageWindow? {
-        guard let first = windows.first else { return nil }
-        let pressing = windows.filter { $0.usedPercent >= AccountUsageWindow.warningPercent }
-            .max { $0.usedPercent < $1.usedPercent }
-        guard let pressing, pressing.usedPercent > first.usedPercent else { return first }
-        return pressing
-    }
 }
 
 extension AccountUsageWindow {
@@ -28,6 +17,16 @@ extension AccountUsageWindow {
         if usedPercent >= Self.criticalPercent { return Theme.deletion }
         if usedPercent >= Self.warningPercent { return Theme.attention }
         return Theme.dotOn
+    }
+
+    // "14:00" today, "Fri 14:00" within the week, "3 Nov" past it.
+    static func resetLine(_ date: Date, now: Date = Date(), calendar: Calendar = .current) -> String {
+        let time = date.formatted(date: .omitted, time: .shortened)
+        if calendar.isDate(date, inSameDayAs: now) { return time }
+        if date.timeIntervalSince(now) < 6 * 86_400 {
+            return "\(date.formatted(.dateTime.weekday(.abbreviated))) \(time)"
+        }
+        return date.formatted(.dateTime.day().month(.abbreviated))
     }
 }
 
@@ -46,13 +45,12 @@ protocol AccountUsageSource: Sendable {
     func read() async -> AccountUsageReading
 }
 
+// Limits are read only when someone asks for them. Each read is a call to the agent's
+// service, and most of the time nobody is looking. Claude's turns still move the numbers
+// on for free, since they carry the windows in the stream.
 @MainActor
 @Observable
 final class AccountUsageMonitor {
-    nonisolated static let pollInterval: Duration = .seconds(300)
-    // A finished turn asks for a fresh read, and a run of short turns would otherwise
-    // ask for one each.
-    nonisolated static let soonestRepeat: TimeInterval = 60
     nonisolated static let defaultBackoff: TimeInterval = 300
 
     private(set) var usage: [AgentKind: AccountUsage] = [:]
@@ -61,8 +59,6 @@ final class AccountUsageMonitor {
 
     @ObservationIgnored private let sources: [AgentKind: any AccountUsageSource]
     @ObservationIgnored private let now: () -> Date
-    @ObservationIgnored private var isInstalled: (AgentKind) -> Bool = { _ in true }
-    @ObservationIgnored private var lastAttempt: [AgentKind: Date] = [:]
     @ObservationIgnored private var holdUntil: [AgentKind: Date] = [:]
 
     init(sources: [any AccountUsageSource] = AccountUsageMonitor.standardSources(),
@@ -77,22 +73,11 @@ final class AccountUsageMonitor {
 
     func supports(_ agent: AgentKind) -> Bool { sources[agent] != nil }
 
-    func keepChecking(isInstalled: @escaping (AgentKind) -> Bool) async {
-        self.isInstalled = isInstalled
-        while !Task.isCancelled {
-            for agent in AgentKind.allCases where supports(agent) && isInstalled(agent) {
-                await refresh(agent)
-            }
-            try? await Task.sleep(for: Self.pollInterval)
-        }
-    }
-
     func refresh(_ agent: AgentKind) async {
         guard let source = sources[agent], !refreshing.contains(agent) else { return }
         let started = now()
         if let hold = holdUntil[agent], hold > started { return }
         refreshing.insert(agent)
-        lastAttempt[agent] = started
         let reading = await source.read()
         refreshing.remove(agent)
         switch reading {
@@ -105,13 +90,6 @@ final class AccountUsageMonitor {
             holdUntil[agent] = started.addingTimeInterval(Self.seconds(wait))
             problems[agent] = "\(agent.title) asked to wait before its usage is checked again."
         }
-    }
-
-    // A read after spend, unless one has just been made.
-    func refreshSoon(_ agent: AgentKind) {
-        guard supports(agent), isInstalled(agent) else { return }
-        if let last = lastAttempt[agent], now().timeIntervalSince(last) < Self.soonestRepeat { return }
-        Task { await refresh(agent) }
     }
 
     // What a running turn reports moves the reading on between reads, without a call of

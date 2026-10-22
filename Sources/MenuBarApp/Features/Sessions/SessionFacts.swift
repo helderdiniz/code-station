@@ -143,6 +143,7 @@ struct SessionFactsChip: View {
     private static let radius: CGFloat = 12
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(AccountUsageMonitor.self) private var usageMonitor: AccountUsageMonitor?
 
     @State private var pointerOnChip = false
     @State private var pointerOnCard = false
@@ -381,10 +382,13 @@ struct SessionFactsChip: View {
     // MARK: - Rows
 
     // Everything that came off the bar, in the order it is asked about: what changed,
-    // where the change went, what did it, and what the work is costing in room and money.
-    // A session opens as many pull requests as it has checkouts to open them in, so that
-    // fact is a row each rather than one row, and carries which of them it stands for.
-    private enum Fact: Hashable { case changes, pullRequest(Int), model, context, cost }
+    // where the change went, what did it, what the work is costing in room and money, and
+    // how much of the account is left for more. A session opens as many pull requests as
+    // it has checkouts to open them in, so that fact is a row each rather than one row,
+    // and carries which of them it stands for. The account's limit windows work the same.
+    private enum Fact: Hashable {
+        case changes, pullRequest(Int), model, context, cost, usage, usageWindow(String)
+    }
 
     private var rows: [Fact] {
         var rows: [Fact] = []
@@ -393,6 +397,11 @@ struct SessionFactsChip: View {
         if facts.model != nil { rows.append(.model) }
         if facts.context != nil { rows.append(.context) }
         if facts.cost != nil { rows.append(.cost) }
+        if let usageMonitor, usageMonitor.supports(facts.agent) {
+            rows.append(.usage)
+            let windows = usageMonitor.usage[facts.agent]?.windows ?? []
+            rows.append(contentsOf: windows.map { Fact.usageWindow($0.id) })
+        }
         return rows
     }
 
@@ -410,6 +419,12 @@ struct SessionFactsChip: View {
             if let context = facts.context { contextRow(context) }
         case .cost:
             if let cost = facts.cost { costRow(cost) }
+        case .usage:
+            if let usageMonitor { usageRow(usageMonitor) }
+        case .usageWindow(let id):
+            if let window = usageMonitor?.usage[facts.agent]?.windows.first(where: { $0.id == id }) {
+                usageWindowRow(window)
+            }
         }
     }
 
@@ -502,6 +517,70 @@ struct SessionFactsChip: View {
             Text(Money.short(cost))
                 .font(.mono(11.5))
                 .appTooltip("What this session has spent.")
+        }
+    }
+
+    // The account's limits are only read when asked for here, so the row says how old the
+    // reading is and carries the button that reads it again.
+    private func usageRow(_ monitor: AccountUsageMonitor) -> some View {
+        let agent = facts.agent
+        let checking = monitor.refreshing.contains(agent)
+        let problem = monitor.problems[agent]
+        let status = Self.usageStatus(checkedAt: monitor.usage[agent]?.checkedAt,
+                                      checking: checking, hasProblem: problem != nil)
+        return row("USAGE") {
+            HStack(spacing: 6) {
+                Text(status)
+                    .font(.mono(10.5))
+                    .foregroundStyle(problem == nil ? AnyShapeStyle(.tertiary) : AnyShapeStyle(Theme.attention))
+                    .lineLimit(1)
+                    .appTooltip { problem.map { Tooltip(title: "Usage", note: $0) } ?? Tooltip(title: "") }
+                Spacer(minLength: 0)
+                GlyphButton(icon: "arrow.clockwise", side: 22, tint: Theme.accent) {
+                    Task { await monitor.refresh(agent) }
+                }
+                .disabled(checking)
+                .opacity(checking ? 0.5 : 1)
+                .appTooltip("Check \(agent.title)'s account limits now.")
+                .accessibilityLabel("Check \(agent.title) usage")
+            }
+            .frame(maxWidth: .infinity)
+        }
+    }
+
+    // "checked 4m ago", or why there is nothing to show yet.
+    static func usageStatus(checkedAt: Date?, checking: Bool, hasProblem: Bool) -> String {
+        if checking { return "Checking…" }
+        if let checkedAt {
+            let age = RelativeTime.short(checkedAt)
+            return age == "now" ? "checked just now" : "checked \(age) ago"
+        }
+        return hasProblem ? "Could not check" : "Not checked yet"
+    }
+
+    private func usageWindowRow(_ window: AccountUsageWindow) -> some View {
+        row("") {
+            HStack(spacing: 8) {
+                Text(window.shortTitle ?? window.title)
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .frame(width: 84, alignment: .leading)
+                Meter(fraction: window.usedFraction, colour: window.colour, height: 5)
+                    .frame(width: 52)
+                Text("\(window.usedPercent)%")
+                    .font(.mono(11, .semibold))
+                    .foregroundStyle(window.colour)
+                    .fixedSize()
+            }
+            .contentShape(Rectangle())
+            .appTooltip {
+                Tooltip(title: window.title,
+                        note: window.resetsAt.map { "Resets \(AccountUsageWindow.resetLine($0))." })
+            }
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("\(window.title), \(window.usedPercent)% used")
         }
     }
 
