@@ -64,11 +64,11 @@ struct CodexUsage: Equatable, Sendable {
                                shortTitle name: String?, fallback: String) -> AccountUsageWindow? {
         guard let raw = raw as? [String: Any], let usedPercent = integer(raw["usedPercent"]) else { return nil }
         let resetsAt = integer(raw["resetsAt"]).map { Date(timeIntervalSince1970: TimeInterval($0)) }
-        let span = integer(raw["windowDurationMins"]).flatMap { span(minutes: $0) }
-        let shortTitle = switch (name, span) {
-        case (let name?, let span?): "\(name) · \(span)"
+        let duration = integer(raw["windowDurationMins"]).flatMap { Self.span(minutes: $0) }
+        let shortTitle = switch (name, duration) {
+        case (let name?, let duration?): "\(name) · \(duration)"
         case (let name?, nil): name
-        case (nil, let span?): span
+        case (nil, let duration?): duration
         case (nil, nil): fallback
         }
         return AccountUsageWindow(id: id, title: title,
