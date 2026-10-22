@@ -2714,9 +2714,6 @@ struct ChangesView: View {
                 .onSubmit { askAboutWholeChange(review) }
                 .accessibilityLabel("Question about the whole change")
             HStack(spacing: 8) {
-                Label("Answered here, never in the chat", systemImage: "eye.slash")
-                    .font(.system(size: 11)).foregroundStyle(Theme.plan)
-                    .lineLimit(1)
                 Spacer(minLength: 0)
                 ActionButton(title: "Ask", tone: .plan, height: 26, size: 11.5, icon: "questionmark") {
                     askAboutWholeChange(review)
