@@ -276,7 +276,7 @@ struct TroubleshootProblemEditor: View {
                     .padding(10)
                     .frame(height: isBrief ? 174 : 120)
                 if problem.isEmpty {
-                    Text("Describe what is failing, what you expected, and anything you already checked.")
+                    Text("Describe what is failing, what you expected, and anything you already checked. Paste a traceId or a Grafana trace link and the agent starts from that trace.")
                         .font(.system(size: 13))
                         .foregroundStyle(.secondary)
                         .padding(.horizontal, 15)
@@ -603,57 +603,5 @@ struct TroubleshootMCPOptions: View {
                                  userInfo: [.announcement: message,
                                             .priority: NSAccessibilityPriorityLevel.high.rawValue])
         }
-    }
-}
-
-// The trace a diagnosis starts from, pasted as an id or as the Grafana link that shows it.
-// The agent fetches it with the MCP servers and skills the diagnosis runs with, so the
-// field warns when those are switched off rather than sending a trace nobody can read.
-struct TroubleshootTraceField: View {
-    @Binding var trace: String
-    let mcpServersEnabled: Bool
-    // The sheet lays its fields out a step smaller than the tab does.
-    var compact = false
-
-    @FocusState private var focused: Bool
-
-    private var traceID: String? { TraceInput.traceID(from: trace) }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: compact ? 8 : 9) {
-            HStack(spacing: 5) {
-                Text("Trace").fontWeight(.semibold)
-                Text("Optional").foregroundStyle(.secondary)
-            }
-            .font(.system(size: compact ? 13 : 12))
-            TextField("traceId, or a Grafana trace link", text: $trace)
-                .textFieldStyle(.plain)
-                .font(.mono(12))
-                .padding(10)
-                .surface(Theme.field, cornerRadius: 8,
-                         border: focused ? Theme.accent : Theme.border)
-                .focused($focused)
-                .accessibilityLabel("Trace, optional")
-                .accessibilityHint("The agent fetches this trace first and draws it in Evidence.")
-            if let note {
-                Text(note.text)
-                    .font(.system(size: 11.5))
-                    .foregroundStyle(note.isWarning ? AnyShapeStyle(Theme.attentionText)
-                                                    : AnyShapeStyle(.secondary))
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    private var note: (text: String, isWarning: Bool)? {
-        guard !trace.isBlank else { return nil }
-        guard let traceID else {
-            return ("That is not a traceId. Paste 32 hex characters, or a Grafana link that holds one.", true)
-        }
-        guard mcpServersEnabled else {
-            return ("MCP servers are off, so the agent has no way to fetch this trace.", true)
-        }
-        return ("The agent fetches trace \(traceID.prefix(8))… first and draws it in Evidence.", false)
     }
 }

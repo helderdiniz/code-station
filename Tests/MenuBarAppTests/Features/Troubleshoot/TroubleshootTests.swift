@@ -70,35 +70,42 @@ struct TroubleshootTests {
 
     private static let traceID = "0af7651916cd43dd8448eb211c80319c"
 
-    private func traced(_ problem: String, trace: String, agent: AgentKind = .claudeCode) -> TroubleshootRequest {
-        TroubleshootRequest(problem: problem, trace: trace, environment: Self.dev,
+    private func traced(_ problem: String, agent: AgentKind = .claudeCode) -> TroubleshootRequest {
+        TroubleshootRequest(problem: problem, environment: Self.dev,
                             projects: ["api"], mcpServersEnabled: true, agent: agent)
     }
 
-    @Test func aTraceIsSentAlongsideTheProblem() {
-        let request = traced("Checkout fails", trace: "  \(Self.traceID.uppercased()) ")
+    @Test func aTraceIdInTheProblemIsWhereTheDiagnosisStarts() {
+        let request = traced("Checkout fails for \(Self.traceID.uppercased()), see logs")
 
-        #expect(request.userInput == "Checkout fails\n\nTrace to follow: `\(Self.traceID)`")
-        #expect(request.customInstructions.contains("Start from trace `\(Self.traceID)`"))
+        #expect(request.traceIDs == [Self.traceID])
+        #expect(request.userInput == "Checkout fails for \(Self.traceID.uppercased()), see logs")
+        #expect(request.customInstructions.contains("Start from trace `\(Self.traceID)`."))
         #expect(request.customInstructions.contains("follow a skill's guidance on which Grafana holds traces"))
         #expect(request.customInstructions.contains("```trace block before going further"))
     }
 
-    // A link says which Grafana the trace was seen in and when, which the id alone does not.
-    @Test func aPastedLinkTravelsWithTheTraceId() {
+    // The link stays in the problem as written, since it says which Grafana the trace was
+    // seen in and when, which the id alone does not.
+    @Test func aPastedLinkStaysInTheProblem() {
         let link = "https://grafana.edge-dev.example.com/explore?trace=\(Self.traceID)"
-        let request = traced("", trace: link)
+        let request = traced(link)
 
-        #expect(request.userInput == "Troubleshoot trace `\(Self.traceID)`.\n\nTrace to follow: `\(Self.traceID)` (from \(link))")
-        #expect(!request.hasUnreadableTrace)
+        #expect(request.userInput == link)
+        #expect(request.traceIDs == [Self.traceID])
     }
 
-    @Test func textThatHoldsNoTraceIdIsNotSent() {
-        let request = traced("Checkout fails", trace: "the one from this morning")
+    @Test func everyTraceNamedIsFollowed() {
+        let other = "4bf92f3577b34da6a3ce929d0e0e4736"
+        let request = traced("Both \(Self.traceID) and \(other) time out")
 
-        #expect(request.hasUnreadableTrace)
-        #expect(request.traceID == nil)
-        #expect(request.userInput == "Checkout fails")
+        #expect(request.customInstructions.contains("Start from traces `\(Self.traceID)`, `\(other)`."))
+    }
+
+    @Test func aProblemWithoutATraceIdAsksForNoTrace() {
+        let request = traced("Checkout fails since this morning")
+
+        #expect(request.traceIDs.isEmpty)
         #expect(!request.customInstructions.contains("Start from trace"))
     }
 
@@ -106,7 +113,7 @@ struct TroubleshootTests {
     // and the Evidence tab is built from what it draws.
     @Test func everyAgentIsToldHowToDrawEvidence() {
         for agent in AgentKind.allCases {
-            #expect(traced("Checkout fails", trace: "", agent: agent).customInstructions
+            #expect(traced("Checkout fails", agent: agent).customInstructions
                 .contains(TranscriptEvidenceBlocks.agentInstructions))
         }
     }

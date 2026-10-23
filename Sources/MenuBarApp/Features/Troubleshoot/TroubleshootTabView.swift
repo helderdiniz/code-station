@@ -218,8 +218,6 @@ struct TroubleshootTabView: View {
                 }
             }
             if brief.environment.isDangerous { liveNotice }
-            TroubleshootTraceField(trace: entry(\.trace),
-                                   mcpServersEnabled: brief.mcpServersEnabled)
         }
     }
 
@@ -301,11 +299,8 @@ struct TroubleshootTabView: View {
         if !runner.isAvailable(session.agent) {
             return "\(session.agent.title) CLI was not found on PATH."
         }
-        if hasUnreadableTrace {
-            return "Fix the trace, or clear it, to start the diagnosis."
-        }
-        if brief.problem.isBlank && brief.attachments.isEmpty && !hasTrace {
-            return "Describe the problem, paste a trace, or attach the evidence for it."
+        if brief.problem.isBlank && brief.attachments.isEmpty {
+            return "Describe the problem, or attach the evidence for it."
         }
         // A brief sent during a turn waits its turn like any other prompt, so the tab
         // says so rather than refusing the click.
@@ -322,13 +317,9 @@ struct TroubleshootTabView: View {
             && dictation?.isListening(dictationID) != true
             && dictation?.isPreparing(dictationID) != true
             && mcpConfigurationState(session) == .ready
-            && (!brief.problem.isBlank || !brief.attachments.isEmpty || hasTrace)
-            && !hasUnreadableTrace
+            && (!brief.problem.isBlank || !brief.attachments.isEmpty)
             && runner.isAvailable(session.agent)
     }
-
-    private var hasTrace: Bool { TraceInput.traceID(from: brief.trace) != nil }
-    private var hasUnreadableTrace: Bool { !brief.trace.isBlank && !hasTrace }
 
     private var environmentMCPServers: [Server] {
         configs.servers.filter { brief.environment.includes($0) }
@@ -395,7 +386,6 @@ struct TroubleshootTabView: View {
             let request = TroubleshootRequest(
                 problem: sent.problem,
                 incidentTime: sent.incidentTime,
-                trace: sent.trace,
                 environment: chosenEnvironment,
                 projects: projects.map(\.name),
                 skills: chosenSkillNames,
