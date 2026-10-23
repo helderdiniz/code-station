@@ -830,28 +830,27 @@ struct ChangesView: View {
     }
 
     // Comments not sent yet wait just above Commit, so they are not forgotten before the
-    // work is kept. Replies not yet read are pointed at from here too.
+    // work is kept. Replies not yet read are pointed at from here too. Findings alone do not
+    // show the strip, since the second opinion lineup already points at them.
     @ViewBuilder private func unsentStrip(_ review: ReviewTarget) -> some View {
         let all = review.reviews.comments(review.sessionID)
         let kept = all.filter { !$0.isPending }
         let pending = all.count - kept.count
         let unread = review.reviews.unreadCount(review.sessionID)
-        if !all.isEmpty || unread > 0 {
+        if !kept.isEmpty || unread > 0 {
             HStack(spacing: 8) {
-                if !all.isEmpty {
+                if !kept.isEmpty {
                     Image(systemName: "text.bubble").font(.system(size: 11.5)).foregroundStyle(Theme.plan)
                         .accessibilityHidden(true)
-                    Text(kept.isEmpty ? "\(counted(pending, "finding")) to look at"
-                         : "\(counted(kept.count, "comment")) not sent yet")
+                    Text("\(counted(kept.count, "comment")) not sent yet")
                         .font(.system(size: 12, weight: .medium)).foregroundStyle(Theme.plan)
                         .lineLimit(1).truncationMode(.tail)
                     Image(systemName: "ellipsis").font(.system(size: 11)).foregroundStyle(.secondary)
                         .padding(.horizontal, 4).frame(height: 22).contentShape(Rectangle())
                         .appMenu {
-                            var entries: [MenuEntry] = []
-                            if !kept.isEmpty {
-                                entries.append(.item("Preview message") { previewSend(review, startsOnMessage: true) })
-                            }
+                            var entries: [MenuEntry] = [
+                                .item("Preview message") { previewSend(review, startsOnMessage: true) },
+                            ]
                             if pending > 0 {
                                 entries.append(.item("Look at findings") { openFindings(review) })
                             }
@@ -877,9 +876,6 @@ struct ChangesView: View {
                 if !kept.isEmpty {
                     ActionButton(title: "Send to \(review.agent.title)", tone: .green, height: 28, size: 12,
                                  icon: "paperplane.fill") { previewSend(review) }
-                        .layoutPriority(1)
-                } else if pending > 0 {
-                    ActionButton(title: "Look at them", tone: .outlined, height: 28, size: 12) { openFindings(review) }
                         .layoutPriority(1)
                 }
             }
