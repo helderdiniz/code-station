@@ -38,7 +38,7 @@ struct SessionView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let sessionID: UUID
 
-    private enum Tab: Hashable { case conversation, design, troubleshoot, changes, explorer, reviews }
+    private enum Tab: Hashable { case conversation, design, troubleshoot, trace, changes, explorer, reviews }
 
     @State private var tab: Tab = .conversation
     @State private var terminalFocused = false
@@ -129,6 +129,9 @@ struct SessionView: View {
         case .troubleshoot:
             _tab = State(initialValue: .troubleshoot)
             _requestedChange = State(initialValue: nil)
+        case .trace:
+            _tab = State(initialValue: .trace)
+            _requestedChange = State(initialValue: nil)
         case .explorer:
             _tab = State(initialValue: .explorer)
             _requestedChange = State(initialValue: nil)
@@ -193,6 +196,10 @@ struct SessionView: View {
                     case .troubleshoot:
                         TroubleshootTabView(sessionID: session.id) { tab = .conversation }
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    case .trace:
+                        TraceTabView(sessionID: session.id,
+                                     openConversation: { tab = .conversation },
+                                     openTroubleshoot: { tab = .troubleshoot })
                     case .reviews:
                         PullRequestReviewsView(sessionID: session.id, openChanges: { tab = .changes })
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -590,7 +597,7 @@ struct SessionView: View {
             case .conversation:
                 panelDock(session: session, project: project, showsWords: fit == .wide)
                     .transition(.opacity)
-            case .design, .troubleshoot, .changes:
+            case .design, .troubleshoot, .trace, .changes:
                 terminalDock(session: session, project: project, showsWord: fit == .wide)
                     .transition(.opacity)
             case .explorer:
@@ -644,7 +651,7 @@ struct SessionView: View {
 
     private var hasDock: Bool {
         switch tab {
-        case .conversation, .design, .troubleshoot, .changes, .explorer: true
+        case .conversation, .design, .troubleshoot, .trace, .changes, .explorer: true
         case .reviews: false
         }
     }
@@ -1011,6 +1018,7 @@ struct SessionView: View {
         if !started || tab == .troubleshoot {
             tabs.append(destination("Troubleshoot", icon: "stethoscope", value: .troubleshoot))
         }
+        tabs.append(destination("Trace", icon: "point.3.connected.trianglepath.dotted", value: .trace))
         return tabs + trailingTabs(session)
     }
 
@@ -1048,6 +1056,7 @@ struct SessionView: View {
         case .conversation: .conversation
         case .design: .design
         case .troubleshoot: .troubleshoot
+        case .trace: .trace
         case .changes: requestedChange.map { .change(root: $0.root, path: $0.path) } ?? .changes
         case .explorer: .explorer
         case .reviews: .reviews
@@ -1088,7 +1097,7 @@ struct SessionView: View {
             true
         case .conversation:
             session.isActivelyDesigning
-        case .troubleshoot, .changes, .explorer, .reviews:
+        case .troubleshoot, .trace, .changes, .explorer, .reviews:
             false
         }
     }
