@@ -107,9 +107,8 @@ final class ChangesNavigationMemory {
     var commits: [String: [GitCommitSummary]] = [:]
     var collapsedHistories: Set<String> = []
     var historyFilter = ""
-    // Narrows the changed files by name, and to those with comments.
+    // Narrows the changed files by name.
     var fileFilter = ""
-    var onlyCommented = false
     // Files whose comments are folded away, and files showing their resolved ones too,
     // keyed by repository and path.
     var foldedNotes: Set<String> = []

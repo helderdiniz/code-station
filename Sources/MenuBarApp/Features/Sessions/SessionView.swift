@@ -1991,7 +1991,6 @@ struct SessionView: View {
             fileName: { ($0.path as NSString).lastPathComponent },
             openInChanges: {
                 changesNavigation.showingHistory = false
-                changesNavigation.onlyCommented = true
                 openChanges()
             },
             reply: { comment, text in

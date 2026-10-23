@@ -635,70 +635,34 @@ struct ChangesView: View {
         }
     }
 
-    private var openNoteCount: Int {
-        guard review != nil else { return 0 }
-        return repositories.reduce(0) { total, repository in
-            total + changes(in: repository.root).reduce(0) { $0 + notes($1, in: repository.root).open.count }
-        }
-    }
-
-    // The filter only narrows the list while there is a comment for it to find.
-    private var filteringComments: Bool { navigation.onlyCommented && openNoteCount > 0 }
-
     private func shownChanges(_ repositoryRoot: String) -> [GitChange] {
         let query = navigation.fileFilter.trimmingCharacters(in: .whitespaces)
-        let commented = filteringComments
-        guard !query.isEmpty || commented else { return changes(in: repositoryRoot) }
-        return changes(in: repositoryRoot).filter { file in
-            (query.isEmpty || file.path.localizedCaseInsensitiveContains(query))
-                && (!commented || !notes(file, in: repositoryRoot).isEmpty)
-        }
+        guard !query.isEmpty else { return changes(in: repositoryRoot) }
+        return changes(in: repositoryRoot).filter { $0.path.localizedCaseInsensitiveContains(query) }
     }
 
     private var isFilteringFiles: Bool {
-        filteringComments || !navigation.fileFilter.trimmingCharacters(in: .whitespaces).isEmpty
+        !navigation.fileFilter.trimmingCharacters(in: .whitespaces).isEmpty
     }
 
-    // One row above the list: the name filter, and the comments filter once there is a
-    // comment to filter by.
     private var changesFilterRow: some View {
-        let open = openNoteCount
-        return HStack(spacing: 8) {
-            HStack(spacing: 7) {
-                Image(systemName: "magnifyingglass")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(.secondary)
-                    .accessibilityHidden(true)
-                TextField("Filter files", text: Binding(get: { navigation.fileFilter }, set: { navigation.fileFilter = $0 }))
-                    .textFieldStyle(.plain)
-                    .font(.system(size: 12.5))
-                    .accessibilityLabel("Filter changed files by name")
-                    .onMoveCommand { direction in
-                        if direction == .up || direction == .down { moveNavigator(direction) }
-                    }
-            }
-            .padding(.horizontal, 10)
-            .frame(height: 30)
-            .background(RoundedRectangle(cornerRadius: 8).fill(Theme.field))
-            .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.border))
-            if open > 0 {
-                let on = filteringComments
-                Button { navigation.onlyCommented.toggle() } label: {
-                    Label("With comments \(open)", systemImage: "text.bubble")
-                        .font(.system(size: 12, weight: .semibold))
-                        .lineLimit(1).fixedSize()
-                        .foregroundStyle(on ? Theme.plan : Color.secondary)
-                        .padding(.horizontal, 10).frame(height: 30)
-                        .surface(on ? Theme.plan.opacity(0.10) : Theme.card, cornerRadius: 8,
-                                 border: on ? Theme.plan.opacity(0.28) : Theme.border)
-                        .contentShape(RoundedRectangle(cornerRadius: 8))
+        HStack(spacing: 7) {
+            Image(systemName: "magnifyingglass")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(.secondary)
+                .accessibilityHidden(true)
+            TextField("Filter files", text: Binding(get: { navigation.fileFilter }, set: { navigation.fileFilter = $0 }))
+                .textFieldStyle(.plain)
+                .font(.system(size: 12.5))
+                .accessibilityLabel("Filter changed files by name")
+                .onMoveCommand { direction in
+                    if direction == .up || direction == .down { moveNavigator(direction) }
                 }
-                .buttonStyle(.plain)
-                .appTooltip(on ? "Show every changed file" : "Show only files with comments")
-                .accessibilityLabel("Only files with comments, \(open)")
-                .accessibilityAddTraits(on ? .isSelected : [])
-            }
         }
+        .padding(.horizontal, 10)
+        .frame(height: 30)
+        .background(RoundedRectangle(cornerRadius: 8).fill(Theme.field))
+        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.border))
         .padding(.horizontal, 12).padding(.bottom, 2)
     }
 
@@ -905,7 +869,6 @@ struct ChangesView: View {
                     }.padding(10)
                     .smoothlyResizes(when: mode == .history ? collapsedHistories : collapsedRepositories)
                     .smoothlyResizes(when: navigation.foldedNotes)
-                    .smoothlyResizes(when: filteringComments)
                 }
                 .accessibilityLabel(mode == .history ? "Workspace projects and commits"
                                                      : "Workspace repositories and changed files")
