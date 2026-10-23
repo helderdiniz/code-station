@@ -95,6 +95,114 @@ struct AgentCommandsTests {
             == ["clear", "compact", "plan", "review", "notes", "init", "security-review"])
     }
 
+    @Test func claudeIsOfferedEverySkillItRunsWhenTyped() throws {
+        _ = try write("""
+        ---
+        name: validate-pr-comments
+        description: Check review comments against the code
+        ---
+        Fetch the comments.
+        """, to: "home/.claude/skills/validate-pr-comments/SKILL.md")
+        _ = try write("""
+        ---
+        name: ship
+        description: Ship the release
+        ---
+        """, to: "home/.claude/skills/release-helper/SKILL.md")
+        _ = try write("""
+        ---
+        description: Conventions only Claude reaches for
+        user-invocable: false
+        ---
+        """, to: "home/.claude/skills/conventions/SKILL.md")
+        _ = try write("Not a skill.\n", to: "home/.claude/skills/README.md")
+        try FileManager.default.createDirectory(at: scratch.path("home/.claude/skills/empty"),
+                                                withIntermediateDirectories: true)
+
+        let found = AgentCommands.all(for: .claudeCode, workingDirectories: [],
+                                      home: scratch.path("home"), environment: [:])
+
+        // A skill goes by the name its file gives it, and one Claude keeps for itself is
+        // left out, as Claude leaves it out of its own menu.
+        #expect(found.map(\.name) == ["clear", "compact", "plan", "ship", "validate-pr-comments",
+                                      "init", "review", "security-review"])
+        #expect(found.first { $0.name == "validate-pr-comments" }?.summary
+            == "Check review comments against the code")
+        #expect(found.first { $0.name == "ship" }?.scope == .user)
+    }
+
+    @Test func aSkillFolderLinkedFromElsewhereStillCounts() throws {
+        _ = try write("---\ndescription: Investigate a trace\n---\n", to: "elsewhere/investigate/SKILL.md")
+        try FileManager.default.createDirectory(at: scratch.path("home/.claude/skills"),
+                                                withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(at: scratch.path("home/.claude/skills/investigate"),
+                                                   withDestinationURL: scratch.path("elsewhere/investigate"))
+
+        let found = AgentCommands.all(for: .claudeCode, workingDirectories: [],
+                                      home: scratch.path("home"), environment: [:])
+
+        #expect(found.first { $0.name == "investigate" }?.summary == "Investigate a trace")
+    }
+
+    // Claude ranks skills the other way round from commands: your own skill over the
+    // project's, and a skill over a command of the same name wherever either lives. The
+    // menu describes the one that runs.
+    @Test func aSkillIsRankedTheWayClaudeRanksIt() throws {
+        _ = try write("---\ndescription: Your deploy\n---\n", to: "home/.claude/skills/deploy/SKILL.md")
+        _ = try write("---\ndescription: The project's deploy\n---\n",
+                      to: "project/.claude/skills/deploy/SKILL.md")
+        _ = try write("---\ndescription: The project's review skill\n---\n",
+                      to: "project/.claude/skills/review/SKILL.md")
+        _ = try write("The project's review command.\n", to: "project/.claude/commands/review.md")
+        _ = try write("---\ndescription: The project's notes skill\n---\n",
+                      to: "project/.claude/skills/notes/SKILL.md")
+        _ = try write("Your notes command.\n", to: "home/.claude/commands/notes.md")
+
+        let found = AgentCommands.all(for: .claudeCode,
+                                      workingDirectories: [scratch.path("project").path],
+                                      home: scratch.path("home"),
+                                      environment: [:])
+
+        #expect(found.first { $0.name == "deploy" }?.summary == "Your deploy")
+        #expect(found.first { $0.name == "review" }?.summary == "The project's review skill")
+        #expect(found.first { $0.name == "notes" }?.summary == "The project's notes skill")
+        #expect(found.map(\.name)
+            == ["clear", "compact", "plan", "deploy", "notes", "review", "init", "security-review"])
+    }
+
+    @Test func skillsComeFromTheFolderClaudeIsPointedAt() throws {
+        _ = try write("---\ndescription: From the configured folder\n---\n",
+                      to: "config/skills/tidy/SKILL.md")
+        _ = try write("---\ndescription: From the default folder\n---\n",
+                      to: "home/.claude/skills/tidy/SKILL.md")
+
+        let found = AgentCommands.all(for: .claudeCode, workingDirectories: [],
+                                      home: scratch.path("home"),
+                                      environment: ["CLAUDE_CONFIG_DIR": scratch.path("config").path])
+
+        #expect(found.first { $0.name == "tidy" }?.summary == "From the configured folder")
+    }
+
+    // Skill descriptions are long and usually folded over several lines; the menu has
+    // room for one.
+    @Test func aDescriptionWrittenOverSeveralLinesReadsAsOne() {
+        #expect(AgentCommands.summary(of: """
+        ---
+        description: >-
+          Use when a review comes back
+          with comments to act on.
+        name: address
+        ---
+        """, named: "address") == "Use when a review comes back with comments to act on.")
+        #expect(AgentCommands.summary(of: "---\ndescription: |\n  First line\n  second line\n---\n",
+                                      named: "notes") == "First line second line")
+        #expect(AgentCommands.summary(of: "---\ndescription: Starts here\n  and carries on\nname: x\n---\n",
+                                      named: "x") == "Starts here and carries on")
+        // A key nested under another ends where its siblings start.
+        #expect(AgentCommands.summary(of: "---\nmetadata:\n  description: Nested\n  type: reference\n---\n",
+                                      named: "x") == "Nested")
+    }
+
     @Test func onlyClaudeIsOfferedTheCommandsOnlyClaudeAnswers() {
         #expect(AgentCommands.builtIns(for: .claudeCode).map(\.name)
             == ["init", "review", "security-review"])
