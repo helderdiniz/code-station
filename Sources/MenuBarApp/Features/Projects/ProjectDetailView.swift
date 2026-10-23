@@ -14,13 +14,16 @@ struct ProjectDetailView: View {
     @Environment(WorkingTreeWatch.self) private var workingTrees
     @Environment(OrphanedWorktreeMonitor.self) private var orphanedWorktreeMonitor
     @Environment(TerminalStore.self) private var terminals
+    @Environment(GitStatsCache.self) private var gitStats
 
     private enum Tab: Hashable { case sessions, changes, explorer }
 
     @State private var tab: Tab = .sessions
     @State private var choosingSessionKind: Project?
     @State private var terminalFocused = false
-    @State private var git: GitSnapshot?
+    // Only what this screen read itself. The strip draws from the shared cache first,
+    // so a branch switch or a commit made in the Changes tab shows here at once.
+    @State private var ownSnapshot: GitSnapshot?
     @State private var orphanedWorktrees: [GitWorktree.Orphaned] = []
     @State private var pruningOrphans = false
     @State private var shortcutEditor: ShortcutEditorRequest?
@@ -58,13 +61,9 @@ struct ProjectDetailView: View {
                 }
                 .appOverlays()
             }
-            .task(id: project.path) {
-                git = await GitInspector.snapshot(at: project.path, lane: .interactive)
-            }
+            .task(id: project.path) { await readGit(project) }
             // A session ending is the moment the folder is most likely to have moved on.
-            .task(id: store.standaloneSessions(for: projectID).map(\.summary)) {
-                git = await GitInspector.snapshot(at: project.path, lane: .interactive)
-            }
+            .task(id: store.standaloneSessions(for: projectID).map(\.summary)) { await readGit(project) }
             .task(id: orphanRefreshID(project)) { await refreshWorktrees(for: project) }
             .task(id: importRefreshID(project)) {
                 importableCount = await SessionImportRequest.load(
@@ -152,6 +151,17 @@ struct ProjectDetailView: View {
     }
 
     // MARK: - Status strip
+
+    private var git: GitSnapshot? {
+        store.project(projectID).flatMap { gitStats.snapshot(at: $0.path) } ?? ownSnapshot
+    }
+
+    private func readGit(_ project: Project) async {
+        let fresh = await GitInspector.snapshot(at: project.path, lane: .interactive)
+        guard !Task.isCancelled else { return }
+        ownSnapshot = fresh
+        gitStats.store(fresh, at: project.path)
+    }
 
     // Repository state stays beside the project name so the session list remains above
     // the fold.
