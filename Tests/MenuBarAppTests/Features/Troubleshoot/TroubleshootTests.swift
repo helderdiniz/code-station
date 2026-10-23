@@ -386,11 +386,15 @@ struct TroubleshootProjectTests {
     @Test func troubleshootingMarkerSurvivesSessionPersistence() throws {
         var session = ChatSession(projectID: UUID())
         session.isTroubleshooting = true
+        session.troubleshootEnvironment = "prd"
+        session.troubleshootTimeWindow = "Since 14:05 UTC"
 
         let data = try JSONEncoder().encode(session)
         let decoded = try JSONDecoder().decode(ChatSession.self, from: data)
 
         #expect(decoded.isTroubleshooting)
+        #expect(decoded.troubleshootEnvironment == "prd")
+        #expect(decoded.troubleshootTimeWindow == "Since 14:05 UTC")
     }
 
     @Test func sessionsWrittenBeforeTroubleshootingDefaultToRegular() throws {
@@ -452,12 +456,43 @@ struct TroubleshootProjectTests {
 
         #expect(store.session(session.id)?.isTroubleshooting == false)
 
-        store.markTroubleshooting(session.id)
+        store.markTroubleshooting(session.id, environment: "prd", timeWindow: "Last 2 hours")
         #expect(store.session(session.id)?.isTroubleshooting == true)
+        #expect(store.session(session.id)?.troubleshootEnvironment == "prd")
+        #expect(store.session(session.id)?.troubleshootTimeWindow == "Last 2 hours")
 
-        // Running it again appends to the same conversation rather than re-marking it.
-        store.markTroubleshooting(session.id)
+        // Running it again appends to the same conversation rather than re-marking it,
+        // so the strip keeps describing the brief that made it a diagnosis.
+        store.markTroubleshooting(session.id, environment: "dev", timeWindow: "")
         #expect(store.session(session.id)?.isTroubleshooting == true)
+        #expect(store.session(session.id)?.troubleshootEnvironment == "prd")
+        #expect(store.session(session.id)?.troubleshootTimeWindow == "Last 2 hours")
+    }
+
+    // The strip shows the window only when one was given, so blanks are not kept.
+    @Test func aBlankTimeWindowIsNotKeptOnTheSession() throws {
+        let (store, scratch) = TestStore.make()
+        defer { withExtendedLifetime(scratch) {} }
+        let project = try TestStore.project(in: store, named: "payments-api")
+        let session = store.newSession(in: project.id)
+
+        store.markTroubleshooting(session.id, environment: "dev", timeWindow: "  \n")
+
+        #expect(store.session(session.id)?.troubleshootEnvironment == "dev")
+        #expect(store.session(session.id)?.troubleshootTimeWindow == nil)
+    }
+
+    @Test func aSheetDiagnosisRemembersItsEnvironment() throws {
+        let (store, scratch) = TestStore.make()
+        defer { withExtendedLifetime(scratch) {} }
+        let project = try TestStore.project(in: store, named: "payments-api")
+
+        let session = store.newSession(in: project.id, seed: .init(isTroubleshooting: true,
+                                                                   troubleshootEnvironment: "prd"))
+        let regular = store.newSession(in: project.id, seed: .init(troubleshootEnvironment: "prd"))
+
+        #expect(session.troubleshootEnvironment == "prd")
+        #expect(regular.troubleshootEnvironment == nil)
     }
 
     @Test func multiProjectDiagnosisStartsInANewWorkspace() throws {
@@ -547,5 +582,47 @@ struct TroubleshootBriefTests {
 
         #expect(runner.composer.brief(sessionID).problem.isEmpty)
         #expect(runner.composer.brief(sessionID).incidentTime.isEmpty)
+    }
+}
+
+// What the brief reads back under the editor as it is typed. These are the chips the
+// person sees before sending, so each one has to come from the words they wrote.
+struct TroubleshootRecognisedTests {
+    private static let traceID = "4f9c2a7e1d3b4c5a6e7f8091a2b3c4d5"
+
+    @Test func aPastedTraceIdShowsAsAShortenedChip() {
+        let details = TroubleshootRecognised.details(in: "Failing trace \(Self.traceID) since 14:05")
+        #expect(details.map(\.kind) == [.trace, .time])
+        #expect(details[0].label == "Trace 4f9c2a7e…c4d5")
+    }
+
+    @Test func aGrafanaLinkIsReadForItsTraceId() {
+        let link = "https://grafana.edge-prd.teya.io/explore?traceId=\(Self.traceID)"
+        let details = TroubleshootRecognised.details(in: "One failing trace: \(link)")
+        #expect(details.map(\.label) == ["Trace 4f9c2a7e…c4d5"])
+    }
+
+    @Test func theTimeKeepsItsLeadWordAndWrittenZone() {
+        #expect(TroubleshootRecognised.timeWindow(in: "fails since about 14:05 UTC, still happening")
+                == "Since 14:05 UTC")
+        #expect(TroubleshootRecognised.timeWindow(in: "Errors started AT 9:30") == "At 9:30")
+        #expect(TroubleshootRecognised.timeWindow(in: "rolled out 2.41.0 at 14:02 bst") == "At 14:02 BST")
+        #expect(TroubleshootRecognised.timeWindow(in: "the ratio is 3:1 across hosts") == nil)
+        #expect(TroubleshootRecognised.timeWindow(in: "nothing timed here") == nil)
+    }
+
+    @Test func namedProjectsAndAVersionAreRecognised() {
+        let text = "Nothing shipped on payments-gateway today; Ledger-Service rolled out 2.41.0 at 14:02."
+        let details = TroubleshootRecognised.details(
+            in: text, projects: ["payments-gateway", "ledger-service", "fx-rates"])
+        #expect(details.map(\.kind) == [.time, .projects, .version])
+        #expect(details[1].label == "payments-gateway, ledger-service")
+        #expect(details[2].label == "Version 2.41.0")
+    }
+
+    @Test func anIPAddressIsNotReadAsAVersion() {
+        let details = TroubleshootRecognised.details(in: "pod 10.42.7.13 restarted twice")
+        #expect(details.isEmpty)
+        #expect(TroubleshootRecognised.details(in: "").isEmpty)
     }
 }

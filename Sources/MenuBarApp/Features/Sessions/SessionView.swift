@@ -173,6 +173,9 @@ struct SessionView: View {
                 if store.designHasUpdated(for: session) {
                     designUpdateStrip(session)
                 }
+                if session.isTroubleshooting && tab == .conversation && !session.isActivelyDesigning {
+                    diagnosisStrip(session)
+                }
                 // The group hands the transition to each page, so whichever one is chosen
                 // lifts in under the tab that chose it.
                 Group {
@@ -1127,6 +1130,23 @@ struct SessionView: View {
         case .troubleshoot, .evidence, .changes, .explorer, .reviews:
             false
         }
+    }
+
+    // A diagnosis reads its own state, place and findings off this line rather than off
+    // the header, which stands for the session as a whole. It shares the header pill's
+    // reading, so the two never disagree about what the agent is doing.
+    private func diagnosisStrip(_ session: ChatSession) -> some View {
+        let tone = SessionTone(sessionID, store: store, runner: runner)
+        let model = session.settings?.model
+            ?? session.usage?.model(for: session.agent)
+            ?? runner.defaults(for: session.agent).model
+        let agentLine = [session.agent.title, model.map { runner.modelTitle($0) }]
+            .compactMap { $0 }.joined(separator: " · ")
+        return TroubleshootDiagnosisStrip(
+            session: session,
+            state: sessionState(tone: tone, conversation: session, isTroubleshooting: true),
+            agentLine: agentLine,
+            openEvidence: { tab = .evidence })
     }
 
     private func designUpdateStrip(_ session: ChatSession) -> some View {

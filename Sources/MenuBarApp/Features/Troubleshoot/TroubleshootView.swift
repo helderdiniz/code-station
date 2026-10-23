@@ -334,7 +334,8 @@ struct TroubleshootView: View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Problem and evidence").font(.system(size: 13, weight: .semibold))
             TroubleshootProblemEditor(problem: $problem, attachments: $attachments,
-                                      focused: $problemFocused)
+                                      focused: $problemFocused,
+                                      projects: orderedSelectedProjects.map(\.name))
                 .accessibilityHint("Describe the problem or attach evidence, then select at least one project.")
         }
     }
@@ -373,8 +374,7 @@ struct TroubleshootView: View {
                                managedServers: configs.servers,
                                environmentServers: environmentMCPServers,
                                state: mcpConfigurationState,
-                               enabled: $mcpServersEnabled,
-                               usesSetupLayout: true)
+                               enabled: $mcpServersEnabled)
             .frame(minWidth: 250, maxWidth: .infinity, alignment: .leading)
     }
 
@@ -658,7 +658,8 @@ struct TroubleshootView: View {
             let seed = ProjectStore.SessionSeed(id: sessionID, agent: chosenAgent,
                                                 model: runner.defaults(for: chosenAgent).model,
                                                 agentAvatarName: chosenAvatarName,
-                                                isTroubleshooting: true)
+                                                isTroubleshooting: true,
+                                                troubleshootEnvironment: chosenEnvironment.name)
             let sessionResult: Result<ChatSession, PersistenceFailure>
             if let workspace {
                 let checkouts = projects.map {

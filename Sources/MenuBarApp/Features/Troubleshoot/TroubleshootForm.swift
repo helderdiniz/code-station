@@ -3,7 +3,8 @@ import SwiftUI
 // The parts a diagnosis is written on, shared by the sheet that starts one from scratch
 // and by the tab inside a session. Both ask the same four things - the problem, the
 // deployment, whether MCP servers are in play, and which skills to load - so they are
-// built once here and the two screens only differ in what they already know.
+// built once here and the two screens only differ in what they already know and in how
+// they lay the parts out.
 
 // MARK: - Skills
 
@@ -31,6 +32,37 @@ enum TroubleshootSkills {
     static func chosen(_ manager: SkillsManager, for agent: AgentKind,
                        selected: Set<String>) -> [String] {
         available(manager, for: agent).map(\.name).filter { selected.contains($0) }
+    }
+
+    // The menu that picks skills, one checked row per skill the agent has installed. A
+    // long list gets a filter field. The same menu hangs off the sheet's bar and the tab's
+    // pill, so the two screens offer the same choice.
+    static func menu(_ manager: SkillsManager, for agent: AgentKind,
+                     selected: Binding<Set<String>>,
+                     manage: @escaping () -> Void) -> [MenuEntry] {
+        var entries: [MenuEntry] = []
+        let items = available(manager, for: agent).map { plugin in
+            MenuItem(label: plugin.name,
+                     checked: selected.wrappedValue.contains(plugin.name),
+                     subtitle: plugin.description,
+                     handler: {
+                         if selected.wrappedValue.contains(plugin.name) {
+                             selected.wrappedValue.remove(plugin.name)
+                         } else {
+                             selected.wrappedValue.insert(plugin.name)
+                         }
+                     })
+        }
+        if items.count > 6 {
+            entries.append(.searchable(items,
+                                       prompt: "Filter skills by name",
+                                       noResults: "No skill matches this filter."))
+        } else {
+            entries.append(contentsOf: items.map { MenuEntry.item($0) })
+        }
+        if !entries.isEmpty { entries.append(.separator) }
+        entries.append(.item("Manage skills…", icon: "sparkles", action: manage))
+        return entries
     }
 }
 
@@ -112,29 +144,13 @@ struct TroubleshootSkillsBar: View {
         .overlay(RoundedRectangle(cornerRadius: 7)
             .strokeBorder(Theme.border, style: StrokeStyle(lineWidth: 1, dash: [3, 3])))
         .contentShape(RoundedRectangle(cornerRadius: 7))
-        .appMenu { skillMenu }
+        .appMenu {
+            TroubleshootSkills.menu(skills, for: agent, selected: $selected) {
+                showingSkills = true
+            }
+        }
         .appTooltip("Add a skill to the diagnosis")
         .accessibilityLabel("Add skill")
-    }
-
-    private var skillMenu: [MenuEntry] {
-        var entries: [MenuEntry] = []
-        let items = availableSkills.map { plugin in
-            MenuItem(label: plugin.name,
-                     checked: selected.contains(plugin.name),
-                     subtitle: plugin.description,
-                     handler: { toggleSkill(plugin.name) })
-        }
-        if items.count > 6 {
-            entries.append(.searchable(items,
-                                       prompt: "Filter skills by name",
-                                       noResults: "No skill matches this filter."))
-        } else {
-            entries.append(contentsOf: items.map { MenuEntry.item($0) })
-        }
-        if !entries.isEmpty { entries.append(.separator) }
-        entries.append(.item("Manage skills…", icon: "sparkles") { showingSkills = true })
-        return entries
     }
 
     // Amber is for something to put right: no skill is installed, or none of the ones
@@ -168,21 +184,15 @@ struct TroubleshootSkillsBar: View {
     private func description(of skill: String) -> String? {
         availableSkills.first { $0.name == skill }?.description
     }
-
-    private func toggleSkill(_ name: String) {
-        if selected.contains(name) {
-            selected.remove(name)
-        } else {
-            selected.insert(name)
-        }
-    }
 }
 
 // MARK: - Problem and evidence
 
 // What is failing, in the person's own words, with whatever they can already show for it
 // docked underneath. Files arrive by drag, by paste or from the file chooser, and the
-// three land in the same place.
+// three land in the same place. Under the words, the details the agent will start from
+// are read back as they are typed, so a pasted id is seen to land. A screen that wants
+// its controls on the card's bottom edge hands them in as the footer.
 struct TroubleshootProblemEditor: View {
     @Environment(Dictation.self) private var dictation: Dictation?
     @Environment(MenuPresenter.self) private var menus: MenuPresenter?
@@ -196,6 +206,9 @@ struct TroubleshootProblemEditor: View {
     var dictationDraft: Binding<SessionComposerStore.Draft>? = nil
     var roots: [String] = []
     var vocabulary: [String] = []
+    // The projects the diagnosis covers, so a brief that names one shows it recognised.
+    var projects: [String] = []
+    var footer: AnyView? = nil
 
     @State private var dropTargeted = false
     @State private var fieldLink = ComposerFieldLink()
@@ -285,6 +298,8 @@ struct TroubleshootProblemEditor: View {
                 }
             }
 
+            recognisedRow
+
             Divider().overlay(Theme.hairline)
 
             HStack(spacing: 10) {
@@ -333,6 +348,14 @@ struct TroubleshootProblemEditor: View {
                 .hoverLift()
             }
             .padding(10)
+
+            if let footer {
+                Divider().overlay(Theme.hairline)
+                footer
+                    .background(UnevenRoundedRectangle(bottomLeadingRadius: 11,
+                                                       bottomTrailingRadius: 11)
+                        .fill(Theme.sunken))
+            }
         }
         .background(RoundedRectangle(cornerRadius: 11).fill(Theme.card))
         .overlay(RoundedRectangle(cornerRadius: 11)
@@ -357,6 +380,52 @@ struct TroubleshootProblemEditor: View {
                                  userInfo: [.announcement: message,
                                             .priority: NSAccessibilityPriorityLevel.low.rawValue])
         }
+    }
+
+    // What the agent will start from, as chips, or a hint at what would show here. Read
+    // off the text on every keystroke, so a pasted trace id lands as a chip at once.
+    private var recognisedRow: some View {
+        let details = TroubleshootRecognised.details(in: problem, projects: projects)
+        return HStack(spacing: 6) {
+            if details.isEmpty {
+                Text("Paste a trace id, a Grafana link or a time and it shows up here.")
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(.tertiary)
+            } else {
+                Text("The agent starts from")
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(.tertiary)
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 6) {
+                        ForEach(details) { detail in
+                            HStack(spacing: 5) {
+                                Image(systemName: detail.icon)
+                                    .font(.system(size: 9.5, weight: .semibold))
+                                Text(detail.label)
+                                    .font(.system(size: 11.5, weight: .semibold))
+                                    .lineLimit(1)
+                            }
+                            .foregroundStyle(Theme.accent)
+                            .padding(.horizontal, 8)
+                            .frame(height: 22)
+                            .surface(Theme.accent.opacity(0.09), cornerRadius: 7,
+                                     border: Theme.accent.opacity(0.22))
+                        }
+                    }
+                    .padding(.vertical, 1)
+                }
+            }
+            Spacer(minLength: 0)
+        }
+        .frame(minHeight: 24)
+        .padding(.horizontal, 15)
+        .padding(.bottom, 10)
+        .motion(Motion.reveal, value: details)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(details.isEmpty
+                            ? "No trace id, link or time recognised yet"
+                            : "The agent starts from " + details.map(\.label).joined(separator: ", "))
+        .accessibilityAddTraits(.updatesFrequently)
     }
 
     private var marks: ComposerMarks {
@@ -510,10 +579,8 @@ struct TroubleshootMCPOptions: View {
     let environmentServers: [Server]
     let state: TroubleshootMCPState
     @Binding var enabled: Bool
-    var showsServerDetails = false
-    var usesSetupLayout = false
 
-    private var setupHelper: String {
+    private var helper: String {
         if !enabled { return "Use project files and attached evidence." }
         if managedServers.isEmpty { return "Use any servers configured for the selected agent." }
         return "\(counted(environmentServers.count, "managed server")) available for \(environment.title)."
@@ -521,59 +588,19 @@ struct TroubleshootMCPOptions: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            if usesSetupLayout {
-                Text("MCP servers").font(.system(size: 13, weight: .semibold))
-                Toggle(isOn: $enabled) {
-                    Text(enabled ? "Enabled for this diagnosis" : "Disabled for this diagnosis")
-                        .font(.system(size: 13))
-                }
-                .toggleStyle(.appSwitch)
-                .frame(height: 39, alignment: .leading)
-                .accessibilityLabel("Enable MCP servers")
-                .accessibilityHint(setupHelper)
-                Text(setupHelper)
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            } else {
-                Toggle(isOn: $enabled) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(showsServerDetails ? "Logs, metrics & traces" : "Enable MCP servers")
-                            .font(.system(size: 13, weight: .medium))
-                        Text(showsServerDetails && !enabled
-                             ? "MCP servers are off. Use project files and attached evidence."
-                             : managedServers.isEmpty
-                             ? "Use any servers configured for the selected agent."
-                             : "\(counted(environmentServers.count, "managed server")) available for \(environment.title).")
-                            .font(.system(size: 11))
-                            .foregroundStyle(.secondary)
-                    }
-                }
-                .toggleStyle(.appSwitch)
-                .accessibilityLabel("Enable MCP servers")
+            Text("MCP servers").font(.system(size: 13, weight: .semibold))
+            Toggle(isOn: $enabled) {
+                Text(enabled ? "Enabled for this diagnosis" : "Disabled for this diagnosis")
+                    .font(.system(size: 13))
             }
-
-            if showsServerDetails && enabled {
-                ForEach(environmentServers, id: \.name) { server in
-                    let status = state.configurationLabel(for: server.name)
-                    HStack(spacing: 9) {
-                        Image(systemName: "server.rack").foregroundStyle(.secondary)
-                        Text(server.name).textSelection(.enabled)
-                        Spacer(minLength: 8)
-                        Text(status)
-                            .foregroundStyle(status == "Configured" ? Theme.accent : Theme.attentionText)
-                    }
-                    .font(.system(size: 12))
-                    .padding(.top, 6)
-                    .accessibilityElement(children: .combine)
-                }
-                if !managedServers.isEmpty && environmentServers.isEmpty {
-                    Text("No managed servers match this environment.")
-                        .font(.system(size: 11)).foregroundStyle(.secondary)
-                }
-                Text("Configuration status only. Connectivity has not been checked.")
-                    .font(.system(size: 11)).foregroundStyle(.secondary)
-            }
+            .toggleStyle(.appSwitch)
+            .frame(height: 39, alignment: .leading)
+            .accessibilityLabel("Enable MCP servers")
+            .accessibilityHint(helper)
+            Text(helper)
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
 
             switch state {
             case .ready:
@@ -597,7 +624,7 @@ struct TroubleshootMCPOptions: View {
             }
         }
         .onChange(of: state) { _, state in
-            guard showsServerDetails, let message = state.message(for: agent),
+            guard let message = state.message(for: agent),
                   let window = NSApp?.keyWindow else { return }
             NSAccessibility.post(element: window, notification: .announcementRequested,
                                  userInfo: [.announcement: message,

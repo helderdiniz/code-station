@@ -100,6 +100,26 @@ struct TroubleshootEvidenceTests {
         cut.result = String(TraceParserTests.v2.prefix(200)) + StreamEvent.truncationMarker
         #expect(TroubleshootEvidence.items(in: [reply("", tools: [failed, cut])]).isEmpty)
     }
+
+    // The strip over the conversation counts what the Evidence tab draws, by kind, and
+    // says nothing about kinds there are none of.
+    @Test func theTallyCountsEvidenceByKindForTheStrip() throws {
+        let empty = TroubleshootEvidenceTally(messages: [reply("Looking.")])
+        #expect(empty.isEmpty)
+        #expect(empty.readings.isEmpty)
+
+        let messages = [
+            reply("Querying.", tools: [try fetchedTrace(), try lokiQuery()]),
+            reply("What I found:\n\n\(Self.drawnTrace("b7ad6b7169203331"))\n\n\(Self.logs)\n\n\(Self.chart)"),
+        ]
+        let tally = TroubleshootEvidenceTally(messages: messages)
+
+        #expect(tally.traces == 2)
+        #expect(tally.logLines == 2)
+        #expect(tally.queries == 0)
+        #expect(tally.charts == 1)
+        #expect(tally.readings == ["2 traces", "2 log lines", "1 chart"])
+    }
 }
 
 struct GrafanaFollowUpTests {

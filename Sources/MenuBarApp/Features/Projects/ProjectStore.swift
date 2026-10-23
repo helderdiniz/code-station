@@ -914,6 +914,7 @@ final class ProjectStore {
         var agentAvatarName: String?
         var mode: SessionMode = .chat
         var isTroubleshooting = false
+        var troubleshootEnvironment: String?
     }
 
     @discardableResult
@@ -950,6 +951,7 @@ final class ProjectStore {
         session.settings = SessionSettings(model: ModelChoice.valid(seed.model, for: seed.agent))
         session.agentAvatarName = seed.agentAvatarName
         session.isTroubleshooting = seed.isTroubleshooting
+        session.troubleshootEnvironment = seed.isTroubleshooting ? seed.troubleshootEnvironment : nil
         // Nothing has been said yet, and there is no file to go looking for.
         session.transcriptLoaded = true
         return session
@@ -1083,9 +1085,12 @@ final class ProjectStore {
     // A session becomes a diagnosis the moment a brief is sent from its Troubleshoot tab.
     // The marker is what the sidebar filter and the header chip read, so it has to outlive
     // the turn that set it.
-    func markTroubleshooting(_ sessionID: UUID) {
+    func markTroubleshooting(_ sessionID: UUID, environment: String? = nil,
+                             timeWindow: String? = nil) {
         guard let i = index(sessionID), !sessions[i].isTroubleshooting else { return }
         sessions[i].isTroubleshooting = true
+        sessions[i].troubleshootEnvironment = environment
+        sessions[i].troubleshootTimeWindow = timeWindow?.trimmed.nilIfBlank
         publishSidebarSessions()
         saveIndex()
     }

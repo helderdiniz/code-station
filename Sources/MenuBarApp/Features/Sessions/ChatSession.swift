@@ -65,6 +65,10 @@ struct ChatSession: Identifiable, Codable, Equatable, Sendable {
     // left by a turn that ended unseen, because it is a choice rather than a moment.
     var isMarkedUnread = false
     var isTroubleshooting = false
+    // What the diagnosis was briefed with, kept for the strip over its conversation: the
+    // site name of the deployment it looks at, and the time window in the person's words.
+    var troubleshootEnvironment: String?
+    var troubleshootTimeWindow: String?
     var agent: AgentKind
     var mode: SessionMode = .chat
     // Design is the origin of a session, while the phase says what the agent is doing
@@ -236,6 +240,7 @@ struct ChatSession: Identifiable, Codable, Equatable, Sendable {
     // conversation inline, and that is what the store moves out on the first launch.
     private enum CodingKeys: String, CodingKey {
         case id, projectID, title, titleRevision, isPinned, isMarkedUnread, isTroubleshooting
+        case troubleshootEnvironment, troubleshootTimeWindow
         case agent, mode, designPhase
         case designRevisions, approvedDesignRevisionID, sourceDesignSessionID
         case handedOffDesignRevisionID, designSourceSessionID
@@ -266,6 +271,10 @@ struct ChatSession: Identifiable, Codable, Equatable, Sendable {
             ?? false
         isTroubleshooting = try container.decodeIfPresent(Bool.self, forKey: .isTroubleshooting)
             ?? false
+        troubleshootEnvironment = try container.decodeIfPresent(
+            String.self, forKey: .troubleshootEnvironment)
+        troubleshootTimeWindow = try container.decodeIfPresent(
+            String.self, forKey: .troubleshootTimeWindow)
         designSourceSessionID = try container.decodeIfPresent(
             UUID.self, forKey: .designSourceSessionID)
         mode = try container.decodeIfPresent(SessionMode.self, forKey: .mode)
@@ -323,6 +332,8 @@ struct ChatSession: Identifiable, Codable, Equatable, Sendable {
         try container.encode(isPinned, forKey: .isPinned)
         if isMarkedUnread { try container.encode(isMarkedUnread, forKey: .isMarkedUnread) }
         try container.encode(isTroubleshooting, forKey: .isTroubleshooting)
+        try container.encodeIfPresent(troubleshootEnvironment, forKey: .troubleshootEnvironment)
+        try container.encodeIfPresent(troubleshootTimeWindow, forKey: .troubleshootTimeWindow)
         try container.encode(agent, forKey: .agent)
         try container.encode(mode, forKey: .mode)
         try container.encodeIfPresent(designPhase, forKey: .designPhase)
