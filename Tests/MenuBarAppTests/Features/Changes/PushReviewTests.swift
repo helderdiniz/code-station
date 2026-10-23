@@ -22,7 +22,7 @@ struct PushReviewTests {
 
     @Test func dismissedPreviewCannotPublishItsResult() async {
         let reads = PushPreviewReads()
-        let model = PushReviewModel(read: { await reads.read() }, pull: { .upToDate }, push: { nil })
+        let model = PushReviewModel(read: { await reads.read() }, pull: { .upToDate }, push: { _ in nil })
         let task = Task { await model.load() }
         #expect(await waitUntil { reads.pending.count == 1 })
         model.invalidate()
@@ -34,7 +34,7 @@ struct PushReviewTests {
 
     @Test func aNewPreviewWinsOverAnOlderRead() async {
         let reads = PushPreviewReads()
-        let model = PushReviewModel(read: { await reads.read() }, pull: { .upToDate }, push: { nil })
+        let model = PushReviewModel(read: { await reads.read() }, pull: { .upToDate }, push: { _ in nil })
         let first = Task { await model.load() }
         #expect(await waitUntil { reads.pending.count == 1 })
         let second = Task { await model.load() }
@@ -50,7 +50,7 @@ struct PushReviewTests {
 
     @Test func cancelledReadCannotEnablePush() async {
         let reads = PushPreviewReads()
-        let model = PushReviewModel(read: { await reads.read() }, pull: { .upToDate }, push: { nil })
+        let model = PushReviewModel(read: { await reads.read() }, pull: { .upToDate }, push: { _ in nil })
         let task = Task { await model.load() }
         #expect(await waitUntil { reads.pending.count == 1 })
         task.cancel()
@@ -62,7 +62,7 @@ struct PushReviewTests {
     @Test func pushRequiresAReviewAndRejectsDuplicateSubmission() async {
         let writes = PushWrites()
         let model = PushReviewModel(read: { .commits([commit]) }, pull: { .upToDate },
-                                    push: { await writes.push() })
+                                    push: { _ in await writes.push() })
         #expect(await model.send() == false)
         await model.load()
         let first = Task { await model.send() }
@@ -83,13 +83,35 @@ struct PushReviewTests {
         #expect(writes.count == 1)
     }
 
+    @Test func replacingOriginsBranchPinsThePushToTheReviewedTip() async {
+        var sent: [String?] = []
+        var reads = 0
+        let model = PushReviewModel(read: {
+            reads += 1
+            return reads == 1 ? .nameOnOrigin(outgoing: [commit], unrelated: [incomingCommit], tip: "0ld71p")
+                : .nameOnOrigin(outgoing: [commit], unrelated: [], tip: "0ld71p")
+        }, pull: { Issue.record("Replacing must not pull"); return .upToDate }, push: { sent.append($0); return nil })
+        await model.load()
+        #expect(model.nameOnOrigin)
+        #expect(model.replaced == [incomingCommit])
+        #expect(model.behind == 0)
+        #expect(await model.send())
+        #expect(sent == ["0ld71p"])
+
+        await model.load()
+        #expect(model.nameOnOrigin)
+        #expect(model.replaced.isEmpty)
+        #expect(await model.send())
+        #expect(sent == ["0ld71p", nil])
+    }
+
     @Test func pullFailureStopsPushAndRetryRequiresFreshReview() async {
         var attempts = 0
         var pushes = 0
         let model = PushReviewModel(read: { .behindUpstream(incoming: [incomingCommit], outgoing: [commit]) }, pull: {
             attempts += 1
             return attempts == 1 ? .failed("Origin is unavailable") : .updated([])
-        }, push: { pushes += 1; return nil })
+        }, push: { _ in pushes += 1; return nil })
         await model.load()
         #expect(await model.send())
         #expect(model.phase == .failed)
@@ -112,7 +134,7 @@ struct PushReviewTests {
         let model = PushReviewModel(read: {
             reads += 1
             return reads == 1 ? .behindUpstream(incoming: [incomingCommit], outgoing: [commit]) : .commits([commit])
-        }, pull: { .updatedWithStashConflict([incoming]) }, push: {
+        }, pull: { .updatedWithStashConflict([incoming]) }, push: { _ in
             pushes += 1
             return pushes == 1 ? "Connection timed out" : nil
         })
@@ -133,7 +155,7 @@ struct PushReviewTests {
         let model = PushReviewModel(read: {
             reads += 1
             return reads == 1 ? .failed("Cannot read repository") : .commits([])
-        }, pull: { .upToDate }, push: { Issue.record("Preview must not push"); return nil })
+        }, pull: { .upToDate }, push: { _ in Issue.record("Preview must not push"); return nil })
         await model.load()
         #expect(model.phase == .failed)
         #expect(await model.send() == false)

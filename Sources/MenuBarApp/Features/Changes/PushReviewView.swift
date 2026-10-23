@@ -23,10 +23,15 @@ struct PushReviewView: View {
         case .complete: "You’re all up to date."
         case .ready:
             model.behind > 0 ? "Pull before pushing"
-                : model.commits.isEmpty ? (upstream == nil ? "Publish branch?" : "Push branch?")
+                : replaces ? "Replace \(remoteName)?"
+                : model.commits.isEmpty ? (publishes ? "Publish branch?" : "Push branch?")
                 : "Push \(counted(model.commits.count, "commit"))?"
         }
     }
+
+    // Unknown until origin has been read, so the badge does not show and then vanish.
+    private var publishes: Bool { upstream == nil && !model.nameOnOrigin && model.phase != .loading }
+    private var replaces: Bool { !model.replaced.isEmpty }
 
     // The remote side of the route. A branch with no upstream yet will be published to
     // origin under its own name.
@@ -45,17 +50,19 @@ struct PushReviewView: View {
         case .pushing: "Pushing…"
         case .failed: "Try again"
         case .complete: "Done"
-        default: model.behind > 0 ? "Pull, then push" : upstream == nil ? "Publish branch" : "Push commits"
+        default:
+            model.behind > 0 ? "Pull, then push" : replaces ? "Replace on origin"
+                : publishes ? "Publish branch" : "Push commits"
         }
     }
 
     var body: some View {
         VStack(spacing: 0) {
             HStack(alignment: .top, spacing: 12) {
-                Image(systemName: model.phase == .failed ? "exclamationmark.triangle"
+                Image(systemName: model.phase == .failed || replaces ? "exclamationmark.triangle"
                       : model.behind > 0 ? "arrow.down" : "arrow.up")
                     .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(model.phase == .failed ? Theme.warningText : Theme.accent)
+                    .foregroundStyle(model.phase == .failed || replaces ? Theme.warningText : Theme.accent)
                     .frame(width: 36, height: 36)
                     .background(Theme.field, in: RoundedRectangle(cornerRadius: 9))
                     .padding(.top, 2)
@@ -100,7 +107,8 @@ struct PushReviewView: View {
                     .opacity(model.phase == .complete ? 0 : 1)
                     .allowsHitTesting(model.phase != .complete)
                     .accessibilityHidden(model.phase == .complete)
-                ActionButton(title: actionTitle, tone: .green, fills: true, action: primaryAction)
+                ActionButton(title: actionTitle, tone: replaces && model.phase == .ready ? .danger : .green,
+                             fills: true, action: primaryAction)
                     .frame(width: 150)
                     .disabled(model.phase == .loading || model.isWorking)
                     .focused($focus, equals: "primary")
@@ -141,10 +149,10 @@ struct PushReviewView: View {
             Image(systemName: "arrow.right")
                 .font(.system(size: 11, weight: .semibold))
                 .foregroundStyle(Theme.accent)
-            BranchChip(icon: "cloud", prefix: remote.prefix, name: remote.name, isNew: upstream == nil)
+            BranchChip(icon: "cloud", prefix: remote.prefix, name: remote.name, isNew: publishes)
         }
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("From \(branch) to \(remoteName)\(upstream == nil ? ", a new branch on origin" : "")")
+        .accessibilityLabel("From \(branch) to \(remoteName)\(publishes ? ", a new branch on origin" : "")")
     }
 
     @ViewBuilder private var preview: some View {
@@ -182,6 +190,22 @@ struct PushReviewView: View {
                     listLabel("Coming down", count: model.incoming.count)
                     RemoteCommitList(commits: model.incoming, emptyMessage: "", incoming: true)
                     listLabel("Going up", count: model.commits.count)
+                } else if replaces {
+                    Text("Origin already has a branch called \(Text(remote.name).fontWeight(.semibold).foregroundStyle(.primary)), but it is not part of this branch’s history. The two only share a name. Pushing replaces it, and the commits below leave origin.")
+                        .font(.system(size: 12)).foregroundStyle(Theme.secondaryText)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Label("If someone still needs those commits, cancel and give this branch a new name instead.", systemImage: "exclamationmark.triangle")
+                        .font(.system(size: 12)).foregroundStyle(Theme.warningText)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(12).frame(maxWidth: .infinity, alignment: .leading)
+                        .background(Theme.warningBackground, in: RoundedRectangle(cornerRadius: 8))
+                    listLabel("Removed from origin", count: model.replaced.count)
+                    RemoteCommitList(commits: model.replaced, emptyMessage: "", incoming: true)
+                    listLabel("Going up", count: model.commits.count)
+                } else if model.nameOnOrigin {
+                    Text("Origin already has this branch, and yours builds on it. Pushing moves it forward and keeps the two in step from now on.")
+                        .font(.system(size: 12)).foregroundStyle(Theme.secondaryText)
+                        .fixedSize(horizontal: false, vertical: true)
                 } else if upstream == nil {
                     Text("Origin doesn’t have this branch yet. Publishing creates it and keeps the two in step from now on.")
                         .font(.system(size: 12)).foregroundStyle(Theme.secondaryText)
