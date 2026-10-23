@@ -49,12 +49,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private lazy var scheduledTasks = ScheduledTaskService(
         store: projects, runner: runner, agentAvatarName: { [appSettings] in appSettings.defaultAgentAvatarName })
     private let dictation = Dictation()
-    private lazy var grafanaRuns = GrafanaQueryRunner(configs: store, processes: processes)
-    private lazy var traces = TraceStore(backend: .live(grafana: grafanaRuns) {
-        [runner, projects] sessionID, prompt in
-        await TraceSummary.ask(sessionID: sessionID, prompt: prompt,
-                               runner: runner, store: projects)
-    })
     private lazy var mobileAccess = MobileAccessController(store: projects, runner: runner,
                                                            gitStats: gitStats)
     private let workingTrees = WorkingTreeWatch()
@@ -83,7 +77,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     func applicationWillFinishLaunching(_ notification: Notification) {
         MainMenu.install()
-        runner.grafanaRuns = grafanaRuns
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -200,8 +193,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                     .frame(minWidth: 960, minHeight: 640)
                     .environment(store)
                     .environment(processes)
-                    .environment(grafanaRuns)
-                    .environment(traces)
                     .environment(claude)
                     .environment(codex)
                     .environment(copilot)

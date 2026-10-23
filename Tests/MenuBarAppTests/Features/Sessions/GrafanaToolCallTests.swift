@@ -125,18 +125,4 @@ struct GrafanaToolCallTests {
         #expect(GrafanaResultView.clock(afternoon, in: try #require(TimeZone(identifier: "UTC")))
                 == "16:15:03.123")
     }
-
-    @Test func takesTheLevelFieldFromTheMatchingService() throws {
-        let service = SiteDefaults.Service(name: "s", lokiSelector: #"{a="b"}"#,
-                                           logFormat: .logfmt, levelField: "sev")
-        let result = #"{"data":[{"timestamp":"\"1790935200000000000\"","line":"x","labels":{},"parsed":{"level":"info","sev":"CRIT"}}]}"#
-        let query = try tool("mcp__grafana-cde-dev__query_loki_logs", ["logql": "{a=\"b\"}"], result: result)
-
-        guard case .logs(let withService, _)? = GrafanaToolCall.rendered(query, services: [service])?.result,
-              case .logs(let without, _)? = GrafanaToolCall.rendered(query)?.result else {
-            Issue.record("not logs"); return
-        }
-        #expect(withService.first?.level == "CRIT")
-        #expect(without.first?.level == "info")
-    }
 }

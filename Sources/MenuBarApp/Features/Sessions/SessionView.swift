@@ -38,7 +38,7 @@ struct SessionView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let sessionID: UUID
 
-    private enum Tab: Hashable { case conversation, design, troubleshoot, trace, changes, explorer, reviews }
+    private enum Tab: Hashable { case conversation, design, troubleshoot, evidence, changes, explorer, reviews }
 
     @State private var tab: Tab = .conversation
     @State private var terminalFocused = false
@@ -129,8 +129,8 @@ struct SessionView: View {
         case .troubleshoot:
             _tab = State(initialValue: .troubleshoot)
             _requestedChange = State(initialValue: nil)
-        case .trace:
-            _tab = State(initialValue: .trace)
+        case .evidence:
+            _tab = State(initialValue: .evidence)
             _requestedChange = State(initialValue: nil)
         case .explorer:
             _tab = State(initialValue: .explorer)
@@ -196,10 +196,12 @@ struct SessionView: View {
                     case .troubleshoot:
                         TroubleshootTabView(sessionID: session.id) { tab = .conversation }
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    case .trace:
-                        TraceTabView(sessionID: session.id,
-                                     openConversation: { tab = .conversation },
-                                     openTroubleshoot: { tab = .troubleshoot })
+                    case .evidence:
+                        TroubleshootEvidenceView(session: session) { messageID, toolID in
+                            showInConversation(messageID, toolID: toolID, in: session)
+                        }
+                        .environment(\.askAgent, askAgent)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                     case .reviews:
                         PullRequestReviewsView(sessionID: session.id, openChanges: { tab = .changes })
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -597,7 +599,7 @@ struct SessionView: View {
             case .conversation:
                 panelDock(session: session, project: project, showsWords: fit == .wide)
                     .transition(.opacity)
-            case .design, .troubleshoot, .trace, .changes:
+            case .design, .troubleshoot, .evidence, .changes:
                 terminalDock(session: session, project: project, showsWord: fit == .wide)
                     .transition(.opacity)
             case .explorer:
@@ -651,7 +653,7 @@ struct SessionView: View {
 
     private var hasDock: Bool {
         switch tab {
-        case .conversation, .design, .troubleshoot, .trace, .changes, .explorer: true
+        case .conversation, .design, .troubleshoot, .evidence, .changes, .explorer: true
         case .reviews: false
         }
     }
@@ -1000,6 +1002,7 @@ struct SessionView: View {
                 tab = .conversation
             }]
             if tab == .design { tabs.append(designTab(session)) }
+            tabs.append(evidenceTab(session))
             return tabs + trailingTabs(session)
         }
         var tabs: [HeaderTab] = [
@@ -1018,8 +1021,32 @@ struct SessionView: View {
         if !started || tab == .troubleshoot {
             tabs.append(destination("Troubleshoot", icon: "stethoscope", value: .troubleshoot))
         }
-        tabs.append(destination("Trace", icon: "point.3.connected.trianglepath.dotted", value: .trace))
+        if tab == .evidence { tabs.append(evidenceTab(session)) }
         return tabs + trailingTabs(session)
+    }
+
+    private func evidenceTab(_ session: ChatSession) -> HeaderTab {
+        var evidence = destination("Evidence", icon: "point.3.connected.trianglepath.dotted",
+                                   value: .evidence)
+        evidence.hasContent = TroubleshootEvidence.count(in: session.messages) > 0
+        return evidence
+    }
+
+    // A result asking for more sends the agent a follow-up, the same as typing it would.
+    private var askAgent: AgentAsk {
+        AgentAsk(sessionID: sessionID) { [runner, store, sessionID] text in
+            runner.send(text, sessionID: sessionID, store: store)
+        }
+    }
+
+    // Evidence is read off the transcript, so each card can send the reader back to the
+    // reply or call it came from.
+    private func showInConversation(_ messageID: UUID, toolID: String?, in session: ChatSession) {
+        tab = .conversation
+        previews.hide()
+        transcriptWindow.reveal(messageID, in: session.messages)
+        transcriptPinnedToBottom = false
+        agentFocus = AgentTranscriptFocus(messageID: messageID, toolID: toolID ?? "")
     }
 
     private func designTab(_ session: ChatSession) -> HeaderTab {
@@ -1056,7 +1083,7 @@ struct SessionView: View {
         case .conversation: .conversation
         case .design: .design
         case .troubleshoot: .troubleshoot
-        case .trace: .trace
+        case .evidence: .evidence
         case .changes: requestedChange.map { .change(root: $0.root, path: $0.path) } ?? .changes
         case .explorer: .explorer
         case .reviews: .reviews
@@ -1097,7 +1124,7 @@ struct SessionView: View {
             true
         case .conversation:
             session.isActivelyDesigning
-        case .troubleshoot, .trace, .changes, .explorer, .reviews:
+        case .troubleshoot, .evidence, .changes, .explorer, .reviews:
             false
         }
     }
@@ -1818,6 +1845,7 @@ struct SessionView: View {
                     .environment(\.previewsLocalServers, true)
                     .environment(\.activeTranscriptTools, runner.runningTools(sessionID))
                     .environment(\.agentTranscriptFocus, agentFocus)
+                    .environment(\.askAgent, askAgent)
                     .transition(.fadeIn)
                 }
                 ForEach(opinions(after: message.id)) { opinion in

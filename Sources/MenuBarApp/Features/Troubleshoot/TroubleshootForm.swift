@@ -606,57 +606,54 @@ struct TroubleshootMCPOptions: View {
     }
 }
 
-// The service a diagnosis is about, from the site file's list. Choosing one hands the agent
-// that service's log selector and field meanings; leaving it at "No service" sends nothing.
-struct TroubleshootServicePicker: View {
-    let services: [SiteDefaults.Service]
-    @Binding var selected: String?
+// The trace a diagnosis starts from, pasted as an id or as the Grafana link that shows it.
+// The agent fetches it with the MCP servers and skills the diagnosis runs with, so the
+// field warns when those are switched off rather than sending a trace nobody can read.
+struct TroubleshootTraceField: View {
+    @Binding var trace: String
+    let mcpServersEnabled: Bool
+    // The sheet lays its fields out a step smaller than the tab does.
+    var compact = false
+
+    @FocusState private var focused: Bool
+
+    private var traceID: String? { TraceInput.traceID(from: trace) }
 
     var body: some View {
-        HStack(spacing: 6) {
-            Text(current?.name ?? "No service")
-                .font(.system(size: 12, weight: .semibold))
-                .lineLimit(1)
-            Image(systemName: "chevron.down")
-                .font(.system(size: 9, weight: .bold))
-                .foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: compact ? 8 : 9) {
+            HStack(spacing: 5) {
+                Text("Trace").fontWeight(.semibold)
+                Text("Optional").foregroundStyle(.secondary)
+            }
+            .font(.system(size: compact ? 13 : 12))
+            TextField("traceId, or a Grafana trace link", text: $trace)
+                .textFieldStyle(.plain)
+                .font(.mono(12))
+                .padding(10)
+                .surface(Theme.field, cornerRadius: 8,
+                         border: focused ? Theme.accent : Theme.border)
+                .focused($focused)
+                .accessibilityLabel("Trace, optional")
+                .accessibilityHint("The agent fetches this trace first and draws it in Evidence.")
+            if let note {
+                Text(note.text)
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(note.isWarning ? AnyShapeStyle(Theme.attentionText)
+                                                    : AnyShapeStyle(.secondary))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
-        .padding(.horizontal, 10)
-        .frame(height: 26)
-        .cardSurface(cornerRadius: 7)
-        .contentShape(RoundedRectangle(cornerRadius: 7))
-        .appMenu { entries }
-        .accessibilityLabel("Service")
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    // A name left over from a site file that has since dropped the service is not sent to
-    // the agent, so it is not shown as picked either.
-    private var current: SiteDefaults.Service? { Self.chosen(selected, in: services) }
-
-    nonisolated static func chosen(_ name: String?,
-                                   in services: [SiteDefaults.Service]) -> SiteDefaults.Service? {
-        services.first { $0.name == name }
-    }
-
-    private var entries: [MenuEntry] {
-        var entries: [MenuEntry] = [
-            .item(MenuItem(label: "No service", checked: current == nil,
-                           handler: { selected = nil })),
-            .separator,
-        ]
-        let items = services.map { service in
-            MenuItem(label: service.name,
-                     checked: current?.name == service.name,
-                     subtitle: service.lokiSelector,
-                     handler: { selected = service.name })
+    private var note: (text: String, isWarning: Bool)? {
+        guard !trace.isBlank else { return nil }
+        guard let traceID else {
+            return ("That is not a traceId. Paste 32 hex characters, or a Grafana link that holds one.", true)
         }
-        if items.count > 6 {
-            entries.append(.searchable(items,
-                                       prompt: "Filter services by name",
-                                       noResults: "No service matches this filter."))
-        } else {
-            entries.append(contentsOf: items.map { MenuEntry.item($0) })
+        guard mcpServersEnabled else {
+            return ("MCP servers are off, so the agent has no way to fetch this trace.", true)
         }
-        return entries
+        return ("The agent fetches trace \(traceID.prefix(8))… first and draws it in Evidence.", false)
     }
 }

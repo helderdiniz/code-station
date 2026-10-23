@@ -41,17 +41,16 @@ final class SessionComposerStore {
         walks[sessionID] = nil
     }
 
-    // An unsent troubleshoot brief: the problem, the evidence for it, and the two choices
-    // the tab makes about how the diagnosis runs.
+    // An unsent troubleshoot brief: the problem, the evidence for it, the trace it starts
+    // from, and the two choices the tab makes about how the diagnosis runs.
     struct TroubleshootBrief: Equatable {
         var problem: String = ""
         var incidentTime: String = ""
+        var trace: String = ""
         var attachments: [Attachment] = []
         var environment = TroubleshootEnvironment.first()
         var mcpServersEnabled = true
         var dictated = false
-        var serviceName: String? = nil
-        var trace: TroubleshootTraceContext? = nil
     }
 
     func brief(_ sessionID: UUID) -> TroubleshootBrief {

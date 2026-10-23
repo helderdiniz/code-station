@@ -1,0 +1,128 @@
+import Foundation
+import SwiftUI
+import Testing
+@testable import MenuBarApp
+
+struct TranscriptEvidenceBlocksTests {
+    private static let traceID = "0af7651916cd43dd8448eb211c80319c"
+
+    private static let trace = """
+        {"traceId":"\(traceID)","title":"Payment times out","server":"grafana-edge-dev","omitted":12,
+         "spans":[{"id":"a1","service":"checkout-api","name":"POST /pay","start":0,"duration":2140,
+                   "error":true,"message":"upstream timeout"},
+                  {"id":"b2","parent":"a1","service":"ledger","name":"INSERT entry","start":12.5,
+                   "duration":2101,"error":true,"attributes":{"db.system":"postgresql"}}]}
+        """
+
+    @Test func readsATraceTheAgentWroteOut() throws {
+        guard case .success(let spec) = TranscriptTraceSpec.parse(Self.trace) else {
+            Issue.record("not read"); return
+        }
+        #expect(spec.title == "Payment times out")
+        #expect(spec.server == "grafana-edge-dev")
+        #expect(spec.omittedSpans == 12)
+        #expect(spec.trace.traceID == Self.traceID)
+        #expect(spec.trace.rows.map(\.span.id) == ["a1", "b2"])
+        #expect(spec.trace.rows.map(\.depth) == [0, 1])
+        #expect(spec.trace.errorCount == 2)
+        let ledger = try #require(spec.trace.spans.last)
+        #expect(ledger.startNanos == 12_500_000)
+        #expect(ledger.durationNanos == 2_101_000_000)
+        #expect(ledger.attributes == [Trace.Attribute(key: "db.system", value: "postgresql")])
+        #expect(spec.trace.spans.first?.statusMessage == "upstream timeout")
+    }
+
+    // A trace past the cap is cut rather than refused, and the cut is counted, so the
+    // waterfall never looks whole when it is not.
+    @Test func countsTheSpansPastTheCapAsLeftOut() {
+        let spans = (0..<(TranscriptTraceSpec.spanLimit + 5)).map {
+            #"{"id":"s\#($0)","service":"api","start":\#($0),"duration":1}"#
+        }.joined(separator: ",")
+        guard case .success(let spec) = TranscriptTraceSpec.parse(#"{"spans":[\#(spans)]}"#) else {
+            Issue.record("not read"); return
+        }
+        #expect(spec.trace.rows.count == TranscriptTraceSpec.spanLimit)
+        #expect(spec.omittedSpans == 5)
+    }
+
+    @Test func placesTheSpansAtTheTracesClockTime() {
+        let text = #"{"time":"2026-10-23T14:02:08.240Z","spans":[{"id":"a","service":"api","start":5,"duration":1}]}"#
+        guard case .success(let spec) = TranscriptTraceSpec.parse(text) else {
+            Issue.record("not read"); return
+        }
+        #expect(spec.trace.startNanos == 1_792_764_128_245_000_000)
+        #expect(TraceWaterfallView<EmptyView>.facts(spec.trace).hasSuffix(
+            GrafanaResultView.clock(Date(timeIntervalSince1970: 1_792_764_128.245))))
+    }
+
+    // Without a clock time the spans count from zero, and the waterfall shows no clock
+    // rather than one in 1970.
+    @Test func aTraceWithoutAClockTimeShowsNone() {
+        guard case .success(let spec) = TranscriptTraceSpec.parse(Self.trace) else {
+            Issue.record("not read"); return
+        }
+        #expect(TraceWaterfallView<EmptyView>.facts(spec.trace) == "2.14s · 2 spans · 2 services · 2 errors")
+    }
+
+    @Test func aTraceWithNoUsableSpanIsUnreadable() {
+        let unreadable = ["", "not json", #"{"spans":[]}"#,
+                          #"{"spans":[{"id":"  ","service":"a","start":0,"duration":1}]}"#]
+        for text in unreadable {
+            guard case .failure = TranscriptTraceSpec.parse(text) else {
+                Issue.record("read \(text)"); continue
+            }
+        }
+    }
+
+    @Test func readsTheLogLinesTheAgentPicked() throws {
+        let text = """
+            {"title":"ledger errors","server":"grafana-platform-dev","query":"{namespace=\\"ledger\\"}",
+             "lines":[{"time":"2026-10-23T14:02:11.418Z","level":"error","service":"ledger",
+                       "message":"deadlock detected","fields":{"trace_id":"\(Self.traceID)"}},
+                      {"time":"2026-10-23T14:02:12Z","message":"   "}]}
+            """
+        guard case .success(let spec) = TranscriptLogsSpec.parse(text) else {
+            Issue.record("not read"); return
+        }
+        #expect(spec.title == "ledger errors")
+        #expect(spec.server == "grafana-platform-dev")
+        #expect(spec.query == #"{namespace="ledger"}"#)
+        #expect(spec.entries.count == 1)
+        let line = try #require(spec.entries.first)
+        #expect(line.level == "error")
+        #expect(line.labels == ["service": "ledger"])
+        #expect(line.message == "deadlock detected")
+        #expect(line.date == Date(timeIntervalSince1970: 1_792_764_131.418))
+        #expect(GrafanaResultView.traceID(in: line) == Self.traceID)
+    }
+
+    @Test func theAgentIsShownBothBlockShapes() {
+        let instructions = TranscriptEvidenceBlocks.agentInstructions
+        #expect(instructions.contains("```trace"))
+        #expect(instructions.contains("```logs"))
+        #expect(instructions.contains("At most \(TranscriptTraceSpec.spanLimit) spans"))
+    }
+
+    // The examples the agent copies are drawn by the same parser that reads its replies,
+    // so a change to either side that breaks the other fails here.
+    @Test func theExamplesTheAgentCopiesAreReadable() {
+        let segments = MessageSegment.split(TranscriptEvidenceBlocks.agentInstructions)
+        let trace = segments.first(where: \.isTrace)
+        let logs = segments.first(where: \.isLogs)
+        guard let trace, case .success = TranscriptTraceSpec.parse(trace.text) else {
+            Issue.record("trace example unreadable"); return
+        }
+        guard let logs, case .success = TranscriptLogsSpec.parse(logs.text) else {
+            Issue.record("logs example unreadable"); return
+        }
+    }
+
+    @Test func fencesForEvidenceAreDrawnRatherThanPrinted() {
+        let text = "Found it.\n\n```trace\n\(Self.trace)\n```\n\n```logs\n{}\n```\n\n```swift\nlet a = 1\n```"
+        let segments = MessageSegment.split(text)
+        #expect(segments.filter(\.isDrawn).count == 2)
+        #expect(segments.first(where: \.isTrace) != nil)
+        #expect(segments.first(where: \.isLogs) != nil)
+        #expect(segments.contains { $0.isCode && !$0.isDrawn })
+    }
+}

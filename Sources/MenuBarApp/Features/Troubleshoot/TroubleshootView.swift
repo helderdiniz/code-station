@@ -56,31 +56,49 @@ struct TroubleshootRequest {
     let mcpServersEnabled: Bool
     let mcpServerNames: [String]
     let agent: AgentKind
-    let service: SiteDefaults.Service?
-    let trace: TroubleshootTraceContext?
+    // A traceId or a Grafana link holding one, as it was pasted.
+    let trace: String
 
-    init(problem: String, incidentTime: String = "", environment: TroubleshootEnvironment, projects: [String],
+    init(problem: String, incidentTime: String = "", trace: String = "",
+         environment: TroubleshootEnvironment, projects: [String],
          skills: [String] = [], mcpServersEnabled: Bool, mcpServerNames: [String] = [],
-         agent: AgentKind, service: SiteDefaults.Service? = nil,
-         trace: TroubleshootTraceContext? = nil) {
+         agent: AgentKind) {
         self.problem = problem
         self.incidentTime = incidentTime
+        self.trace = trace
         self.environment = environment
         self.projects = projects
         self.skills = skills
         self.mcpServersEnabled = mcpServersEnabled
         self.mcpServerNames = mcpServerNames
         self.agent = agent
-        self.service = service
-        self.trace = trace
     }
 
+    var traceID: String? { TraceInput.traceID(from: trace) }
+
+    // Something was pasted as a trace that holds no traceId. It is not sent, so the form
+    // says so rather than letting the agent go looking for it.
+    var hasUnreadableTrace: Bool { !trace.isBlank && traceID == nil }
+
     var userInput: String {
-        let description = problem.isBlank
-            ? "Troubleshoot the problem shown in the attached files."
-            : problem.trimmed
-        guard !incidentTime.isBlank else { return description }
-        return description + "\n\nIncident time window (as supplied): " + incidentTime.trimmed
+        var parts: [String]
+        if !problem.isBlank {
+            parts = [problem.trimmed]
+        } else if let traceID {
+            parts = ["Troubleshoot trace `\(traceID)`."]
+        } else {
+            parts = ["Troubleshoot the problem shown in the attached files."]
+        }
+        if let traceID {
+            // A link says more than its id: the Grafana it came from and the time it was
+            // looked at.
+            let link = trace.trimmed.lowercased() == traceID ? "" : " (from \(trace.trimmed))"
+            parts.append("Trace to follow: `\(traceID)`" + link)
+        }
+        if !incidentTime.isBlank {
+            parts.append("Incident time window (as supplied): " + incidentTime.trimmed)
+        }
+        return parts.joined(separator: "\n\n")
     }
 
     var customInstructions: String {
@@ -111,11 +129,14 @@ struct TroubleshootRequest {
         let chartText = agent == .claudeCode
             ? ""
             : "\n\n\(TranscriptChartSpec.agentInstructions)"
+        // The agent fetches the trace with its own tools and skills, which is what knows
+        // which Grafana holds traces at this site; the app only draws what comes back.
+        let traceText = traceID.map { id in
+            "\n\nStart from trace `\(id)`. Fetch the whole trace with the Grafana MCP tools and the skills you have, and follow a skill's guidance on which Grafana holds traces. Draw it as a ```\(TranscriptTraceSpec.fenceLanguage) block before going further. Then, for each service whose spans failed, read its logs for this trace ID on the Grafana that holds that service's logs, and put the lines the diagnosis rests on in a ```\(TranscriptLogsSpec.fenceLanguage) block."
+        } ?? ""
         let dangerText = environment.isDangerous
             ? " Treat this environment as live: do not mutate data, configuration, deployments, or running services."
             : ""
-        let serviceText = service.map { "\n\n\($0.promptContext)" } ?? ""
-        let traceText = trace.map { "\n\n\($0.promptContext)" } ?? ""
 
         return """
         Troubleshooting context:
@@ -124,7 +145,9 @@ struct TroubleshootRequest {
         - \(skillText)
         - \(mcpText)
 
-        Investigate the problem and use read-only checks first. Do not change code or configuration.\(dangerText) Explain the likely root cause, cite the evidence you found, and give concrete next steps. If a fix is needed, propose it and wait for a follow-up before applying it. Chart the measurements the root cause rests on.\(chartText)\(serviceText)\(traceText)
+        Investigate the problem and use read-only checks first. Do not change code or configuration.\(dangerText) Explain the likely root cause, cite the evidence you found, and give concrete next steps. If a fix is needed, propose it and wait for a follow-up before applying it. Chart the measurements the root cause rests on.\(chartText)\(traceText)
+
+        \(TranscriptEvidenceBlocks.agentInstructions)
         """
     }
 }
@@ -160,13 +183,13 @@ struct TroubleshootView: View {
     let initialWorkspaceID: UUID?
 
     @State private var problem = ""
+    @State private var trace = ""
     @State private var attachments: [Attachment] = []
     @State private var selectedProjects: Set<UUID> = []
     @State private var projectFilter = ""
     @State private var environment = TroubleshootEnvironment.first()
     @State private var selectedSkills = Preferences.troubleshootSkills()
     @State private var mcpServersEnabled = true
-    @State private var serviceName: String?
     @State private var agent: AgentKind?
     @State private var selectedAvatarName = AgentAvatarSelection.defaultName
     @State private var sessionID = UUID()
@@ -192,9 +215,10 @@ struct TroubleshootView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
                     problemSection
+                    TroubleshootTraceField(trace: $trace, mcpServersEnabled: mcpServersEnabled,
+                                           compact: true)
                     optionsSection
                     if environment.isDangerous { dangerNotice }
-                    if !services.isEmpty { serviceSection }
                     projectsSection
                     skillsSection
                 }
@@ -265,10 +289,11 @@ struct TroubleshootView: View {
 
     private var readinessText: String {
         if isStarting { return "Preparing diagnosis…" }
-        if problem.isBlank && attachments.isEmpty {
+        if hasUnreadableTrace { return "Fix the trace, or clear it, to continue." }
+        if problem.isBlank && attachments.isEmpty && !hasTrace {
             return selectedProjects.isEmpty
-                ? "Describe the problem or attach evidence, and select a project."
-                : "Describe the problem or attach evidence to continue."
+                ? "Describe the problem, paste a trace or attach evidence, and select a project."
+                : "Describe the problem, paste a trace or attach evidence to continue."
         }
         if selectedProjects.isEmpty { return "Select a project to continue." }
         if !runner.isAvailable(selectedAgent) {
@@ -298,8 +323,6 @@ struct TroubleshootView: View {
         .padding(.vertical, 10)
         .surface(Theme.attention.opacity(0.10), cornerRadius: 10, border: Theme.attention.opacity(0.45))
     }
-
-    private var services: [SiteDefaults.Service] { SiteDefaults.current.services ?? [] }
 
     private var skillsSection: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -354,14 +377,6 @@ struct TroubleshootView: View {
             Text("Choose where the problem is happening.")
                 .font(.system(size: 11))
                 .foregroundStyle(.secondary)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    private var serviceSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Service").font(.system(size: 13, weight: .semibold))
-            TroubleshootServicePicker(services: services, selected: $serviceName)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -548,9 +563,13 @@ struct TroubleshootView: View {
         !isStarting
             && mcpConfigurationState == .ready
             && !selectedProjects.isEmpty
-            && (!problem.isBlank || !attachments.isEmpty)
+            && (!problem.isBlank || !attachments.isEmpty || hasTrace)
+            && !hasUnreadableTrace
             && runner.isAvailable(selectedAgent)
     }
+
+    private var hasTrace: Bool { TraceInput.traceID(from: trace) != nil }
+    private var hasUnreadableTrace: Bool { !trace.isBlank && !hasTrace }
 
     private var agentMenu: [MenuEntry] {
         AgentKind.allCases.map { option in
@@ -687,13 +706,13 @@ struct TroubleshootView: View {
 
             let request = TroubleshootRequest(
                 problem: problem,
+                trace: trace,
                 environment: chosenEnvironment,
                 projects: projects.map(\.name),
                 skills: chosenSkillNames,
                 mcpServersEnabled: enableMCPServers,
                 mcpServerNames: enableMCPServers ? selectedServers.map(\.name) : [],
-                agent: chosenAgent,
-                service: TroubleshootServicePicker.chosen(serviceName, in: services))
+                agent: chosenAgent)
             runner.send(request.userInput,
                         attachments: attachments,
                         customInstructions: request.customInstructions,

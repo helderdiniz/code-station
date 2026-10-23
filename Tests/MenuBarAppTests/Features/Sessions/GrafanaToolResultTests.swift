@@ -3,8 +3,8 @@ import Testing
 @testable import MenuBarApp
 
 struct GrafanaToolResultTests {
-    private func logs(_ text: String, levelField: String? = nil) throws -> [GrafanaToolResult.LogEntry] {
-        guard case .logs(let entries, _)? = GrafanaToolResult.parse(text, levelField: levelField) else {
+    private func logs(_ text: String) throws -> [GrafanaToolResult.LogEntry] {
+        guard case .logs(let entries, _)? = GrafanaToolResult.parse(text) else {
             Issue.record("not logs: \(text)")
             return []
         }
@@ -59,14 +59,6 @@ struct GrafanaToolResultTests {
         let entry = try #require(try logs(text).first)
         #expect(entry.message == "Boom")
         #expect(entry.line.contains("B.java:2"))
-    }
-
-    @Test func prefersTheConfiguredLevelField() throws {
-        let text = #"""
-        {"data":[{"timestamp":"\"1790935200000000000\"","line":"x",
-          "labels":{},"parsed":{"level":"info","sev":"CRIT"}}]}
-        """#
-        #expect(try logs(text, levelField: "sev").first?.level == "CRIT")
     }
 
     @Test func fallsBackToDetectedLevelButNotUnknown() throws {
@@ -152,5 +144,13 @@ struct GrafanaToolResultTests {
             Issue.record("not logs"); return
         }
         #expect(!truncated)
+    }
+
+    @Test func aQuotedMessageLokiDidNotParseLosesItsQuotes() throws {
+        let text = #"""
+        {"data":[{"timestamp":"\"1790935200000000000\"","line":"level=error msg=\"lock timeout\" row=4417",
+          "labels":{},"parsed":{"level":"error"}}]}
+        """#
+        #expect(try logs(text).first?.message == "lock timeout")
     }
 }

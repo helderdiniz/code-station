@@ -51,7 +51,7 @@ enum TranscriptSearch {
                 switch block {
                 case .prose(_, let text):
                     return MessageSegment.split(text).flatMap { segment -> [String] in
-                        if segment.isChart { return [] }
+                        if segment.isDrawn { return [] }
                         if segment.isCode { return [segment.text] }
                         return MarkdownBlock.parse(segment.text).flatMap { block -> [String] in
                             switch block.kind {

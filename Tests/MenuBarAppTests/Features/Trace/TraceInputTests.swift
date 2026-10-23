@@ -16,26 +16,17 @@ struct TraceInputTests {
         #expect(TraceInput.traceID(from: "https://grafana.example.com/trace/\(Self.id)?orgId=1") == Self.id)
     }
 
+    // Tempo search hands back an id that starts with a zero without it.
+    @Test func putsBackTheLeadingZeroTempoSearchDrops() {
+        #expect(TraceInput.traceID(from: String(Self.id.dropFirst())) == Self.id)
+        #expect(TraceInput.traceID(from: "https://grafana.example.com/trace/\(Self.id.dropFirst())") == Self.id)
+    }
+
     @Test func rejectsWhatIsNotATraceId() {
         #expect(TraceInput.traceID(from: "") == nil)
         #expect(TraceInput.traceID(from: "hello") == nil)
-        #expect(TraceInput.traceID(from: String(Self.id.dropLast())) == nil)
+        #expect(TraceInput.traceID(from: String(Self.id.dropLast(2))) == nil)
         #expect(TraceInput.traceID(from: Self.id + "a") == nil)
         #expect(TraceInput.traceID(from: "https://grafana.example.com/explore") == nil)
-    }
-
-    @Test func linksToTheTraceInGrafanaExplore() throws {
-        let url = try #require(TraceLink.explore(grafanaURL: "https://grafana.edge-prd.example.com/",
-                                                 datasourceUID: "TEMPO-1", traceID: Self.id))
-        let components = try #require(URLComponents(url: url, resolvingAgainstBaseURL: false))
-        #expect(components.host == "grafana.edge-prd.example.com")
-        #expect(components.path == "/explore")
-        let panes = try #require(components.queryItems?.first { $0.name == "panes" }?.value)
-        let object = try #require(try JSONSerialization.jsonObject(with: Data(panes.utf8)) as? [String: Any])
-        let pane = try #require(object["a"] as? [String: Any])
-        #expect(pane["datasource"] as? String == "TEMPO-1")
-        let query = try #require((pane["queries"] as? [[String: Any]])?.first)
-        #expect(query["query"] as? String == Self.id)
-        #expect(query["queryType"] as? String == "traceql")
     }
 }

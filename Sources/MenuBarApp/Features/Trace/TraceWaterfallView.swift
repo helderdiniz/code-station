@@ -44,8 +44,8 @@ struct TraceWaterfallView<Accessory: View>: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .surface(Theme.sunken, cornerRadius: 8, border: Theme.border)
         .clipShape(RoundedRectangle(cornerRadius: 8))
-        // The Trace tab draws the next trace it looks up in the same place, and what was
-        // folded or opened in the last one means nothing in it.
+        // A view reused for another trace starts that trace afresh: what was folded or
+        // opened in the last one means nothing in it.
         .onChange(of: trace.traceID) {
             collapsed = trace.initiallyFolded
             expanded = []
@@ -74,8 +74,11 @@ struct TraceWaterfallView<Accessory: View>: View {
                      counted(trace.rows.count, "span"),
                      counted(trace.services.count, "service")]
         if trace.errorCount > 0 { parts.append(counted(trace.errorCount, "error")) }
-        parts.append(GrafanaResultView.clock(
-            Date(timeIntervalSince1970: Double(trace.startNanos) / 1_000_000_000)))
+        // A trace timed only from its own start has no clock time to show.
+        if trace.startNanos > 0 {
+            parts.append(GrafanaResultView.clock(
+                Date(timeIntervalSince1970: Double(trace.startNanos) / 1_000_000_000)))
+        }
         return parts.joined(separator: " · ")
     }
 

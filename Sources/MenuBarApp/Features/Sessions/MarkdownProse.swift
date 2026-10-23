@@ -1676,7 +1676,8 @@ struct MarkdownBlockView: View, Equatable {
 
 // Markdown drawn as a page. Fenced blocks are split out first, since the block parser
 // deliberately handles prose only, and everything between the fences is parsed into
-// blocks. A fence tagged as a chart is drawn rather than printed. The transcript and the file preview both draw with this, and differ only in
+// blocks. A fence tagged as a chart, a trace or log lines is drawn rather than printed.
+// The transcript and the file preview both draw with this, and differ only in
 // what they hang on a code block and whether a long page is built as it scrolls.
 struct MarkdownProse<Code: View>: View {
     let text: String
@@ -1743,6 +1744,14 @@ struct MarkdownProse<Code: View>: View {
         ForEach(MessageSegment.split(text)) { segment in
             if segment.isChart {
                 TranscriptChartBlock(segment: segment)
+                    .equatable()
+                    .transition(.fadeIn)
+            } else if segment.isTrace {
+                TranscriptTraceBlock(segment: segment)
+                    .equatable()
+                    .transition(.fadeIn)
+            } else if segment.isLogs {
+                TranscriptLogsBlock(segment: segment)
                     .equatable()
                     .transition(.fadeIn)
             } else if segment.isCode {
