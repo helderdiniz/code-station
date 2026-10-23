@@ -3,6 +3,12 @@ import Testing
 @testable import MenuBarApp
 
 struct ExplorerSplitTests {
+    @Test func panelsCollapseBeforeTheirContentGetsTooNarrow() {
+        #expect(ExplorerSplitLayout.minimumSplitWidth == 541)
+        #expect(ExplorerSplitLayout.treeWidth(300, availableWidth: 600, keepsDetailMinimum: true) == 279)
+        #expect(!ExplorerSplitLayout.showsInlineDetails(availableWidth: 569))
+        #expect(ExplorerSplitLayout.showsInlineDetails(availableWidth: 570))
+    }
     @Test func draggingWidensAndNarrowsTheTree() {
         #expect(ExplorerSplitLayout.treeWidth(460, availableWidth: 1_000) == 460)
         #expect(ExplorerSplitLayout.treeWidth(260, availableWidth: 1_000) == 260)

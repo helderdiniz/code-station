@@ -7,9 +7,19 @@ enum ExplorerSplitLayout {
     static let minimumDetailWidth: CGFloat = 320
     static let dividerWidth: CGFloat = 1
     static let handleWidth: CGFloat = 9
+    static let detailsWidth: CGFloat = 250
+    static var minimumSplitWidth: CGFloat { minimumTreeWidth + dividerWidth + minimumDetailWidth }
 
-    static func treeWidth(_ proposedWidth: CGFloat, availableWidth: CGFloat) -> CGFloat {
+    static func showsInlineDetails(availableWidth: CGFloat) -> Bool {
+        availableWidth >= minimumDetailWidth + detailsWidth
+    }
+
+    static func treeWidth(_ proposedWidth: CGFloat, availableWidth: CGFloat,
+                          keepsDetailMinimum: Bool = false) -> CGFloat {
         let paneWidth = max(0, availableWidth - dividerWidth)
+        if keepsDetailMinimum && availableWidth >= minimumSplitWidth {
+            return min(max(proposedWidth, minimumTreeWidth), paneWidth - minimumDetailWidth)
+        }
         let halfWidth = paneWidth / 2
         let minimum = min(minimumTreeWidth, halfWidth)
         let maximum = max(minimum, paneWidth - min(minimumDetailWidth, halfWidth))

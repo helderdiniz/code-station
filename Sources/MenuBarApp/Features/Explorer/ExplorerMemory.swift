@@ -15,6 +15,7 @@ final class ExplorerMemory {
         // Only kept while the file has edits that are not on disk. A clean file is read
         // again on return, so it shows whatever an agent has written since.
         var unsaved: UnsavedEdit?
+        var documents = ExplorerDocuments()
     }
 
     struct UnsavedEdit {
@@ -35,7 +36,7 @@ final class ExplorerMemory {
         places[root] = place
     }
     func unsavedEdit(inside path: String) -> UnsavedEdit? {
-        places.values.compactMap(\.unsaved).first {
+        places.values.flatMap { Array($0.documents.edits.values) + [$0.unsaved].compactMap { $0 } }.first {
             $0.path == path || $0.path.hasPrefix(path + "/")
         }
     }
@@ -43,6 +44,7 @@ final class ExplorerMemory {
     func moved(from old: String, to new: String) {
         for root in Array(places.keys) {
             guard var place = places[root] else { continue }
+            place.documents.moved(from: old, to: new)
             place.expanded = Set(place.expanded.map { FileTree.path($0, afterMoving: old, to: new) })
             if var node = place.selected {
                 node.url = URL(fileURLWithPath: FileTree.path(node.path, afterMoving: old, to: new))
@@ -61,6 +63,7 @@ final class ExplorerMemory {
     func removed(_ path: String) {
         for root in Array(places.keys) {
             guard var place = places[root] else { continue }
+            place.documents.removed(path)
             place.expanded = place.expanded.filter { $0 != path && !$0.hasPrefix(path + "/") }
             if let selected = place.selected,
                selected.path == path || selected.path.hasPrefix(path + "/") {

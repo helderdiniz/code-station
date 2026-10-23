@@ -688,29 +688,9 @@ struct SessionView: View {
             }
     }
 
-    // The file tree's own actions sit in the tab row, so the Explorer needs no header band
-    // of its own between the tabs and the files.
     private var explorerActions: some View {
-        HStack(spacing: 4) {
-            HeaderRailButton(icon: explorerShowsHidden ? "eye" : "eye.slash",
-                             state: explorerShowsHidden ? .open : .rest,
-                             label: explorerShowsHidden ? "Hide hidden files" : "Show hidden files",
-                             hint: "Dot-files and ignored folders") {
-                explorerShowsHidden.toggle()
-            }
-            .accessibilityAddTraits(explorerShowsHidden ? .isSelected : [])
-            HeaderRailButton(icon: "magnifyingglass", label: "Find in files", hint: "Ctrl+H") {
-                explorerCommand = .findInFiles
-            }
-            HeaderRailButton(icon: "doc.badge.plus", label: "New file") {
-                explorerCommand = .newFile
-            }
-            HeaderRailButton(icon: "folder.badge.plus", label: "New folder") {
-                explorerCommand = .newFolder
-            }
-            HeaderRailButton(icon: "arrow.clockwise", label: "Refresh") {
-                explorerCommand = .refresh
-            }
+        HeaderRailButton(icon: "magnifyingglass", label: "Find a file", hint: "Tap Shift twice") {
+            explorerCommand = .findFile
         }
     }
 

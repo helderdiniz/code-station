@@ -133,14 +133,28 @@ enum FileTree {
     private static let skipped: Set<String> = [".git"]
 
     static func children(of url: URL, includeHidden: Bool) async -> [FileNode] {
+        await listing(of: url, includeHidden: includeHidden).nodes
+    }
+
+    struct Listing: Sendable {
+        var nodes: [FileNode] = []
+        var error: String?
+    }
+
+    static func listing(of url: URL, includeHidden: Bool) async -> Listing {
         await Task.detached(priority: .userInitiated) {
             let keys: [URLResourceKey] = [
                 .isDirectoryKey, .isSymbolicLinkKey, .fileSizeKey, .contentModificationDateKey
             ]
             let options: FileManager.DirectoryEnumerationOptions = includeHidden ? [] : [.skipsHiddenFiles]
             let listed = url.resolvingSymlinksInPath()
-            guard let entries = try? FileManager.default.contentsOfDirectory(
-                at: listed, includingPropertiesForKeys: keys, options: options) else { return [] }
+            let entries: [URL]
+            do {
+                entries = try FileManager.default.contentsOfDirectory(
+                    at: listed, includingPropertiesForKeys: keys, options: options)
+            } catch {
+                return Listing(error: error.localizedDescription)
+            }
 
             var nodes: [FileNode] = []
             for entry in entries where !skipped.contains(entry.lastPathComponent) {
@@ -160,10 +174,10 @@ enum FileTree {
 
             // Folders first, then by name the way Finder sorts it, so "file10" follows
             // "file9" instead of "file1".
-            return nodes.sorted { a, b in
+            return Listing(nodes: nodes.sorted { a, b in
                 if a.isDirectory != b.isDirectory { return a.isDirectory }
                 return a.name.localizedStandardCompare(b.name) == .orderedAscending
-            }
+            })
         }.value
     }
 
@@ -225,8 +239,7 @@ enum FileTree {
     // path it was reached by, so a row reads as the way the user walked in rather than as
     // wherever the link happened to land.
     private static func pathWalkedIn(to entry: URL, listed: URL, asked: URL) -> URL {
-        guard listed.path != asked.path,
-              let relativePath = entry.path.pathRelative(to: listed.path) else { return entry }
+        guard let relativePath = entry.path.pathRelative(to: listed.path) else { return entry }
         return asked.appendingPathComponent(relativePath)
     }
 
@@ -353,6 +366,36 @@ enum FileTree {
     enum CreateResult: Equatable {
         case created(URL)
         case failed(String)
+    }
+
+    static func nameError(_ name: String) -> String? {
+        let name = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        if name.isEmpty { return "Enter a name." }
+        if name == "." || name == ".." || name.contains("/") || name.contains("\\") || name.contains("\0") {
+            return "Use a name without slashes, and not \".\" or \"..\"."
+        }
+        return nil
+    }
+
+    static func create(name: String, folder: Bool, in directory: URL) async -> CreateResult {
+        if let error = nameError(name) { return .failed(error) }
+        let name = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        return await Task.detached(priority: .userInitiated) {
+            let url = directory.appendingPathComponent(name, isDirectory: folder)
+            guard (try? FileManager.default.attributesOfItem(atPath: url.path)) == nil else {
+                return .failed("That name is already in use. Choose a different name.")
+            }
+            do {
+                if folder {
+                    try FileManager.default.createDirectory(at: url, withIntermediateDirectories: false)
+                } else {
+                    try Data().write(to: url, options: .withoutOverwriting)
+                }
+                return .created(url)
+            } catch {
+                return .failed(error.localizedDescription)
+            }
+        }.value
     }
 
     // A placeholder name, the way Finder does it, so the item exists at once and is then

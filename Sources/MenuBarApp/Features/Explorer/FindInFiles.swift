@@ -15,6 +15,24 @@ struct FileTextLine: Equatable, Sendable {
     let number: Int
     let text: String
     let hits: [NSRange]
+
+    // Every hit wears the colour the editor uses for a find match, so the line looks the
+    // same here as it will once it is open.
+    @MainActor var highlighted: AttributedString {
+        let text = text as NSString
+        var out = AttributedString()
+        var cursor = 0
+        for hit in hits where hit.location >= cursor && NSMaxRange(hit) <= text.length {
+            out += AttributedString(text.substring(with: NSRange(location: cursor,
+                                                                 length: hit.location - cursor)))
+            var mark = AttributedString(text.substring(with: hit))
+            mark.backgroundColor = Color(nsColor: CodeEditorStyle.match)
+            out += mark
+            cursor = NSMaxRange(hit)
+        }
+        out += AttributedString(text.substring(from: cursor))
+        return out
+    }
 }
 
 struct FileTextMatches: Equatable, Sendable, Identifiable {
@@ -551,7 +569,7 @@ struct FindInFilesDialog: View {
                     .font(.mono(10, selected ? .semibold : .regular))
                     .foregroundStyle(selected ? AnyShapeStyle(Theme.accent) : AnyShapeStyle(.secondary))
                     .frame(width: 36, alignment: .trailing)
-                Text(marked(line))
+                Text(line.highlighted)
                     .font(.mono(11))
                     .lineLimit(1)
                     .truncationMode(.tail)
@@ -572,24 +590,6 @@ struct FindInFilesDialog: View {
         })
         .accessibilityLabel("Line \(line.number) in \(file.name): \(line.text)")
         .accessibilityAddTraits(selected ? .isSelected : [])
-    }
-
-    // Every hit wears the colour the editor uses for a find match, so the line looks the
-    // same here as it will once it is open.
-    private func marked(_ line: FileTextLine) -> AttributedString {
-        let text = line.text as NSString
-        var out = AttributedString()
-        var cursor = 0
-        for hit in line.hits where hit.location >= cursor && NSMaxRange(hit) <= text.length {
-            out += AttributedString(text.substring(with: NSRange(location: cursor,
-                                                                 length: hit.location - cursor)))
-            var mark = AttributedString(text.substring(with: hit))
-            mark.backgroundColor = Color(nsColor: CodeEditorStyle.match)
-            out += mark
-            cursor = NSMaxRange(hit)
-        }
-        out += AttributedString(text.substring(from: cursor))
-        return out
     }
 
     private func message(_ text: String, detail: String?) -> some View {

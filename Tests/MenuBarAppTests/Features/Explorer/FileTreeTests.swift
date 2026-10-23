@@ -9,6 +9,35 @@ struct FileTreeTests {
     private let scratch = ScratchDirectory(prefix: "filetree-tests")
     private var root: URL { scratch.url }
 
+    @Test func namedCreationValidatesBeforeWritingAndNeverReplacesAnItem() async throws {
+        for name in ["", "  ", ".", "..", "a/b", "a\\b", "a\0b"] {
+            guard case .failed = await FileTree.create(name: name, folder: false, in: root) else {
+                Issue.record("Accepted an invalid name: \(name)")
+                continue
+            }
+        }
+        let file = root.appendingPathComponent("example.swift")
+        #expect(await FileTree.create(name: " example.swift ", folder: false, in: root) == .created(file))
+        try "keep".write(to: file, atomically: true, encoding: .utf8)
+        guard case .failed = await FileTree.create(name: "example.swift", folder: false, in: root) else {
+            Issue.record("Replaced an existing file")
+            return
+        }
+        #expect(try String(contentsOf: file, encoding: .utf8) == "keep")
+        let folder = root.appendingPathComponent("NewFolder", isDirectory: true)
+        #expect(await FileTree.create(name: "NewFolder", folder: true, in: root) == .created(folder))
+        #expect(await FileTree.listing(of: folder, includeHidden: false).error == nil)
+    }
+
+    @Test func listingDistinguishesAnEmptyFolderFromAnUnavailableOne() async {
+        let empty = await FileTree.listing(of: root, includeHidden: false)
+        #expect(empty.nodes.isEmpty)
+        #expect(empty.error == nil)
+        let missing = await FileTree.listing(of: root.appendingPathComponent("missing"), includeHidden: false)
+        #expect(missing.nodes.isEmpty)
+        #expect(missing.error != nil)
+    }
+
     @Test func offersRenderedPreviewForMarkdownFiles() {
         let markdown = FileNode(url: URL(fileURLWithPath: "/project/README.MD"),
                                 name: "README.MD", isDirectory: false, size: 0)
