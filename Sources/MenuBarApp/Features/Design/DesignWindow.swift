@@ -20,9 +20,11 @@ final class DesignWindow {
             return
         }
 
-        let hosting = NSHostingController(rootView: content)
-        // Let the window own its size instead of shrinking to the view's ideal size.
-        hosting.sizingOptions = []
+        let hosting = NSHostingController(rootView: content.frame(minWidth: 640, minHeight: 420))
+        // The window owns its size instead of shrinking to the view's ideal size. The
+        // minimum comes from the view, because the hosting controller resets the
+        // window's own contentMinSize to zero.
+        hosting.sizingOptions = [.minSize]
         let win = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 1280, height: 860),
             styleMask: [.titled, .closable, .miniaturizable, .resizable],
@@ -34,7 +36,6 @@ final class DesignWindow {
         win.titlebarAppearsTransparent = true
         win.backgroundColor = Theme.backgroundNSColor
         win.isReleasedWhenClosed = false
-        win.contentMinSize = NSSize(width: 640, height: 420)
         win.collectionBehavior.insert(.fullScreenPrimary)
         win.center()
         window = win
