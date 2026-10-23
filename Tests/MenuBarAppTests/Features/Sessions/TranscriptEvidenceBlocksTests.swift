@@ -64,6 +64,34 @@ struct TranscriptEvidenceBlocksTests {
         #expect(TraceWaterfallView<EmptyView>.facts(spec.trace) == "2.14s · 2 spans · 2 services · 2 errors")
     }
 
+    // The agent copies attribute values as the tools gave them, so a status code comes as
+    // a number. That must not cost the reader the whole trace.
+    @Test func readsAttributesThatAreNotText() throws {
+        let text = """
+            {"spans":[{"id":"TF4DTVIJeSg=","service":"payments-gateway","start":0,"duration":3,"error":true,
+              "attributes":{"http.response.status_code":400,"latency":1.5,"retry":false,
+                            "http.route":"/pay","extra":{"a":1},"gone":null}}]}
+            """
+        guard case .success(let spec) = TranscriptTraceSpec.parse(text) else {
+            Issue.record("not read"); return
+        }
+        let span = try #require(spec.trace.spans.first)
+        #expect(span.attributes == [
+            Trace.Attribute(key: "http.response.status_code", value: "400"),
+            Trace.Attribute(key: "http.route", value: "/pay"),
+            Trace.Attribute(key: "latency", value: "1.5"),
+            Trace.Attribute(key: "retry", value: "false"),
+        ])
+    }
+
+    @Test func readsLogFieldsThatAreNotText() throws {
+        let text = #"{"lines":[{"message":"rejected","fields":{"status":400,"trace_id":"abc"}}]}"#
+        guard case .success(let spec) = TranscriptLogsSpec.parse(text) else {
+            Issue.record("not read"); return
+        }
+        #expect(spec.entries.first?.fields == ["status": "400", "trace_id": "abc"])
+    }
+
     @Test func aTraceWithNoUsableSpanIsUnreadable() {
         let unreadable = ["", "not json", #"{"spans":[]}"#,
                           #"{"spans":[{"id":"  ","service":"a","start":0,"duration":1}]}"#]

@@ -44,7 +44,7 @@ struct TranscriptTraceSpec: Equatable, Sendable {
                 durationNanos: Int64(max(span.duration, 0) * 1_000_000),
                 isError: span.error ?? false,
                 statusMessage: span.message?.trimmed.nilIfBlank,
-                attributes: (span.attributes ?? [:]).sorted { $0.key < $1.key }
+                attributes: WireValue.texts(span.attributes).sorted { $0.key < $1.key }
                     .map { Trace.Attribute(key: $0.key, value: $0.value) },
                 resourceAttributes: [],
                 events: [])
@@ -78,7 +78,7 @@ struct TranscriptTraceSpec: Equatable, Sendable {
             let duration: Double
             let error: Bool?
             let message: String?
-            let attributes: [String: String]?
+            let attributes: [String: WireValue]?
         }
         let traceId: String?
         let time: String?
@@ -116,7 +116,7 @@ struct TranscriptLogsSpec: Equatable, Sendable {
             let labels = line.service.map { ["service": $0] } ?? [:]
             return GrafanaToolResult.LogEntry(
                 id: index, rawTimestamp: line.time ?? "", date: line.time.flatMap(date),
-                line: message, labels: labels, fields: line.fields ?? [:], metadata: [:],
+                line: message, labels: labels, fields: WireValue.texts(line.fields), metadata: [:],
                 level: line.level?.trimmed.nilIfBlank, message: message)
         }
         guard !entries.isEmpty else { return .failure(.unreadable) }
@@ -140,12 +140,39 @@ struct TranscriptLogsSpec: Equatable, Sendable {
             let level: String?
             let service: String?
             let message: String
-            let fields: [String: String]?
+            let fields: [String: WireValue]?
         }
         let title: String?
         let server: String?
         let query: String?
         let lines: [Line]
+    }
+}
+
+// A value in a block's "attributes" or "fields". The agent copies these from the tools,
+// which give a status code as a number and a flag as a boolean. They are read as text,
+// and a value with no text form, such as null or an object, is left out rather than
+// making the whole block unreadable.
+private struct WireValue: Decodable {
+    let text: String?
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        if let text = try? container.decode(String.self) {
+            self.text = text
+        } else if let number = try? container.decode(Int64.self) {
+            self.text = String(number)
+        } else if let number = try? container.decode(Double.self) {
+            self.text = String(number)
+        } else if let flag = try? container.decode(Bool.self) {
+            self.text = String(flag)
+        } else {
+            self.text = nil
+        }
+    }
+
+    static func texts(_ values: [String: WireValue]?) -> [String: String] {
+        (values ?? [:]).compactMapValues(\.text)
     }
 }
 
