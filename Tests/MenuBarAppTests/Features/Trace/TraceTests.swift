@@ -129,4 +129,110 @@ struct TraceTests {
         ])
         #expect(patchy.initiallyFolded == ["o"])
     }
+
+    // q (0-1000) calls check fourteen times side by side, then a lone save; one check fails.
+    static let checks: Trace = {
+        var spans = [span("q", start: 0, duration: 1_000)]
+        for index in 0..<14 {
+            let check = Trace.Span(id: "c\(index)", parentID: "q", service: "authz",
+                                   operation: "DispatchCheck", kind: "client",
+                                   startNanos: 500 + Int64(index), durationNanos: 2,
+                                   isError: index == 3, statusMessage: index == 3 ? "cancelled" : nil,
+                                   attributes: [], resourceAttributes: [], events: [])
+            spans.append(check)
+        }
+        spans.append(span("s", parent: "q", start: 900, duration: 50))
+        return Trace(traceID: "t", spans: spans)
+    }()
+
+    @Test func foldsARunOfAlikeSpansIntoOneRow() throws {
+        let rows = Self.checks.displayRows(collapsed: [])
+        #expect(rows.map(\.id) == ["q", "g:q:authz:DispatchCheck", "s"])
+        guard case .group(let group) = rows[1] else {
+            Issue.record("not grouped"); return
+        }
+        #expect(group.spans.count == 14)
+        #expect(group.depth == 1)
+        #expect(group.failures.map(\.id) == ["c3"])
+        #expect(group.startNanos == 500)
+        #expect(group.endNanos == 515)
+
+        let listed = Self.checks.displayRows(collapsed: [], openGroups: [group.key])
+        #expect(listed.count == 16)
+    }
+
+    @Test func twoAlikeSpansStayApart() {
+        let pair = Trace(traceID: "t", spans: [
+            Self.span("r", start: 0, duration: 100),
+            Self.span("a", parent: "r", start: 1, duration: 1),
+            Self.span("b", parent: "r", start: 2, duration: 1),
+        ].map { span in
+            Trace.Span(id: span.id, parentID: span.parentID, service: span.service,
+                       operation: span.parentID == nil ? "root" : "same", kind: span.kind,
+                       startNanos: span.startNanos, durationNanos: span.durationNanos,
+                       isError: false, statusMessage: nil, attributes: [],
+                       resourceAttributes: [], events: [])
+        })
+        #expect(pair.displayRows(collapsed: []).map(\.id) == ["r", "a", "b"])
+    }
+
+    // The failed view keeps each failure and the callers above it, and nothing else.
+    @Test func keepsTheWayDownToEachFailure() {
+        #expect(Self.tree.failurePath == ["r", "b"])
+        let rows = Self.tree.displayRows(collapsed: [], keep: Self.tree.failurePath)
+        #expect(rows.map(\.id) == ["r", "b"])
+        #expect(Self.tree.failuresBelow["r"] == 1)
+        #expect(Self.tree.failuresBelow["a"] == 0)
+    }
+
+    // A zoom keeps the spans that run inside it, and the callers that lead to them.
+    @Test func zoomingHidesTheSpansOutsideTheWindow() {
+        let rows = Self.tree.displayRows(collapsed: [], window: 14...22)
+        #expect(rows.map(\.id) == ["r", "a", "c"])
+        #expect(Self.tree.spanCount(in: 14...22) == 3)
+    }
+
+    @Test func aZoomStaysInsideTheTrace() {
+        #expect(Self.tree.zoomWindow(-50, 200) == nil)
+        #expect(Self.tree.zoomWindow(60, 20) == 20...60)
+        let around = Self.checks.zoomWindow(around: Self.checks.span("s")!)
+        #expect(around?.lowerBound ?? 0 < 900)
+        #expect(around?.upperBound ?? 0 > 950)
+    }
+
+    // What ran below a span, as merged stretches, and each service's own time.
+    @Test func measuresWorkBelowAndOwnTime() {
+        #expect(Self.tree.busy["r"] == [10...30, 50...100])
+        #expect(Self.tree.busyNanos(Self.tree.span("r")!) == 70)
+        // api: r has 30 of its own, a has 15, o has 1.
+        #expect(Self.tree.ownTime == ["api": 46, "db": 5, "orders": 50])
+        #expect(Self.tree.parentIDs["c"] == "a")
+        #expect(Self.tree.childIDs["r"] == ["a", "b"])
+    }
+
+    @Test func splitsTheVerbOffAnOperation() {
+        #expect(Trace.verb(of: "POST /v1/tokens") == ("POST", "/v1/tokens"))
+        #expect(Trace.verb(of: "publish payments-topic") == ("PUBLISH", "payments-topic"))
+        #expect(Trace.verb(of: "CheckPermission") == (nil, "CheckPermission"))
+        #expect(Trace.verb(of: "Get user") == (nil, "Get user"))
+        #expect(Trace.verb(of: "GET ") == (nil, "GET "))
+    }
+
+    @Test func marksAnAxisInRoundSteps() {
+        let trace = Trace(traceID: "t", spans: [Self.span("r", start: 0, duration: 17_060_000_000)])
+        let ticks = trace.ticks(in: trace.wholeWindow)
+        #expect(ticks.step == 2_000_000_000)
+        #expect(ticks.offsets.first == 0)
+        #expect(ticks.offsets.last == 16_000_000_000)
+        #expect(Trace.tickText(4_000_000_000, step: ticks.step) == "4 s")
+        #expect(Trace.tickText(16_980_000_000, step: 20_000_000) == "16,980 ms")
+        #expect(Trace.tickText(0, step: 1) == "0")
+    }
+
+    @Test func writesTimesForReadingOnTheirOwn() {
+        #expect(Trace.spacedDuration(17_060_000_000) == "17.06 s")
+        #expect(Trace.spacedDuration(900_000) == "900 µs")
+        #expect(Trace.offsetText(16_980_000_000) == "+16,980 ms")
+        #expect(Trace.offsetText(470_000_000) == "+470 ms")
+    }
 }

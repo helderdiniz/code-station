@@ -51,8 +51,8 @@ struct TranscriptEvidenceBlocksTests {
             Issue.record("not read"); return
         }
         #expect(spec.trace.startNanos == 1_792_764_128_245_000_000)
-        #expect(TraceWaterfallView<EmptyView>.facts(spec.trace).hasSuffix(
-            GrafanaResultView.clock(Date(timeIntervalSince1970: 1_792_764_128.245))))
+        #expect(String(TraceWaterfallView.startLine(spec.trace).characters) == "Starts in api at "
+            + GrafanaResultView.clock(Date(timeIntervalSince1970: 1_792_764_128.245)))
     }
 
     // Without a clock time the spans count from zero, and the waterfall shows no clock
@@ -61,7 +61,7 @@ struct TranscriptEvidenceBlocksTests {
         guard case .success(let spec) = TranscriptTraceSpec.parse(Self.trace) else {
             Issue.record("not read"); return
         }
-        #expect(TraceWaterfallView<EmptyView>.facts(spec.trace) == "2.14s · 2 spans · 2 services · 2 errors")
+        #expect(String(TraceWaterfallView.startLine(spec.trace).characters) == "Starts in checkout-api")
     }
 
     // The agent copies attribute values as the tools gave them, so a status code comes as
@@ -90,6 +90,22 @@ struct TranscriptEvidenceBlocksTests {
             Issue.record("not read"); return
         }
         #expect(spec.entries.first?.fields == ["status": "400", "trace_id": "abc"])
+    }
+
+    // A block cut off part way still names its trace, so asking for it again asks for
+    // the right one.
+    @Test func namesTheTraceInABlockThatCannotBeRead() {
+        let cut = #"{"traceId":"\#(Self.traceID)","server":"grafana-edge-dev","spans":[{"id":"a1","serv"#
+        guard case .failure = TranscriptTraceSpec.parse(cut) else {
+            Issue.record("read a cut block"); return
+        }
+        let named = TranscriptTraceSpec.salvage(cut)
+        #expect(named.traceID == Self.traceID)
+        #expect(named.server == "grafana-edge-dev")
+        #expect(TraceFollowUp.drawAgain(named.traceID, server: named.server)
+            .contains("`\(Self.traceID)` could not be read"))
+        let nothing = TranscriptTraceSpec.salvage("not json")
+        #expect(nothing.traceID == nil && nothing.server == nil)
     }
 
     @Test func aTraceWithNoUsableSpanIsUnreadable() {

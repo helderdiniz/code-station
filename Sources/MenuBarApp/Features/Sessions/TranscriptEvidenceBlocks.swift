@@ -59,6 +59,19 @@ struct TranscriptTraceSpec: Equatable, Sendable {
             trace: Trace(traceID: traceID, spans: spans)))
     }
 
+    // What can still be made out of a block that cannot be read, often one cut off part
+    // way, so asking for it again names the trace and where it came from.
+    static func salvage(_ text: String) -> (traceID: String?, server: String?) {
+        func field(_ name: String) -> String? {
+            guard let regex = try? NSRegularExpression(pattern: #""\#(name)"\s*:\s*"([^"]+)""#),
+                  let match = regex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
+                  let range = Range(match.range(at: 1), in: text) else { return nil }
+            return String(text[range]).trimmed.nilIfBlank
+        }
+        let traceID = field("traceId").map { TraceInput.traceID(from: $0) ?? $0 }
+        return (traceID, field("server"))
+    }
+
     private static func date(_ text: String) -> Date? {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
@@ -235,13 +248,14 @@ struct TranscriptTraceBlock: View, Equatable {
 
     var body: some View {
         if segment.isOpen {
-            EmptyView()
+            TraceArrivingCard()
         } else {
             switch TranscriptTraceSpec.parse(segment.text) {
             case .success(let spec):
-                TranscriptTraceCard(spec: spec, maxHeight: 420)
-            case .failure(let failure):
-                TranscriptBlockFailure(message: failure.localizedDescription)
+                TranscriptTraceCard(spec: spec, maxHeight: 460)
+            case .failure:
+                let named = TranscriptTraceSpec.salvage(segment.text)
+                TraceUnreadableCard(traceID: named.traceID, server: named.server)
             }
         }
     }
@@ -275,40 +289,15 @@ struct TranscriptBlockFailure: View {
     }
 }
 
-// A trace with its title and where it came from above the waterfall. Opening a span offers
-// to ask the agent for that span's logs, since the agent is the one with the way in.
+// A trace with its title and where it came from. Opening a span offers to ask the agent
+// for that span's logs, since the agent is the one with the way in.
 struct TranscriptTraceCard: View {
-    @Environment(\.askAgent) private var askAgent
-
     let spec: TranscriptTraceSpec
     var maxHeight: CGFloat? = nil
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            if spec.title != nil || spec.server != nil || spec.omittedSpans > 0 {
-                HStack(spacing: 8) {
-                    if let title = spec.title {
-                        Text(title).scaledText(12.5, .semibold)
-                    }
-                    if let server = spec.server {
-                        Text(server).scaledMono(10.5).foregroundStyle(.secondary)
-                    }
-                    Spacer(minLength: 8)
-                    if spec.omittedSpans > 0 {
-                        Text("\(counted(spec.omittedSpans, "span")) not shown")
-                            .scaledMono(10.5)
-                            .foregroundStyle(Theme.attentionText)
-                    }
-                }
-            }
-            TraceWaterfallView(trace: spec.trace, maxHeight: maxHeight) { span in
-                if let askAgent {
-                    InlineAskButton(title: "Ask for \(span.service)'s logs for this span") {
-                        askAgent(TraceFollowUp.spanLogs(span, traceID: spec.trace.traceID))
-                    }
-                }
-            }
-        }
+        TraceWaterfallView(trace: spec.trace, title: spec.title, server: spec.server,
+                           omittedSpans: spec.omittedSpans, maxHeight: maxHeight)
     }
 }
 
@@ -339,8 +328,17 @@ enum TraceFollowUp {
             + "```\(TranscriptLogsSpec.fenceLanguage) block."
     }
 
-    static func fullTrace(_ traceID: String, server: String) -> String {
-        "The trace `\(traceID)` from \(server) was too long to keep in the transcript. "
-            + "Fetch it again and draw it as a ```\(TranscriptTraceSpec.fenceLanguage) block."
+    static func fullTrace(_ traceID: String, server: String?) -> String {
+        "The trace `\(traceID)`\(server.map { " from \($0)" } ?? "") was too long to keep in "
+            + "the transcript. Fetch it again and draw it as a "
+            + "```\(TranscriptTraceSpec.fenceLanguage) block."
+    }
+
+    static func drawAgain(_ traceID: String?, server: String?) -> String {
+        let trace = traceID.map { "for trace `\($0)`" } ?? "you wrote"
+        let source = server.map { " from \($0)" } ?? ""
+        return "The ```\(TranscriptTraceSpec.fenceLanguage) block \(trace) could not be read. "
+            + "Fetch the trace again\(source) and draw it as a complete "
+            + "```\(TranscriptTraceSpec.fenceLanguage) block."
     }
 }
