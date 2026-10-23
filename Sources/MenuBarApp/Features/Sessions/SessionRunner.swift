@@ -172,10 +172,6 @@ final class SessionRunner {
     Inspect the current state and continue only the unfinished parts of the previous request. Do not repeat work or side effects that are already complete.
     """
 
-    // Where the queries a person ran from a Grafana result are kept, so the next message
-    // can tell the agent about them.
-    var grafanaRuns: GrafanaQueryRunner?
-
     private let persistentAgentSessions: Bool
 
     init(preferences: UserDefaults = .standard, configs: ConfigStore? = nil, persistentAgentSessions: Bool = true, paths: [AgentKind: String]? = nil,
@@ -1007,14 +1003,10 @@ final class SessionRunner {
                     || instructions?.isEmpty == false else { return }
             text = planPrompt
         }
-        let toolIDs = Set(store.transcript(of: sessionID).flatMap { $0.tools.map(\.id) })
-        let runNote = grafanaRuns?.takeNote(forToolIDs: toolIDs)
-        let combined = [instructions, runNote].compactMap { $0 }.filter { !$0.isEmpty }
-            .joined(separator: "\n\n")
         recordAddingIfMissing(sessionID).queue.append(QueuedPrompt(
             text: text,
             attachments: attachments,
-            customInstructions: combined.isEmpty ? nil : combined,
+            customInstructions: instructions?.isEmpty == false ? instructions : nil,
             expansion: expansion(of: text, sessionID: sessionID, store: store),
             dictated: dictated))
         runQueue(sessionID, store: store)

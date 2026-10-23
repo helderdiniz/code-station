@@ -11,6 +11,12 @@ enum GitPushPreview: Sendable, Equatable {
     case commits([GitRemoteCommit])
     // Origin has commits this branch does not, so it would refuse the push.
     case behindUpstream(incoming: [GitRemoteCommit], outgoing: [GitRemoteCommit])
+    // A branch with no upstream whose name origin already uses. When origin's copy is
+    // part of this branch's history, the push just moves it on and `unrelated` is empty.
+    // Otherwise the two only share a name, often an old branch nobody cleaned up, and
+    // origin refuses the push. The only way through is to replace origin's copy at `tip`,
+    // which drops the `unrelated` commits from origin.
+    case nameOnOrigin(outgoing: [GitRemoteCommit], unrelated: [GitRemoteCommit], tip: String)
     case failed(String)
 }
 
@@ -205,12 +211,17 @@ enum GitActions {
     }
 
     // A branch with no upstream yet, which is every session worktree branch, is published
-    // to origin under its own name and starts tracking it.
-    static func push(hasUpstream: Bool, at root: String) async -> String? {
+    // to origin under its own name and starts tracking it. Replacing origin's copy is
+    // pinned to the tip the review showed, so if anyone moved it since, origin refuses
+    // and nothing they pushed is lost.
+    static func push(hasUpstream: Bool, replacing tip: String? = nil, at root: String) async -> String? {
         await perform(at: root) { tool, url in
-            hasUpstream
-                ? GitInspector.run(tool, ["push"], in: url)
-                : GitInspector.run(tool, ["push", "-u", "origin", "HEAD"], in: url)
+            if hasUpstream { return GitInspector.run(tool, ["push"], in: url) }
+            guard let tip else { return GitInspector.run(tool, ["push", "-u", "origin", "HEAD"], in: url) }
+            let branch = GitInspector.run(tool, ["symbolic-ref", "--quiet", "--short", "HEAD"], in: url)
+            guard branch.ok else { return branch }
+            return GitInspector.run(tool, ["push", "--force-with-lease=refs/heads/\(branch.trimmedText):\(tip)",
+                                           "-u", "origin", "HEAD"], in: url)
         }
     }
 
@@ -229,18 +240,46 @@ enum GitActions {
                 _ = GitInspector.run(tool, ["fetch", "--quiet", "origin"], in: url,
                                      timeout: networkTimeout)
             }
+            let tip = hasUpstream ? nil : originTipForCurrentBranch(tool, in: url)
             let arguments = hasUpstream
                 ? ["log", "--no-color", "--format=%H%x09%s", "@{u}..HEAD"]
                 : ["log", "--no-color", "--format=%H%x09%s", "HEAD", "--not", "--remotes=origin"]
             let output = GitInspector.run(tool, arguments, in: url)
             guard output.ok else { return .failed(output.failureMessage) }
             let commits = parseRemoteCommits(output.text)
+            if let tip {
+                let theirs = GitInspector.run(tool, ["log", "--no-color", "--format=%H%x09%s", "HEAD..\(tip)"], in: url)
+                guard theirs.ok else { return .failed(theirs.failureMessage) }
+                return .nameOnOrigin(outgoing: commits, unrelated: parseRemoteCommits(theirs.text), tip: tip)
+            }
             guard hasUpstream else { return .commits(commits) }
 
             let behind = GitInspector.run(tool, ["log", "--no-color", "--format=%H%x09%s", "HEAD..@{u}"], in: url)
             let incoming = behind.ok ? parseRemoteCommits(behind.text) : []
             return incoming.isEmpty ? .commits(commits) : .behindUpstream(incoming: incoming, outgoing: commits)
         }
+    }
+
+    // Where origin's branch of the same name points, or nil when origin has none. A branch
+    // with no upstream can still share its name with one on origin, and that branch is
+    // what the push would land on. Origin is asked directly, since a remote ref left by an
+    // old fetch can name a branch that was deleted long ago. That branch alone is then
+    // fetched, so its commits can be listed. When origin cannot be reached, the last fetch
+    // is the best guess, and the push itself will say that origin is out of reach.
+    private static func originTipForCurrentBranch(_ tool: GitInspector.GitTool, in url: URL) -> String? {
+        let branch = GitInspector.run(tool, ["symbolic-ref", "--quiet", "--short", "HEAD"], in: url)
+        guard branch.ok, !branch.trimmedText.isEmpty else { return nil }
+        let name = branch.trimmedText
+        let listed = GitInspector.run(tool, ["ls-remote", "--heads", "origin", "refs/heads/\(name)"], in: url,
+                                      timeout: networkTimeout)
+        guard listed.ok else {
+            let cached = GitInspector.run(tool, ["rev-parse", "--verify", "--quiet", "refs/remotes/origin/\(name)"], in: url)
+            return cached.ok && !cached.trimmedText.isEmpty ? cached.trimmedText : nil
+        }
+        guard let tip = listed.text.split(separator: "\t").first.map(String.init), !tip.isEmpty else { return nil }
+        _ = GitInspector.run(tool, ["fetch", "--quiet", "origin", "+refs/heads/\(name):refs/remotes/origin/\(name)"],
+                             in: url, timeout: networkTimeout)
+        return tip
     }
 
     static func originMatches(repositoryURL: String, at root: String) async -> Bool {

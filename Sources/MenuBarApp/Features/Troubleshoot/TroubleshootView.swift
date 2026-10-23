@@ -56,13 +56,11 @@ struct TroubleshootRequest {
     let mcpServersEnabled: Bool
     let mcpServerNames: [String]
     let agent: AgentKind
-    let service: SiteDefaults.Service?
-    let trace: TroubleshootTraceContext?
 
-    init(problem: String, incidentTime: String = "", environment: TroubleshootEnvironment, projects: [String],
+    init(problem: String, incidentTime: String = "",
+         environment: TroubleshootEnvironment, projects: [String],
          skills: [String] = [], mcpServersEnabled: Bool, mcpServerNames: [String] = [],
-         agent: AgentKind, service: SiteDefaults.Service? = nil,
-         trace: TroubleshootTraceContext? = nil) {
+         agent: AgentKind) {
         self.problem = problem
         self.incidentTime = incidentTime
         self.environment = environment
@@ -71,16 +69,21 @@ struct TroubleshootRequest {
         self.mcpServersEnabled = mcpServersEnabled
         self.mcpServerNames = mcpServerNames
         self.agent = agent
-        self.service = service
-        self.trace = trace
     }
 
+    // The problem text already carries the ids, and any link they came in, so the agent
+    // sees them as they were written. They are pulled out only to tell the agent to
+    // start from them.
+    var traceIDs: [String] { TraceInput.traceIDs(in: problem) }
+
     var userInput: String {
-        let description = problem.isBlank
+        var parts = [problem.isBlank
             ? "Troubleshoot the problem shown in the attached files."
-            : problem.trimmed
-        guard !incidentTime.isBlank else { return description }
-        return description + "\n\nIncident time window (as supplied): " + incidentTime.trimmed
+            : problem.trimmed]
+        if !incidentTime.isBlank {
+            parts.append("Incident time window (as supplied): " + incidentTime.trimmed)
+        }
+        return parts.joined(separator: "\n\n")
     }
 
     var customInstructions: String {
@@ -111,11 +114,19 @@ struct TroubleshootRequest {
         let chartText = agent == .claudeCode
             ? ""
             : "\n\n\(TranscriptChartSpec.agentInstructions)"
+        // The agent fetches the trace with its own tools and skills, which is what knows
+        // which Grafana holds traces at this site; the app only draws what comes back.
+        let traceText: String
+        if traceIDs.isEmpty {
+            traceText = ""
+        } else {
+            let ids = traceIDs.map { "`\($0)`" }.joined(separator: ", ")
+            let start = traceIDs.count == 1 ? "Start from trace \(ids)." : "Start from traces \(ids)."
+            traceText = "\n\n\(start) Fetch each whole trace with the Grafana MCP tools and the skills you have, and follow a skill's guidance on which Grafana holds traces. Draw each one as a ```\(TranscriptTraceSpec.fenceLanguage) block before going further. Then, for each service whose spans failed, read its logs for that trace ID on the Grafana that holds that service's logs, and put the lines the diagnosis rests on in a ```\(TranscriptLogsSpec.fenceLanguage) block."
+        }
         let dangerText = environment.isDangerous
             ? " Treat this environment as live: do not mutate data, configuration, deployments, or running services."
             : ""
-        let serviceText = service.map { "\n\n\($0.promptContext)" } ?? ""
-        let traceText = trace.map { "\n\n\($0.promptContext)" } ?? ""
 
         return """
         Troubleshooting context:
@@ -124,7 +135,9 @@ struct TroubleshootRequest {
         - \(skillText)
         - \(mcpText)
 
-        Investigate the problem and use read-only checks first. Do not change code or configuration.\(dangerText) Explain the likely root cause, cite the evidence you found, and give concrete next steps. If a fix is needed, propose it and wait for a follow-up before applying it. Chart the measurements the root cause rests on.\(chartText)\(serviceText)\(traceText)
+        Investigate the problem and use read-only checks first. Do not change code or configuration.\(dangerText) Explain the likely root cause, cite the evidence you found, and give concrete next steps. If a fix is needed, propose it and wait for a follow-up before applying it. Chart the measurements the root cause rests on.\(chartText)\(traceText)
+
+        \(TranscriptEvidenceBlocks.agentInstructions)
         """
     }
 }
@@ -166,7 +179,6 @@ struct TroubleshootView: View {
     @State private var environment = TroubleshootEnvironment.first()
     @State private var selectedSkills = Preferences.troubleshootSkills()
     @State private var mcpServersEnabled = true
-    @State private var serviceName: String?
     @State private var agent: AgentKind?
     @State private var selectedAvatarName = AgentAvatarSelection.defaultName
     @State private var sessionID = UUID()
@@ -194,7 +206,6 @@ struct TroubleshootView: View {
                     problemSection
                     optionsSection
                     if environment.isDangerous { dangerNotice }
-                    if !services.isEmpty { serviceSection }
                     projectsSection
                     skillsSection
                 }
@@ -299,8 +310,6 @@ struct TroubleshootView: View {
         .surface(Theme.attention.opacity(0.10), cornerRadius: 10, border: Theme.attention.opacity(0.45))
     }
 
-    private var services: [SiteDefaults.Service] { SiteDefaults.current.services ?? [] }
-
     private var skillsSection: some View {
         VStack(alignment: .leading, spacing: 10) {
             DisclosureHeader(isExpanded: $skillsExpanded, show: "Show skills", hide: "Hide skills") {
@@ -354,14 +363,6 @@ struct TroubleshootView: View {
             Text("Choose where the problem is happening.")
                 .font(.system(size: 11))
                 .foregroundStyle(.secondary)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    private var serviceSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Service").font(.system(size: 13, weight: .semibold))
-            TroubleshootServicePicker(services: services, selected: $serviceName)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -692,8 +693,7 @@ struct TroubleshootView: View {
                 skills: chosenSkillNames,
                 mcpServersEnabled: enableMCPServers,
                 mcpServerNames: enableMCPServers ? selectedServers.map(\.name) : [],
-                agent: chosenAgent,
-                service: TroubleshootServicePicker.chosen(serviceName, in: services))
+                agent: chosenAgent)
             runner.send(request.userInput,
                         attachments: attachments,
                         customInstructions: request.customInstructions,

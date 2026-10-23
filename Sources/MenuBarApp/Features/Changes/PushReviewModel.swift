@@ -11,6 +11,12 @@ final class PushReviewModel {
     private(set) var commits: [GitRemoteCommit] = []
     // What origin has that this branch does not. Pushing waits until these are pulled.
     private(set) var incoming: [GitRemoteCommit] = []
+    // Origin already has a branch under this name, though this branch does not track it.
+    private(set) var nameOnOrigin = false
+    // What origin's branch of the same name holds that this branch does not. Pushing
+    // replaces that branch, so these leave origin.
+    private(set) var replaced: [GitRemoteCommit] = []
+    @ObservationIgnored private var replacedTip: String?
     private(set) var errorTitle = ""
     private(set) var error = ""
     private(set) var pulled: [GitRemoteCommit] = []
@@ -18,14 +24,14 @@ final class PushReviewModel {
     @ObservationIgnored private var generation = 0
     @ObservationIgnored private let read: () async -> GitPushPreview
     @ObservationIgnored private let pull: () async -> GitPullOutcome
-    @ObservationIgnored private let push: () async -> String?
+    @ObservationIgnored private let push: (_ replacing: String?) async -> String?
 
     var isWorking: Bool { phase == .pulling || phase == .pushing }
     var behind: Int { incoming.count }
 
     init(read: @escaping () async -> GitPushPreview,
          pull: @escaping () async -> GitPullOutcome,
-         push: @escaping () async -> String?) {
+         push: @escaping (_ replacing: String?) async -> String?) {
         self.read = read
         self.pull = pull
         self.push = push
@@ -34,7 +40,7 @@ final class PushReviewModel {
     convenience init(root: String, hasUpstream: Bool) {
         self.init(read: { await GitActions.commitsToPush(hasUpstream: hasUpstream, at: root) },
                   pull: { await GitActions.pull(at: root) },
-                  push: { await GitActions.push(hasUpstream: hasUpstream, at: root) })
+                  push: { await GitActions.push(hasUpstream: hasUpstream, replacing: $0, at: root) })
     }
 
     func load() async {
@@ -44,6 +50,9 @@ final class PushReviewModel {
         phase = .loading
         let result = await read()
         guard !Task.isCancelled, request == generation else { return }
+        nameOnOrigin = false
+        replaced = []
+        replacedTip = nil
         switch result {
         case .commits(let commits):
             self.commits = commits
@@ -52,6 +61,13 @@ final class PushReviewModel {
         case .behindUpstream(let incoming, let commits):
             self.commits = commits
             self.incoming = incoming
+            phase = .ready
+        case .nameOnOrigin(let commits, let unrelated, let tip):
+            self.commits = commits
+            incoming = []
+            nameOnOrigin = true
+            replaced = unrelated
+            replacedTip = unrelated.isEmpty ? nil : tip
             phase = .ready
         case .failed(let error):
             fail("Could not check commits to push", error)
@@ -79,7 +95,7 @@ final class PushReviewModel {
             }
         }
         phase = .pushing
-        if let error = await push() { fail("Could not push", error) }
+        if let error = await push(replacedTip) { fail("Could not push", error) }
         else { phase = .complete }
         return true
     }

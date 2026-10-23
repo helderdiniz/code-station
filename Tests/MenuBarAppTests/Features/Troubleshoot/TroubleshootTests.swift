@@ -68,6 +68,56 @@ struct TroubleshootTests {
         #expect(request.customInstructions.contains("No skills were picked for this diagnosis"))
     }
 
+    private static let traceID = "0af7651916cd43dd8448eb211c80319c"
+
+    private func traced(_ problem: String, agent: AgentKind = .claudeCode) -> TroubleshootRequest {
+        TroubleshootRequest(problem: problem, environment: Self.dev,
+                            projects: ["api"], mcpServersEnabled: true, agent: agent)
+    }
+
+    @Test func aTraceIdInTheProblemIsWhereTheDiagnosisStarts() {
+        let request = traced("Checkout fails for \(Self.traceID.uppercased()), see logs")
+
+        #expect(request.traceIDs == [Self.traceID])
+        #expect(request.userInput == "Checkout fails for \(Self.traceID.uppercased()), see logs")
+        #expect(request.customInstructions.contains("Start from trace `\(Self.traceID)`."))
+        #expect(request.customInstructions.contains("follow a skill's guidance on which Grafana holds traces"))
+        #expect(request.customInstructions.contains("```trace block before going further"))
+    }
+
+    // The link stays in the problem as written, since it says which Grafana the trace was
+    // seen in and when, which the id alone does not.
+    @Test func aPastedLinkStaysInTheProblem() {
+        let link = "https://grafana.edge-dev.example.com/explore?trace=\(Self.traceID)"
+        let request = traced(link)
+
+        #expect(request.userInput == link)
+        #expect(request.traceIDs == [Self.traceID])
+    }
+
+    @Test func everyTraceNamedIsFollowed() {
+        let other = "4bf92f3577b34da6a3ce929d0e0e4736"
+        let request = traced("Both \(Self.traceID) and \(other) time out")
+
+        #expect(request.customInstructions.contains("Start from traces `\(Self.traceID)`, `\(other)`."))
+    }
+
+    @Test func aProblemWithoutATraceIdAsksForNoTrace() {
+        let request = traced("Checkout fails since this morning")
+
+        #expect(request.traceIDs.isEmpty)
+        #expect(!request.customInstructions.contains("Start from trace"))
+    }
+
+    // Every agent is told how to draw evidence, since the brief is its only channel for it
+    // and the Evidence tab is built from what it draws.
+    @Test func everyAgentIsToldHowToDrawEvidence() {
+        for agent in AgentKind.allCases {
+            #expect(traced("Checkout fails", agent: agent).customInstructions
+                .contains(TranscriptEvidenceBlocks.agentInstructions))
+        }
+    }
+
     @Test func incidentTimeIsSentVerbatimWithoutAnInferredTimezone() {
         let request = TroubleshootRequest(
             problem: "Latency doubled", incidentTime: "Yesterday around 14:00",
@@ -327,55 +377,6 @@ struct TroubleshootTests {
             return nil
         }
         return arguments[index + 1]
-    }
-
-    private static let payments = SiteDefaults.Service(
-        name: "payments",
-        lokiSelector: #"{app="payments"}"#,
-        logFormat: .logfmt,
-        levelField: "level",
-        levelValues: ["INFO", "WARN", "ERROR"],
-        traceField: "traceId",
-        fields: ["synthetic": "true marks smoke-test traffic", "logger": "class name"],
-        prometheusSelector: #"namespace="payments""#,
-        notes: "Card numbers are masked.")
-
-    @Test func aChosenServiceAddsItsLogContext() {
-        let request = TroubleshootRequest(
-            problem: "Errors since 10:00", environment: Self.dev, projects: ["payments"],
-            mcpServersEnabled: true, agent: .claudeCode, service: Self.payments)
-
-        let text = request.customInstructions
-        #expect(text.contains("Service log context: payments"))
-        #expect(text.contains(#"- Loki selector: {app="payments"}"#))
-        #expect(text.contains("- Log format: logfmt"))
-        #expect(text.contains("- Level field: level (INFO, WARN, ERROR)"))
-        #expect(text.contains("- Trace field: traceId"))
-        #expect(text.contains("- Fields: logger: class name; synthetic: true marks smoke-test traffic"))
-        #expect(text.contains(#"- Prometheus selector: namespace="payments""#))
-        #expect(text.contains("- Notes: Card numbers are masked."))
-    }
-
-    @Test func noServiceLeavesTheInstructionsAsTheyWere() {
-        let without = TroubleshootRequest(
-            problem: "x", environment: Self.dev, projects: ["p"],
-            mcpServersEnabled: true, agent: .claudeCode)
-        #expect(!without.customInstructions.contains("Service log context"))
-    }
-
-    @Test func aMinimalServiceListsOnlyWhatItHas() {
-        let minimal = SiteDefaults.Service(name: "m", lokiSelector: #"{a="b"}"#, logFormat: .json)
-        let text = minimal.promptContext
-        #expect(text.contains("- Log format: json"))
-        #expect(!text.contains("Trace field"))
-        #expect(!text.contains("Prometheus selector"))
-    }
-
-    @Test func aPickedServiceThatIsNoLongerConfiguredReadsAsNone() {
-        let services = [Self.payments]
-        #expect(TroubleshootServicePicker.chosen("payments", in: services) == Self.payments)
-        #expect(TroubleshootServicePicker.chosen("gone", in: services) == nil)
-        #expect(TroubleshootServicePicker.chosen(nil, in: services) == nil)
     }
 }
 

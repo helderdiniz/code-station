@@ -50,8 +50,6 @@ final class SessionComposerStore {
         var environment = TroubleshootEnvironment.first()
         var mcpServersEnabled = true
         var dictated = false
-        var serviceName: String? = nil
-        var trace: TroubleshootTraceContext? = nil
     }
 
     func brief(_ sessionID: UUID) -> TroubleshootBrief {

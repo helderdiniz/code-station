@@ -2,46 +2,66 @@ import SwiftUI
 
 // A Grafana query's result drawn as what it is: log lines as a table whose rows open to
 // show everything Loki returned with them, samples as a table, and range series as a chart.
+// It reads what the agent already fetched. Asking for more goes back to the agent, which
+// runs the query with its own tools, so the follow-up shows in the conversation.
 struct GrafanaResultView: View {
     @Environment(\.textScale) private var textScale
-    @Environment(GrafanaQueryRunner.self) private var runner: GrafanaQueryRunner?
+    @Environment(\.askAgent) private var askAgent
 
-    let call: GrafanaToolCall
+    // What the result answers: the agent's own call, or log lines it picked out for a reply.
+    struct Source: Equatable {
+        enum Kind: Equatable { case loki, prometheus }
+
+        let kind: Kind
+        let title: String?
+        let server: String?
+        let query: String?
+        let start: String?
+        let end: String?
+        let isInstant: Bool
+
+        init(call: GrafanaToolCall) {
+            kind = call.kind == .lokiLogs ? .loki : .prometheus
+            title = nil
+            server = call.server
+            query = call.query
+            start = call.start
+            end = call.end
+            isInstant = call.queryType == "instant"
+        }
+
+        init(logs: TranscriptLogsSpec) {
+            kind = .loki
+            title = logs.title
+            server = logs.server
+            query = logs.query
+            start = nil
+            end = nil
+            isInstant = false
+        }
+
+        // The instance rather than the bare environment: "cde-dev" and "platform-dev" are
+        // both "dev", and which Grafana answered is what a reader needs.
+        var instance: String? {
+            server.map { $0.hasPrefix(Grafana.namePrefix) ? String($0.dropFirst(Grafana.namePrefix.count)) : $0 }
+        }
+
+        var kindName: String { kind == .loki ? "Loki" : "Prometheus" }
+    }
+
+    let source: Source
     let result: GrafanaToolResult
-    let toolID: String?
-    let service: SiteDefaults.Service?
-    // A result with no agent answer behind it, such as a span's logs, shows its newest run
-    // rather than an empty "agent" result.
-    let followsLatestRun: Bool
 
     @State private var expanded: Set<Int> = []
     @State private var showsTable = false
 
-    @State private var draftQuery: String?
-    @State private var selectedRun: UUID?
-
-    init(call: GrafanaToolCall, result: GrafanaToolResult,
-         toolID: String? = nil, service: SiteDefaults.Service? = nil,
-         followsLatestRun: Bool = false) {
-        self.call = call
-        self.result = result
-        self.toolID = toolID
-        self.service = service
-        self.followsLatestRun = followsLatestRun
-    }
-
-    private var runs: [GrafanaRun] { toolID.map { runner?.runs(for: $0) ?? [] } ?? [] }
-    private var shownRun: GrafanaRun? {
-        runs.first { $0.id == selectedRun } ?? (followsLatestRun ? runs.last : nil)
-    }
-    private var shown: GrafanaToolResult { shownRun?.result ?? result }
+    static let widerWindows = ["1h", "6h", "24h"]
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             header
-            if let runner, let toolID {
-                queryBar(runner, toolID: toolID)
-                if !runs.isEmpty { chips }
+            if askAgent != nil, source.query != nil, !source.isInstant || result.isTruncated {
+                followUps
             }
             Rectangle().fill(Theme.hairline).frame(height: 1)
             content
@@ -54,23 +74,30 @@ struct GrafanaResultView: View {
     private var header: some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 8) {
-                Text(call.kind == .lokiLogs ? "LOKI" : "PROMETHEUS")
+                Text(source.kindName.uppercased())
                     .scaledMono(10.5, .bold)
                     .foregroundStyle(.secondary)
-                Text(call.argument)
-                    .scaledMono(10.5)
-                    .foregroundStyle(.secondary)
+                if let instance = source.instance {
+                    Text(instance)
+                        .scaledMono(10.5)
+                        .foregroundStyle(.secondary)
+                }
                 Spacer(minLength: 8)
                 Text(summary)
                     .scaledMono(10.5)
-                    .foregroundStyle(shown.isTruncated ? AnyShapeStyle(Theme.attention)
+                    .foregroundStyle(result.isTruncated ? AnyShapeStyle(Theme.attention)
                                                         : AnyShapeStyle(.secondary))
             }
-            Text(shownRun?.query ?? call.query)
-                .scaledMono(11.5)
-                .textSelection(.enabled)
-                .fixedSize(horizontal: false, vertical: true)
-            if let window = shownRun.map({ $0.window.label }) ?? window {
+            if let title = source.title {
+                Text(title).scaledText(12.5, .semibold)
+            }
+            if let query = source.query {
+                Text(query)
+                    .scaledMono(11.5)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if let window {
                 Text(window)
                     .scaledMono(10.5)
                     .foregroundStyle(.secondary)
@@ -80,25 +107,23 @@ struct GrafanaResultView: View {
         .padding(.vertical, 8)
     }
 
-    @ViewBuilder private var content: some View {
-        if let error = shownRun?.error {
-            Text(error)
-                .scaledMono(11.5)
-                .foregroundStyle(Theme.deletion)
-                .textSelection(.enabled)
-                .padding(12)
-        } else if shownRun?.isRunning == true {
-            Text("Running…")
-                .scaledMono(11.5)
-                .foregroundStyle(.secondary)
-                .padding(12)
-        } else {
-            resultContent
+    private var followUps: some View {
+        HStack(spacing: 14) {
+            if !source.isInstant {
+                ForEach(Self.widerWindows, id: \.self) { window in
+                    InlineAskButton(title: "Last \(window)") { ask(Self.widen(source, to: window)) }
+                }
+            }
+            if result.isTruncated {
+                InlineAskButton(title: "Fetch the rest") { ask(Self.fetchRest(source)) }
+            }
         }
+        .padding(.horizontal, 12)
+        .padding(.bottom, 8)
     }
 
-    @ViewBuilder private var resultContent: some View {
-        switch shown {
+    @ViewBuilder private var content: some View {
+        switch result {
         case .logs(let entries, _):
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {
@@ -154,13 +179,18 @@ struct GrafanaResultView: View {
                 if isOpen { expanded.remove(entry.id) } else { expanded.insert(entry.id) }
             } label: {
                 HStack(alignment: .firstTextBaseline, spacing: 10) {
-                    Text(entry.date.map(Self.time) ?? entry.rawTimestamp)
+                    Text(entry.date.map { Self.clock($0) } ?? entry.rawTimestamp)
                         .scaledMono(11)
                         .foregroundStyle(.secondary)
                     Text(entry.level ?? "")
                         .scaledMono(11, .bold)
                         .foregroundStyle(Self.levelColour(entry.level))
                         .frame(minWidth: 44 * textScale, alignment: .leading)
+                    if let service = entry.labels["service"] {
+                        Text(service)
+                            .scaledMono(11)
+                            .foregroundStyle(.secondary)
+                    }
                     Text(entry.message)
                         .scaledMono(11.5)
                         .lineLimit(1)
@@ -175,20 +205,14 @@ struct GrafanaResultView: View {
                     if !entry.labels.isEmpty { detail("LABELS", Self.fieldText(entry.labels)) }
                     if !entry.fields.isEmpty { detail("FIELDS", Self.fieldText(entry.fields)) }
                     if !entry.metadata.isEmpty { detail("METADATA", Self.fieldText(entry.metadata)) }
-                    if runner != nil, toolID != nil, call.kind == .lokiLogs {
-                        HStack(spacing: 12) {
-                            if let date = entry.date, !entry.labels.isEmpty {
-                                pivot("Lines around this entry") {
-                                    start(.around(date),
-                                          query: GrafanaQueryEdit.aroundSelector(labels: entry.labels))
-                                }
+                    if askAgent != nil, let date = entry.date {
+                        HStack(spacing: 14) {
+                            InlineAskButton(title: "Lines around this") {
+                                ask(Self.around(source, entry: entry, at: date))
                             }
-                            if let service, let field = service.traceField,
-                               let traceID = entry.fields[field] ?? entry.metadata[field] ?? entry.labels[field],
-                               !traceID.isEmpty {
-                                pivot("All lines for this trace") {
-                                    start(.same, query: GrafanaQueryEdit.traceQuery(
-                                        selector: service.lokiSelector, traceID: traceID))
+                            if let traceID = Self.traceID(in: entry) {
+                                InlineAskButton(title: "Follow this trace") {
+                                    ask(Self.followTrace(traceID))
                                 }
                             }
                         }
@@ -201,79 +225,7 @@ struct GrafanaResultView: View {
         .padding(.vertical, 5)
     }
 
-    @ViewBuilder private func queryBar(_ runner: GrafanaQueryRunner, toolID: String) -> some View {
-        switch runner.availability(of: call) {
-        case .ready:
-            VStack(alignment: .leading, spacing: 6) {
-                TextField("Query", text: Binding(get: { draftQuery ?? call.query },
-                                                 set: { draftQuery = $0 }))
-                    .textFieldStyle(.plain)
-                    .scaledMono(11.5)
-                    .padding(.horizontal, 8)
-                    .frame(height: 26)
-                    .surface(Theme.field, cornerRadius: 6, border: Theme.border)
-                    .onSubmit { start(.same) }
-                HStack(spacing: 6) {
-                    ChoicePill(title: "Run", selected: false) { start(.same) }
-                    if call.queryType != "instant" {
-                        ForEach(GrafanaQueryEdit.windowChoices, id: \.seconds) { choice in
-                            ChoicePill(title: "Last \(choice.label)", selected: false) {
-                                start(.last(seconds: choice.seconds))
-                            }
-                        }
-                    }
-                    if result.isTruncated {
-                        ChoicePill(title: "Reload full result", selected: false) {
-                            start(.same, query: call.query)
-                        }
-                    }
-                }
-            }
-            .padding(.horizontal, 12)
-            .padding(.bottom, 8)
-        case .notConfigured(let reason), .disabled(let reason), .notLocal(let reason):
-            Text(reason + " Add or enable it under MCP servers to run queries from here.")
-                .scaledMono(10.5)
-                .foregroundStyle(.secondary)
-                .padding(.horizontal, 12)
-                .padding(.bottom, 8)
-        }
-    }
-
-    private var chips: some View {
-        ScrollView(.horizontal) {
-            HStack(spacing: 6) {
-                if !followsLatestRun {
-                    ChoicePill(title: "agent", selected: selectedRun == nil) { selectedRun = nil }
-                }
-                ForEach(runs) { run in
-                    ChoicePill(title: run.chipLabel, selected: shownRun?.id == run.id) {
-                        selectedRun = run.id
-                    }
-                }
-            }
-            .padding(.horizontal, 12)
-            .padding(.bottom, 8)
-        }
-        .scrollIndicators(.hidden)
-    }
-
-    private func start(_ window: GrafanaQueryWindow, query: String? = nil) {
-        guard let runner, let toolID else { return }
-        runner.run(call, toolID: toolID, query: query ?? draftQuery ?? call.query,
-                   window: window, levelField: service?.levelField)
-        selectedRun = runner.runs(for: toolID).last?.id
-    }
-
-    private func pivot(_ title: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Text(title + " →")
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(Theme.accent)
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-    }
+    private func ask(_ text: String) { askAgent?(text) }
 
     private func detail(_ title: String, _ text: String) -> some View {
         VStack(alignment: .leading, spacing: 2) {
@@ -295,7 +247,7 @@ struct GrafanaResultView: View {
                         .scaledMono(11, .semibold)
                     ForEach(Array(one.points.enumerated()), id: \.offset) { _, point in
                         HStack(spacing: 12) {
-                            Text(Self.time(Date(timeIntervalSince1970: point.seconds)))
+                            Text(Self.clock(Date(timeIntervalSince1970: point.seconds)))
                                 .scaledMono(11)
                                 .foregroundStyle(.secondary)
                             Text(point.raw)
@@ -311,25 +263,73 @@ struct GrafanaResultView: View {
 
     private var summary: String {
         let noun: String
-        switch shown {
+        switch result {
         case .logs: noun = "line"
         case .samples: noun = "sample"
         case .series: noun = "series"
         case .empty: return "0 results"
         }
-        let count = shown.count
+        let count = result.count
         let counted = noun == "series" || count == 1 ? "\(count) \(noun)" : "\(count) \(noun)s"
-        return shown.isTruncated ? "showing \(counted) · result truncated" : counted
+        return result.isTruncated ? "showing \(counted) · result truncated" : counted
     }
 
     private var window: String? {
-        let dates = [call.start, call.end].map { $0.flatMap(Self.rfc3339) }
+        let dates = [source.start, source.end].map { $0.flatMap(Self.rfc3339) }
         switch (dates[0], dates[1]) {
-        case (let start?, let end?): return "\(Self.time(start)) – \(Self.time(end))"
-        case (let start?, nil): return "from \(Self.time(start))"
+        case (let start?, let end?): return "\(Self.clock(start)) – \(Self.clock(end))"
+        case (let start?, nil): return "from \(Self.clock(start))"
         default: return nil
         }
     }
+
+    // MARK: - Follow-ups
+
+    nonisolated static func widen(_ source: Source, to window: String) -> String {
+        "Run the \(source.kindName) query `\(source.query ?? "")`\(on(source)) again over the "
+            + "last \(window), and show what it found."
+    }
+
+    nonisolated static func fetchRest(_ source: Source) -> String {
+        "The result of the \(source.kindName) query `\(source.query ?? "")`\(on(source)) was "
+            + "cut short in the transcript. Fetch it again in smaller pages, and show the "
+            + "lines that matter in a ```\(TranscriptLogsSpec.fenceLanguage) block."
+    }
+
+    nonisolated static func around(_ source: Source, entry: GrafanaToolResult.LogEntry, at date: Date) -> String {
+        let stream = entry.labels.isEmpty ? "" : " from the stream \(labelText(entry.labels))"
+        return "Show the log lines\(stream)\(on(source)) from 5 seconds before to 30 seconds "
+            + "after \(isoTime(date)), around the line \"\(entry.message.prefix(160))\". "
+            + "Put them in a ```\(TranscriptLogsSpec.fenceLanguage) block."
+    }
+
+    nonisolated static func followTrace(_ traceID: String) -> String {
+        "Fetch trace `\(traceID)` and draw it as a ```\(TranscriptTraceSpec.fenceLanguage) "
+            + "block, then say how it bears on the problem."
+    }
+
+    nonisolated private static func on(_ source: Source) -> String {
+        source.server.map { " on \($0)" } ?? ""
+    }
+
+    // A trace id a log line carries in any of the names tracers write it under.
+    nonisolated static func traceID(in entry: GrafanaToolResult.LogEntry) -> String? {
+        let names = ["trace_id", "traceid", "traceId", "trace.id", "traceID"]
+        for fields in [entry.fields, entry.metadata, entry.labels] {
+            for name in names {
+                if let value = fields[name], let id = TraceInput.traceID(from: value) { return id }
+            }
+        }
+        return nil
+    }
+
+    nonisolated private static func isoTime(_ date: Date) -> String {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter.string(from: date)
+    }
+
+    // MARK: - Drawing helpers
 
     nonisolated static func chartSpec(_ series: [GrafanaToolResult.Series]) -> TranscriptChartSpec? {
         let wire: [String: Any] = [
@@ -364,8 +364,6 @@ struct GrafanaResultView: View {
     private static func fieldText(_ fields: [String: String]) -> String {
         fields.sorted { $0.key < $1.key }.map { "\($0.key)=\($0.value)" }.joined(separator: "\n")
     }
-
-    private static func time(_ date: Date) -> String { clock(date) }
 
     // Always a 24-hour clock: a log line read at "02:15" in a 12-hour locale could be
     // either end of the day.

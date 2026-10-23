@@ -33,7 +33,6 @@ struct TroubleshootTabView: View {
     // The half-written brief is the runner's, not this view's: the pane keeps only the
     // tab that is open, so anything held here would go the moment Chat is looked at.
     private var brief: SessionComposerStore.TroubleshootBrief { runner.composer.brief(sessionID) }
-    private var services: [SiteDefaults.Service] { SiteDefaults.current.services ?? [] }
 
     private func entry<Value>(
         _ field: WritableKeyPath<SessionComposerStore.TroubleshootBrief, Value>
@@ -55,7 +54,6 @@ struct TroubleshootTabView: View {
                         layout {
                             VStack(alignment: .leading, spacing: 24) {
                                 problemSection(session)
-                                traceStrip
                                 optionsSection
                                 Divider().overlay(Theme.hairline)
                                 TroubleshootMCPOptions(agent: session.agent,
@@ -101,7 +99,7 @@ struct TroubleshootTabView: View {
         HStack(alignment: .top, spacing: 16) {
             VStack(alignment: .leading, spacing: 8) {
                 Text("Troubleshoot").font(.serif(28))
-                Text("Give your agent a starting point. Follow the diagnosis in Chat.")
+                Text("Give your agent a starting point. Follow the diagnosis in Chat, and what it finds in Evidence.")
                     .font(.system(size: 13))
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -134,7 +132,9 @@ struct TroubleshootTabView: View {
             Text("What happens next").fontWeight(.semibold)
             Text("Your agent investigates the problem using these projects, the evidence you add, and your selected tools.")
                 .foregroundStyle(.secondary)
-            Text("Findings and suggested next steps appear in Chat. The brief instructs the agent not to change your code or environment.")
+            Text("Findings and suggested next steps appear in Chat. The traces, log lines and charts behind them are gathered in Evidence.")
+                .foregroundStyle(.secondary)
+            Text("The brief instructs the agent not to change your code or environment.")
                 .foregroundStyle(.secondary)
         }
         .font(.system(size: 12))
@@ -185,30 +185,6 @@ struct TroubleshootTabView: View {
         return model.map { runner.modelTitle($0) }
     }
 
-    // A trace handed over from the Trace tab, shown so the brief does not carry it silently.
-    @ViewBuilder private var traceStrip: some View {
-        if let trace = brief.trace {
-            HStack(spacing: 9) {
-                Image(systemName: "point.3.connected.trianglepath.dotted")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(.secondary)
-                Text("Following trace \(trace.shortID)… in \(trace.environment), across \(counted(trace.services.count, "service"))")
-                    .font(.system(size: 12))
-                Spacer(minLength: 8)
-                Button { runner.composer.editBrief(sessionID) { $0.trace = nil } } label: {
-                    Text("Remove")
-                        .font(.system(size: 11.5, weight: .semibold))
-                        .foregroundStyle(Theme.accent)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 9)
-            .surface(Theme.field, cornerRadius: 10, border: Theme.border)
-        }
-    }
-
     private func problemSection(_ session: ChatSession) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("What’s going wrong?").font(.system(size: 14, weight: .semibold))
@@ -242,16 +218,7 @@ struct TroubleshootTabView: View {
                 }
             }
             if brief.environment.isDangerous { liveNotice }
-            if !services.isEmpty { serviceField }
         }
-    }
-
-    private var serviceField: some View {
-        VStack(alignment: .leading, spacing: 9) {
-            Text("Service").font(.system(size: 14, weight: .semibold))
-            TroubleshootServicePicker(services: services, selected: entry(\.serviceName))
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var environmentField: some View {
@@ -424,9 +391,7 @@ struct TroubleshootTabView: View {
                 skills: chosenSkillNames,
                 mcpServersEnabled: enableMCPServers,
                 mcpServerNames: enableMCPServers ? selectedServers.map(\.name) : [],
-                agent: session.agent,
-                service: TroubleshootServicePicker.chosen(sent.serviceName, in: services),
-                trace: sent.trace)
+                agent: session.agent)
             runner.send(request.userInput,
                         attachments: sent.attachments,
                         customInstructions: request.customInstructions,

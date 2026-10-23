@@ -59,22 +59,13 @@ struct GrafanaToolCall: Equatable, Sendable {
 struct GrafanaRendering: Equatable, Sendable {
     let call: GrafanaToolCall
     let result: GrafanaToolResult
-    // The site file's service whose selector the query used, when one did.
-    let service: SiteDefaults.Service?
-
-    init(call: GrafanaToolCall, result: GrafanaToolResult, service: SiteDefaults.Service? = nil) {
-        self.call = call
-        self.result = result
-        self.service = service
-    }
 }
 
 extension GrafanaToolCall {
-    static func rendered(_ tool: ToolUse, services: [SiteDefaults.Service] = []) -> GrafanaRendering? {
+    static func rendered(_ tool: ToolUse) -> GrafanaRendering? {
         guard !tool.isError, let text = tool.result,
-              let call = GrafanaToolCall(tool: tool) else { return nil }
-        let service = services.first { $0.matches(call) }
-        guard let result = GrafanaToolResult.parse(text, levelField: service?.levelField) else { return nil }
-        return GrafanaRendering(call: call, result: result, service: service)
+              let call = GrafanaToolCall(tool: tool),
+              let result = GrafanaToolResult.parse(text) else { return nil }
+        return GrafanaRendering(call: call, result: result)
     }
 }

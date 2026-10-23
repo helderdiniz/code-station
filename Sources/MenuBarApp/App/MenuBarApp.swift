@@ -49,12 +49,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private lazy var scheduledTasks = ScheduledTaskService(
         store: projects, runner: runner, agentAvatarName: { [appSettings] in appSettings.defaultAgentAvatarName })
     private let dictation = Dictation()
-    private lazy var grafanaRuns = GrafanaQueryRunner(configs: store, processes: processes)
-    private lazy var traces = TraceStore(backend: .live(grafana: grafanaRuns) {
-        [runner, projects] sessionID, prompt in
-        await TraceSummary.ask(sessionID: sessionID, prompt: prompt,
-                               runner: runner, store: projects)
-    })
     private lazy var mobileAccess = MobileAccessController(store: projects, runner: runner,
                                                            gitStats: gitStats)
     private let workingTrees = WorkingTreeWatch()
@@ -83,7 +77,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     func applicationWillFinishLaunching(_ notification: Notification) {
         MainMenu.install()
-        runner.grafanaRuns = grafanaRuns
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -197,10 +190,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         if window == nil {
             let hosting = NSHostingController(rootView:
                 RootView()
+                    .frame(minWidth: 960, minHeight: 640)
                     .environment(store)
                     .environment(processes)
-                    .environment(grafanaRuns)
-                    .environment(traces)
                     .environment(claude)
                     .environment(codex)
                     .environment(copilot)
@@ -225,8 +217,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                     .environment(shortcuts)
                     .environment(appUpdates)
                     .environment(accountUsage))
-            // Let the window own its size instead of shrinking to the view's ideal size.
-            hosting.sizingOptions = []
+            // The window owns its size instead of shrinking to the view's ideal size. The
+            // minimum comes from the view, because the hosting controller resets the
+            // window's own contentMinSize to zero.
+            hosting.sizingOptions = [.minSize]
             let win = NSWindow(
                 contentRect: NSRect(x: 0, y: 0, width: 1180, height: 820),
                 styleMask: [.titled, .closable, .miniaturizable, .resizable],
@@ -238,7 +232,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             win.titlebarAppearsTransparent = true
             win.backgroundColor = Theme.backgroundNSColor
             win.isReleasedWhenClosed = false
-            win.contentMinSize = NSSize(width: 960, height: 640)
             win.delegate = self
             win.center()
             window = win

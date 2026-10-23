@@ -433,6 +433,10 @@ struct MessageSegment: Identifiable, Equatable {
     var isOpen = false
 
     var isChart: Bool { isCode && language == TranscriptChartSpec.fenceLanguage }
+    var isTrace: Bool { isCode && language == TranscriptTraceSpec.fenceLanguage }
+    var isLogs: Bool { isCode && language == TranscriptLogsSpec.fenceLanguage }
+    // A block the app draws rather than prints.
+    var isDrawn: Bool { isChart || isTrace || isLogs }
 
     static func split(_ text: String) -> [MessageSegment] {
         var segments: [MessageSegment] = []

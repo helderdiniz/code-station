@@ -276,6 +276,89 @@ struct GitActionsTests {
         #expect(commits.map(\.subject) == ["session work"])
     }
 
+    // An old branch on origin, and a new local one that reuses its name from main.
+    private func branchReusingAnOldName() throws -> (repo: GitRepo, remote: GitRepo) {
+        let remote = try GitRepo.bare()
+        let repo = try GitRepo()
+        try repo.addRemote(remote)
+        try repo.git("push", "-q", "-u", "origin", "HEAD")
+        try repo.git("switch", "-qc", "reused")
+        try repo.write("old.txt", "old work")
+        try repo.commit("old work")
+        try repo.git("push", "-q", "origin", "reused")
+        try repo.git("switch", "-q", "main")
+        try repo.git("branch", "-qD", "reused")
+        try repo.git("switch", "-qc", "reused")
+        try repo.write("new.txt", "new work")
+        try repo.commit("new work")
+        return (repo, remote)
+    }
+
+    @Test func pushPreviewSpotsAnUnrelatedBranchOfTheSameNameOnOrigin() async throws {
+        let (repo, remote) = try branchReusingAnOldName()
+        let oldTip = try remote.git("rev-parse", "reused")
+
+        let preview = await GitActions.commitsToPush(hasUpstream: false, at: repo.path)
+        guard case .nameOnOrigin(let outgoing, let unrelated, let tip) = preview else {
+            #expect(Bool(false), "a name taken on origin has to be reported")
+            return
+        }
+        #expect(outgoing.map(\.subject) == ["new work"])
+        #expect(unrelated.map(\.subject) == ["old work"])
+        #expect(tip == oldTip)
+        #expect(await GitActions.push(hasUpstream: false, at: repo.path) != nil)
+
+        #expect(await GitActions.push(hasUpstream: false, replacing: tip, at: repo.path) == nil)
+        #expect(try remote.git("rev-parse", "reused") == repo.head)
+        #expect(await GitInspector.snapshot(at: repo.path).upstream == "origin/reused")
+    }
+
+    @Test func replacingRefusesWhenOriginMovedSinceTheReview() async throws {
+        let (repo, remote) = try branchReusingAnOldName()
+        guard case .nameOnOrigin(_, _, let tip) = await GitActions.commitsToPush(hasUpstream: false, at: repo.path) else {
+            #expect(Bool(false))
+            return
+        }
+        let other = try remote.clone()
+        try other.git("switch", "-q", "reused")
+        try other.write("later.txt", "pushed after the review")
+        try other.commit("later work")
+        try other.git("push", "-q")
+
+        #expect(await GitActions.push(hasUpstream: false, replacing: tip, at: repo.path) != nil)
+        #expect(try remote.git("rev-parse", "reused") == other.head)
+    }
+
+    @Test func pushPreviewTreatsAnOriginBranchItBuildsOnAsExisting() async throws {
+        let (_, remote) = try branchReusingAnOldName()
+        let other = try remote.clone()
+        try other.git("switch", "-q", "--no-track", "-c", "reused", "origin/reused")
+        try other.write("more.txt", "builds on it")
+        try other.commit("more work")
+
+        let preview = await GitActions.commitsToPush(hasUpstream: false, at: other.path)
+        guard case .nameOnOrigin(let outgoing, let unrelated, _) = preview else {
+            #expect(Bool(false), "origin's branch has to be noticed")
+            return
+        }
+        #expect(outgoing.map(\.subject) == ["more work"])
+        #expect(unrelated.isEmpty)
+    }
+
+    @Test func pushPreviewIgnoresARemoteRefLeftByABranchDeletedOnOrigin() async throws {
+        let (repo, remote) = try branchReusingAnOldName()
+        let other = try remote.clone()
+        try other.git("push", "-q", "origin", "--delete", "reused")
+        #expect((try? repo.git("rev-parse", "--verify", "refs/remotes/origin/reused")) != nil)
+
+        let preview = await GitActions.commitsToPush(hasUpstream: false, at: repo.path)
+        guard case .commits(let commits) = preview else {
+            #expect(Bool(false), "a deleted branch must not count as taken")
+            return
+        }
+        #expect(commits.map(\.subject) == ["new work"])
+    }
+
     @Test func pullBringsInTheRemoteCommits() async throws {
         let remote = try GitRepo.bare()
         let first = try GitRepo()

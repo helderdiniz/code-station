@@ -44,26 +44,25 @@ enum GrafanaToolResult: Equatable, Sendable {
     static let levelFields = ["level", "lvl", "severity"]
     static let messageFields = ["message", "msg"]
 
-    static func parse(_ text: String, levelField: String? = nil) -> GrafanaToolResult? {
+    static func parse(_ text: String) -> GrafanaToolResult? {
         if text.hasSuffix(StreamEvent.truncationMarker) {
             let body = String(text.dropLast(StreamEvent.truncationMarker.count))
             guard let objects = GrafanaJSONScanner.completeObjects(inArrayNamed: "data", of: body) else {
                 return nil
             }
-            return parse(entries: objects, truncated: true, levelField: levelField)
+            return parse(entries: objects, truncated: true)
         }
         guard let object = (try? JSONSerialization.jsonObject(with: Data(text.utf8))) as? [String: Any],
               let entries = object["data"] as? [Any] else { return nil }
         let objects = entries.compactMap { $0 as? [String: Any] }
         guard objects.count == entries.count else { return nil }
-        return parse(entries: objects, truncated: false, levelField: levelField)
+        return parse(entries: objects, truncated: false)
     }
 
-    static func parse(entries: [[String: Any]], truncated: Bool,
-                      levelField: String?) -> GrafanaToolResult? {
+    static func parse(entries: [[String: Any]], truncated: Bool) -> GrafanaToolResult? {
         if entries.isEmpty { return truncated ? nil : .empty }
         if entries.allSatisfy({ $0["line"] is String }) {
-            return .logs(entries.enumerated().map { logEntry($1, id: $0, levelField: levelField) },
+            return .logs(entries.enumerated().map { logEntry($1, id: $0) },
                          truncated: truncated)
         }
         if entries.allSatisfy({ $0["metric"] is [String: Any] }) {
@@ -95,7 +94,7 @@ enum GrafanaToolResult: Equatable, Sendable {
         }
     }
 
-    private static func logEntry(_ entry: [String: Any], id: Int, levelField: String?) -> LogEntry {
+    private static func logEntry(_ entry: [String: Any], id: Int) -> LogEntry {
         let line = entry["line"] as? String ?? ""
         let fields = strings(entry["parsed"])
         let labels = strings(entry["labels"])
@@ -108,15 +107,13 @@ enum GrafanaToolResult: Equatable, Sendable {
                         labels: labels,
                         fields: fields,
                         metadata: metadata,
-                        level: level(fields: fields, labels: labels, metadata: metadata,
-                                     preferred: levelField),
+                        level: level(fields: fields, labels: labels, metadata: metadata),
                         message: message(line: line, fields: fields))
     }
 
     private static func level(fields: [String: String], labels: [String: String],
-                              metadata: [String: String], preferred: String?) -> String? {
-        let names = [preferred].compactMap { $0 } + levelFields
-        for name in names {
+                              metadata: [String: String]) -> String? {
+        for name in levelFields {
             if let value = fields[name] ?? labels[name], !value.isEmpty { return value }
         }
         guard let detected = metadata["detected_level"], detected != "unknown" else { return nil }
@@ -139,7 +136,12 @@ enum GrafanaToolResult: Equatable, Sendable {
             }
             if let start {
                 let value = firstLine[firstLine.index(start, offsetBy: key.count)...]
-                if value.hasPrefix("\""), let parsed = fields[name] { return parsed }
+                if value.hasPrefix("\"") {
+                    if let parsed = fields[name] { return parsed }
+                    // Unparsed and quoted: the message is what sits between the quotes.
+                    let inside = value.dropFirst()
+                    return String(inside.prefix { $0 != "\"" })
+                }
                 return String(value)
             }
         }

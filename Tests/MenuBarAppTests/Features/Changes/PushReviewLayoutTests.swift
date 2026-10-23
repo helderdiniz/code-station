@@ -39,7 +39,7 @@ struct PushReviewLayoutTests {
         for dark in [false, true] {
             let scenario = PushLayoutScenario()
             let model = PushReviewModel(read: { await scenario.read() }, pull: { .upToDate },
-                                        push: { await scenario.push() })
+                                        push: { _ in await scenario.push() })
             let presenter = DialogPresenter()
             presenter.show(Dialog(title: "Review your push", content: AnyView(
                 PushReviewView(model: model, repository: "code-station", branch: "refine-commit-flow",
@@ -126,8 +126,10 @@ struct PushReviewLayoutTests {
         for (upstream, preview) in [("origin/main", GitPushPreview.commits(Array(commits.prefix(5)))),
                                     (nil, .commits(Array(commits.prefix(3)))),
                                     ("origin/main", .behindUpstream(incoming: Array(commits.prefix(2)),
-                                                                    outgoing: Array(commits.prefix(5))))] {
-            let model = PushReviewModel(read: { preview }, pull: { .upToDate }, push: { nil })
+                                                                    outgoing: Array(commits.prefix(5)))),
+                                    (nil, .nameOnOrigin(outgoing: Array(commits.prefix(2)),
+                                                        unrelated: Array(commits.prefix(3)), tip: "0ld71p"))] {
+            let model = PushReviewModel(read: { preview }, pull: { .upToDate }, push: { _ in nil })
             await model.load()
             let presenter = DialogPresenter()
             let view = PushReviewView(model: model, repository: "code-station",
@@ -139,7 +141,8 @@ struct PushReviewLayoutTests {
             #expect(measured.width == 560)
             #expect(model.phase == .ready)
             // Two lists outgrow the cap, and the body scrolls instead of the dialog growing.
-            if case .behindUpstream = preview { #expect(measured.height == 480) }
+            if case .nameOnOrigin = preview { #expect(measured.height <= 480) }
+            else if case .behindUpstream = preview { #expect(measured.height == 480) }
             else { #expect(measured.height < 480) }
         }
     }
