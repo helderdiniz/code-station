@@ -30,11 +30,11 @@ struct AgentCommand: Identifiable, Equatable, Sendable {
 }
 
 enum AgentCommands {
-    // Everything a session on this agent can be offered, nearest first: what the app
-    // answers, then what the project keeps, then what the person keeps, and last what the
-    // CLI ships. A name found twice is the nearer copy's, so a file someone wrote takes
-    // the name over the CLI's own command of that name. The app's own are the exception,
-    // since those are answered here before a prompt is ever sent.
+    // Everything a session on this agent can be offered, in the order the agent settles a
+    // name it finds twice: what the app answers, then the folders the CLI reads, and last
+    // what the CLI ships. A name found twice is the first copy's, so a file someone wrote
+    // takes the name over the CLI's own command of that name. The app's own are the
+    // exception, since those are answered here before a prompt is ever sent.
     static func all(for agent: AgentKind, workingDirectories: [String],
                     home: URL = FileManager.default.homeDirectoryForCurrentUser,
                     environment: [String: String] = ProcessInfo.processInfo.environment)
@@ -43,8 +43,9 @@ enum AgentCommands {
         var taken = Set(found.map(\.name))
         for folder in folders(for: agent, home: home, workingDirectories: workingDirectories,
                               environment: environment) {
-            for command in onDisk(in: folder.url, scope: folder.scope)
-            where taken.insert(command.name).inserted {
+            let commands = folder.holdsSkills ? skills(in: folder.url, scope: folder.scope)
+                                              : onDisk(in: folder.url, scope: folder.scope)
+            for command in commands where taken.insert(command.name).inserted {
                 found.append(command)
             }
         }
@@ -90,6 +91,7 @@ enum AgentCommands {
     struct Folder: Equatable, Sendable {
         let url: URL
         let scope: AgentCommand.Scope
+        var holdsSkills = false
     }
 
     // Where each CLI keeps the commands people write. A workspace session works in
@@ -102,7 +104,12 @@ enum AgentCommands {
         case .claudeCode:
             let base = environment["CLAUDE_CONFIG_DIR"].map { URL(fileURLWithPath: $0) }
                 ?? home.appendingPathComponent(".claude")
-            return roots.map { Folder(url: $0.appendingPathComponent(".claude/commands"), scope: .project) }
+            // Claude settles a skill's name the other way round from a command's: your own
+            // skill over the project's, and a skill over any command of the same name.
+            return [Folder(url: base.appendingPathComponent("skills"), scope: .user, holdsSkills: true)]
+                + roots.map { Folder(url: $0.appendingPathComponent(".claude/skills"), scope: .project,
+                                     holdsSkills: true) }
+                + roots.map { Folder(url: $0.appendingPathComponent(".claude/commands"), scope: .project) }
                 + [Folder(url: base.appendingPathComponent("commands"), scope: .user)]
         case .codex:
             let base = environment["CODEX_HOME"].map { URL(fileURLWithPath: $0) }
@@ -132,6 +139,26 @@ enum AgentCommands {
             let text = (try? String(contentsOf: url, encoding: .utf8)) ?? ""
             found.append(AgentCommand(name: name, summary: summary(of: text, named: name),
                                       scope: scope, file: url))
+        }
+        return found.sorted { $0.name < $1.name }
+    }
+
+    // One folder per skill, holding a SKILL.md. The folder is often a link to a skill kept
+    // in another checkout, so it is read where the link points rather than checked
+    // against the folder it sits in, the way a command file is.
+    static func skills(in folder: URL, scope: AgentCommand.Scope) -> [AgentCommand] {
+        let entries = (try? FileManager.default.contentsOfDirectory(
+            at: folder, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles])) ?? []
+        var found: [AgentCommand] = []
+        for entry in entries {
+            let file = entry.appendingPathComponent("SKILL.md")
+            guard let text = try? String(contentsOf: file, encoding: .utf8),
+                  // Claude keeps these for itself and leaves them out of its own menu.
+                  frontMatterValue("user-invocable", in: text)?.lowercased() != "false"
+            else { continue }
+            let name = frontMatterValue("name", in: text) ?? entry.lastPathComponent
+            found.append(AgentCommand(name: name, summary: summary(of: text, named: name),
+                                      scope: scope, file: file))
         }
         return found.sorted { $0.name < $1.name }
     }
@@ -174,14 +201,22 @@ enum AgentCommands {
         return lines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    // A value may carry on over the lines indented below its key, as a folded or literal
+    // block does. The menu shows one line, so they are joined with spaces either way.
     private static func frontMatterValue(_ key: String, in text: String) -> String? {
         let lines = text.split(separator: "\n", omittingEmptySubsequences: false)
         guard lines.first?.trimmedLine == "---" else { return nil }
-        for line in lines.dropFirst() {
-            let line = line.trimmedLine
+        for (index, raw) in lines.enumerated().dropFirst() {
+            let line = raw.trimmedLine
             if line == "---" { return nil }
             guard line.lowercased().hasPrefix(key + ":") else { continue }
-            let value = line.dropFirst(key.count + 1)
+            var parts = [String(line.dropFirst(key.count + 1)).trimmed]
+            if parts[0].range(of: #"^[|>][+-]?$"#, options: .regularExpression) != nil { parts = [] }
+            for next in lines.dropFirst(index + 1) where !next.trimmedLine.isEmpty {
+                guard next.indentation > raw.indentation else { break }
+                parts.append(next.trimmedLine)
+            }
+            let value = parts.joined(separator: " ")
                 .trimmingCharacters(in: CharacterSet(charactersIn: " \"'"))
             return value.isBlank ? nil : value
         }
@@ -227,6 +262,7 @@ enum AgentCommands {
 
 private extension Substring {
     var trimmedLine: String { trimmingCharacters(in: .whitespaces) }
+    var indentation: Int { prefix { $0 == " " || $0 == "\t" }.count }
 }
 
 // The word being typed after a slash, and the commands it points at.
