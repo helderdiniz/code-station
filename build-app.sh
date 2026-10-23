@@ -55,9 +55,16 @@ cat > "$APP/Contents/Info.plist" <<PLIST
     <key>NSHighResolutionCapable</key><true/>
     <key>NSLocalNetworkUsageDescription</key>
     <string>Open a selected Code Station session on a phone connected to the same Wi-Fi.</string>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>Speak a prompt into the composer. Audio stays on this Mac and is never kept.</string>
+    <key>NSSpeechRecognitionUsageDescription</key>
+    <string>Turn what you say into the words of a prompt, on this Mac.</string>
 </dict>
 </plist>
 PLIST
 
-codesign --force --deep --sign - "$APP" >/dev/null 2>&1 || true
+# Even an ad-hoc build carries the entitlements, so it asks macOS for the same things as
+# the app that ships, and a re-sign that keeps them has them to keep.
+codesign --force --deep --sign - --entitlements Resources/CodeStation.entitlements "$APP" \
+    >/dev/null 2>&1 || true
 echo "Built $APP"

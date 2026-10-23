@@ -1,0 +1,265 @@
+import Foundation
+import Observation
+import SwiftUI
+
+// Registers servers with the Claude Code CLI so it actually connects to them.
+// Detection reads ~/.claude.json directly (fast, no health checks); changes go
+// through `claude mcp add/remove` so the CLI owns its config format.
+@MainActor
+@Observable
+final class ClaudeCodeManager {
+    struct Entry: Equatable {
+        var command: String?
+        var args: [String] = []
+        var env: [String: String] = [:]
+        var url: String?
+        var type: String?
+        var headers: [String: String] = [:]
+    }
+
+    private let configURL: URL
+    private let registrar = CLIRegistrar(command: "claude",
+                                         notFoundMessage: "Claude Code CLI not found on PATH.")
+    private(set) var entries: [String: Entry] = [:]
+    let available: Bool
+
+    // What `claude mcp list` last said about each server it reached for. Kept between
+    // sheet openings, since a full check takes a few seconds.
+    private(set) var health: [String: AgentConfiguredServer.Health] = [:]
+    private var isCheckingAll = false
+    private(set) var checkedAt: Date?
+    let serverWork = AgentServerWork()
+
+    var bulkBusy: Bool { registrar.bulkBusy }
+    var errors: [String: String] { registrar.errors }
+
+    init() {
+        configURL = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".claude.json")
+        available = ProcessManager.resolve("claude") != nil
+        refresh()
+    }
+
+    func isRegistered(_ name: String) -> Bool { entries[name] != nil }
+    func isBusy(_ name: String) -> Bool { registrar.isBusy(name) }
+
+    // True when the server exists in Claude Code but its command, args or env differ
+    // from what the app holds (for example after the token was changed here). Remote
+    // servers are not diffed - registered counts as in sync.
+    func isOutOfSync(_ server: Server) -> Bool {
+        guard let entry = entries[server.name] else { return false }
+        if server.isRemote { return false }
+        if entry.command != resolvedCommand(server) { return true }
+        if entry.args != server.args { return true }
+        return entry.env != appEnv(server)
+    }
+
+    func serversNeedingSync(_ servers: [Server]) -> [Server] {
+        servers.filter { !isRegistered($0.name) || isOutOfSync($0) }
+    }
+
+    func refresh() {
+        guard let data = try? Data(contentsOf: configURL),
+              let result = Self.configurationEntries(in: data) else {
+            entries = [:]
+            return
+        }
+        entries = result
+    }
+
+    nonisolated static func configurationEntries(in data: Data) -> [String: Entry]? {
+        guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let servers = obj["mcpServers"] as? [String: Any] else { return nil }
+        var result: [String: Entry] = [:]
+        for (name, value) in servers {
+            let dict = value as? [String: Any]
+            result[name] = Entry(command: dict?["command"] as? String,
+                                 args: (dict?["args"] as? [String]) ?? [],
+                                 env: (dict?["env"] as? [String: String]) ?? [:],
+                                 url: dict?["url"] as? String,
+                                 type: dict?["type"] as? String,
+                                 headers: (dict?["headers"] as? [String: String]) ?? [:])
+        }
+        return result
+    }
+
+    // MARK: - Servers Claude Code owns
+
+    // What Claude Code last said about a server it holds, whoever registered it.
+    func registration(of name: String) -> AgentConfiguredServer.Registration? {
+        entries[name].map { .claudeCode($0, health: health[name], work: work(on: name)) }
+    }
+
+    // The full list is not counted as work on each server: it waits for the slowest one,
+    // so a quick server would read "checking" for as long as the slowest takes.
+    func work(on name: String) -> AgentConfiguredServer.Work? {
+        serverWork.work[name]
+    }
+
+    // `claude mcp list` connects to every server to report on it, which is the only
+    // way to learn whether one needs a sign-in. It takes as long as the slowest server,
+    // so the server on screen is also checked by itself.
+    func checkHealth() {
+        guard available, !isCheckingAll else { return }
+        isCheckingAll = true
+        Task {
+            let output = try? await AgentServerWork.output("claude", ["mcp", "list"],
+                                                           timeout: .seconds(90))
+            isCheckingAll = false
+            guard let output else { return }
+            health = Self.health(inList: output)
+            checkedAt = .now
+        }
+    }
+
+    // For a server coming into view. Work already running on it, such as a sign-in
+    // waiting on the browser, is left alone rather than replaced.
+    func checkHealthIfIdle(of name: String) {
+        guard available, isRegistered(name), serverWork.work[name] == nil else { return }
+        checkHealth(of: name)
+    }
+
+    func checkHealth(of name: String) {
+        serverWork.perform(.checking, on: name) {
+            try await AgentServerWork.output("claude", ["mcp", "get", name], timeout: .seconds(60))
+        } then: { [weak self] output in
+            guard let self else { return }
+            health[name] = Self.health(inGet: output)
+            checkedAt = .now
+        }
+    }
+
+    // Claude Code opens the browser itself and waits for the sign-in to come back, but
+    // only on a terminal: without one it quits at once.
+    func signIn(_ name: String) {
+        serverWork.perform(.signingIn, on: name) {
+            try await AgentServerWork.terminalOutput("claude", ["mcp", "login", name],
+                                                     timeout: .seconds(300))
+        } then: { [weak self] _ in
+            self?.checkHealth(of: name)
+        }
+    }
+
+    func signOut(_ name: String) {
+        serverWork.perform(.checking, on: name) {
+            try await AgentServerWork.output("claude", ["mcp", "logout", name], timeout: .seconds(30))
+        } then: { [weak self] _ in
+            self?.checkHealth(of: name)
+        }
+    }
+
+    // Lines read "name: target - ✔ Connected". The target is a URL or a command line,
+    // which can hold either separator, so the name ends at the first ": " and the
+    // status starts after the last " - ".
+    nonisolated static func health(inList output: String) -> [String: AgentConfiguredServer.Health] {
+        var result: [String: AgentConfiguredServer.Health] = [:]
+        for line in output.split(separator: "\n") {
+            guard let nameEnd = line.range(of: ": "),
+                  let statusStart = line.range(of: " - ", options: .backwards),
+                  statusStart.lowerBound > nameEnd.lowerBound,
+                  let health = health(inStatus: String(line[statusStart.upperBound...]))
+            else { continue }
+            result[String(line[..<nameEnd.lowerBound])] = health
+        }
+        return result
+    }
+
+    nonisolated static func health(inGet output: String) -> AgentConfiguredServer.Health? {
+        for line in output.split(separator: "\n") {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed.hasPrefix("Status:") {
+                return health(inStatus: String(trimmed.dropFirst("Status:".count)))
+            }
+        }
+        return nil
+    }
+
+    // Matched on words rather than the marks, which differ between releases. A status
+    // the app does not know, such as a project server waiting for approval, is left
+    // unread rather than guessed at.
+    nonisolated static func health(inStatus status: String) -> AgentConfiguredServer.Health? {
+        let words = status.lowercased()
+        if words.contains("needs auth") || words.contains("authentication") { return .needsSignIn }
+        if words.contains("failed") { return .failed }
+        if words.contains("connected") { return .connected }
+        return nil
+    }
+
+    // Pasteable shell command shown by "Copy command" (this one is quoted for a shell).
+    func addCommand(for server: Server) -> String? {
+        guard let args = addArgs(for: server) else { return nil }
+        return (["claude"] + args).map(\.shellQuoted).joined(separator: " ")
+    }
+
+    func add(_ server: Server) {
+        guard let args = addArgs(for: server) else {
+            registrar.errors[server.name] = notFoundMessage(server)
+            return
+        }
+        runSteps([args], names: [server.name])
+    }
+
+    func remove(_ name: String) {
+        runSteps([removeArgs(name)], names: [name])
+    }
+
+    // Remove then add, so a changed token or URL replaces the old registration.
+    func reregister(_ server: Server) {
+        guard let args = addArgs(for: server) else {
+            registrar.errors[server.name] = notFoundMessage(server)
+            return
+        }
+        runSteps([removeArgs(server.name), args], names: [server.name])
+    }
+
+    // Register everything missing and re-register everything out of sync.
+    func syncAll(_ servers: [Server]) {
+        let plan = CLIRegistrar.plan(serversNeedingSync(servers),
+                                     add: addArgs(for:),
+                                     remove: removeArgs,
+                                     isRegistered: isRegistered)
+        guard !plan.steps.isEmpty else { return }
+        runSteps(plan.steps, names: plan.names)
+    }
+
+    // MARK: - Private
+
+    // Prefer the absolute path (a Finder-launched app has a minimal PATH), but fall
+    // back to the bare command so servers already on PATH still register.
+    private func resolvedCommand(_ server: Server) -> String? {
+        guard let command = server.command, !command.isEmpty else { return nil }
+        return ProcessManager.resolve(command) ?? command
+    }
+
+    private func addArgs(for server: Server) -> [String]? {
+        if server.isRemote, let url = server.url {
+            var args = ["mcp", "add", "--transport", server.transport, server.name, url, "-s", "user"]
+            for header in server.headers where !header.key.isEmpty {
+                args += ["--header", "\(header.key): \(header.value)"]
+            }
+            return args
+        }
+        guard let executable = resolvedCommand(server) else { return nil }
+        var args = ["mcp", "add", server.name, "-s", "user"]
+        for variable in server.env where !variable.key.isEmpty {
+            args += ["-e", "\(variable.key)=\(variable.value)"]
+        }
+        args += ["--", executable] + server.args
+        return args
+    }
+
+    private func removeArgs(_ name: String) -> [String] { ["mcp", "remove", name, "-s", "user"] }
+
+    private func notFoundMessage(_ server: Server) -> String {
+        "\"\(server.name)\" needs a command or url to register."
+    }
+
+    private func appEnv(_ server: Server) -> [String: String] {
+        var env: [String: String] = [:]
+        for variable in server.env where !variable.key.isEmpty { env[variable.key] = variable.value }
+        return env
+    }
+
+    private func runSteps(_ steps: [[String]], names: [String]) {
+        registrar.run(steps, names: names) { [weak self] in self?.refresh() }
+    }
+}

@@ -28,5 +28,10 @@
       Each of these weakens the hardened runtime. Do not add them "to be
       safe" - add them in response to a symptom.
     -->
+    <!--
+      The hardened runtime keeps the microphone closed without this, even after
+      the person allows it. Dictation in the composer needs it.
+    -->
+    <key>com.apple.security.device.audio-input</key><true/>
 </dict>
 </plist>

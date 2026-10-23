@@ -1,0 +1,228 @@
+import Foundation
+import Observation
+import SwiftUI
+
+enum RunState: Equatable {
+    case stopped
+    case running
+    case failed(String)
+
+    var isActive: Bool { self == .running }
+}
+
+// Launches and tracks the actual mcp-grafana process for a server. Running state
+// is in-memory only: nothing is running right after the app starts.
+@MainActor
+@Observable
+final class ProcessManager {
+    private var processes: [Server.ID: Process] = [:]
+    // The read end of each server's output, kept so its handler can be dropped on exit.
+    private var outputs: [Server.ID: FileHandle] = [:]
+    // Only a server run in HTTP mode holds a port; its endpoint is read off it.
+    private var ports: [Server.ID: Int] = [:]
+    private(set) var states: [Server.ID: RunState] = [:]
+    private(set) var logs: [Server.ID: String] = [:]
+
+    func state(_ id: Server.ID) -> RunState { states[id] ?? .stopped }
+
+    // Where a server run in HTTP mode answers; nil for one on stdio or not running.
+    func endpoint(for id: Server.ID) -> String? {
+        ports[id].map { "http://localhost:\($0)/mcp" }
+    }
+
+    func toggle(_ server: Server) {
+        state(server.id).isActive ? stop(server.id) : start(server)
+    }
+
+    func start(_ server: Server) {
+        guard !state(server.id).isActive else { return }
+        guard let executable = Self.resolve(server.command ?? "") else {
+            states[server.id] = .failed(
+                "Could not find \"\(server.command ?? "")\" on PATH. Install it (go install github.com/grafana/mcp-grafana/cmd/mcp-grafana@latest) or use an absolute path.")
+            return
+        }
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: executable)
+        // For Grafana with no transport args, run a reachable HTTP server instead of
+        // an idle stdio process. Other servers run exactly as configured.
+        let httpMode = server.isGrafana && server.args.isEmpty
+        let port = httpMode ? nextPort() : nil
+        process.arguments = port.map { ["-t", "streamable-http", "-address", "localhost:\($0)"] }
+            ?? server.args
+
+        var env = ProcessInfo.processInfo.environment
+        env["PATH"] = Self.searchPath
+        for variable in server.env where !variable.key.isEmpty {
+            env[variable.key] = variable.value
+        }
+        process.environment = env
+
+        let pipe: ProcessPipe
+        do {
+            pipe = try ProcessPipe()
+        } catch {
+            states[server.id] = .failed(error.localizedDescription)
+            return
+        }
+        CommandRunner.closeOnExec(pipe)
+        process.standardOutput = pipe.fileHandleForWriting
+        process.standardError = pipe.fileHandleForWriting
+        logs[server.id] = ""
+
+        let id = server.id
+        let manager = self
+        // A read off a pipe can land in the middle of a multi-byte character, and
+        // decoding that half on its own answers nothing, which would drop the whole
+        // chunk. Framing on newlines first holds the partial tail back until the rest
+        // of it arrives, so no output is lost.
+        let lines = LineBuffer()
+        pipe.fileHandleForReading.readabilityHandler = { handle in
+            let data = handle.availableData
+            let complete = data.isEmpty ? lines.flush() : lines.lines(from: data)
+            guard !complete.isEmpty else { return }
+            let text = complete.map { $0 + "\n" }.joined()
+            Task { @MainActor in manager.appendLog(id, text) }
+        }
+        process.terminationHandler = { finished in
+            let code = finished.terminationStatus
+            Task { @MainActor in manager.processEnded(id, code: code) }
+        }
+
+        do {
+            try process.run()
+            processes[id] = process
+            outputs[id] = pipe.fileHandleForReading
+            ports[id] = port
+            states[id] = .running
+        } catch {
+            pipe.fileHandleForReading.readabilityHandler = nil
+            process.terminationHandler = nil
+            states[id] = .failed(error.localizedDescription)
+        }
+        // The child has its own copy of the write end now. Ours has to go, or the read end
+        // never reaches end of file once the server exits.
+        try? pipe.fileHandleForWriting.close()
+    }
+
+    func stop(_ id: Server.ID) {
+        guard let process = processes[id] else {
+            states[id] = .stopped
+            return
+        }
+        process.terminationHandler = nil
+        process.terminate()
+        cleanup(id)
+        states[id] = .stopped
+    }
+
+    func stopAll() {
+        for id in Array(processes.keys) { stop(id) }
+    }
+
+    func startAll(_ servers: [Server]) {
+        for server in servers where !state(server.id).isActive { start(server) }
+    }
+
+    func stopAll(_ ids: [Server.ID]) {
+        for id in ids where state(id).isActive { stop(id) }
+    }
+
+    func clearLog(_ id: Server.ID) { logs[id] = "" }
+
+    func runningCount(among ids: [Server.ID]) -> Int {
+        ids.count { state($0).isActive }
+    }
+
+    // MARK: - Private
+
+    private func processEnded(_ id: Server.ID, code: Int32) {
+        // Ignore if we already stopped it deliberately.
+        guard processes[id] != nil else { return }
+        cleanup(id)
+        states[id] = code == 0 ? .stopped : .failed("Exited with code \(code). See output below.")
+    }
+
+    // Both exit paths land here, so the read handler is cleared here too: a server that
+    // exits on its own would otherwise keep its pipe, its dispatch source and the
+    // closure's reference to this manager alive for the rest of the app's life.
+    private func cleanup(_ id: Server.ID) {
+        outputs[id]?.readabilityHandler = nil
+        outputs[id] = nil
+        processes[id] = nil
+        ports[id] = nil
+    }
+
+    private func appendLog(_ id: Server.ID, _ text: String) {
+        var current = (logs[id] ?? "") + text
+        if current.count > 8000 { current = String(current.suffix(8000)) }
+        logs[id] = current
+    }
+
+    private func nextPort() -> Int {
+        let used = Set(ports.values)
+        var port = 8000
+        while used.contains(port) { port += 1 }
+        return port
+    }
+
+    // MARK: - Executable resolution
+
+    // A Finder-launched app has a minimal PATH, so search the usual install dirs too.
+    nonisolated private static let searchDirs: [String] = {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        var dirs = (ProcessInfo.processInfo.environment["PATH"] ?? "")
+            .split(separator: ":").map(String.init)
+        dirs += ["/opt/homebrew/bin", "/usr/local/bin", "\(home)/go/bin", "\(home)/.local/bin", "/usr/bin", "/bin"]
+        return dirs
+    }()
+
+    nonisolated static let searchPath: String = searchDirs.joined(separator: ":")
+
+    // Resolving walks every search directory, and callers ask on hot paths - once per git
+    // command, once per plugin row while the Skills sheet redraws. A command that resolved
+    // once keeps its path, since the binary does not move while the app runs. A command
+    // that did not resolve is looked up again, so installing a CLI takes effect without a
+    // restart.
+    nonisolated static func resolve(_ command: String) -> String? {
+        guard !command.isEmpty else { return nil }
+        if let cached = resolved.value(for: command) { return cached }
+        let path = search(command)
+        if let path { resolved.store(path, for: command) }
+        return path
+    }
+
+    nonisolated private static func search(_ command: String) -> String? {
+        if command.contains("/") {
+            return isExecutableFile(command) ? command : nil
+        }
+        for dir in searchDirs {
+            let path = (dir as NSString).appendingPathComponent(command)
+            if isExecutableFile(path) { return path }
+        }
+        return nil
+    }
+
+    nonisolated private static func isExecutableFile(_ path: String) -> Bool {
+        var isDirectory: ObjCBool = false
+        return FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory)
+            && !isDirectory.boolValue
+            && FileManager.default.isExecutableFile(atPath: path)
+    }
+
+    nonisolated private static let resolved = ResolvedCommands()
+}
+
+// Reached from any thread, so it carries its own lock rather than relying on the caller.
+private final class ResolvedCommands: @unchecked Sendable {
+    private let lock = NSLock()
+    private var paths: [String: String] = [:]
+
+    func value(for command: String) -> String? {
+        lock.withLock { paths[command] }
+    }
+
+    func store(_ path: String, for command: String) {
+        lock.withLock { paths[command] = path }
+    }
+}

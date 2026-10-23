@@ -1,0 +1,891 @@
+import SwiftUI
+
+// The pane is about the agents the app can run: which one sessions use, whether its CLI
+// is there, who it is signed in as, and where its own files live. The account details
+// come straight from each CLI's own files where it keeps them there, which keeps
+// opening the pane instant. Versions, Codex account usage and Copilot's sign-in need a
+// process, so they arrive when they arrive.
+@MainActor
+@Observable
+final class ClaudeAgentInfo {
+    struct Account {
+        var name: String?
+        var email: String
+        var organization: String?
+        var plan: String?
+    }
+
+    private(set) var path: String?
+    private(set) var version: String?
+    private(set) var account: Account?
+    private(set) var isCheckingVersion = false
+    private(set) var versionCheckFailed = false
+    @ObservationIgnored private var versionTask: Task<Void, Never>?
+
+    init() { refresh() }
+
+    func refresh() {
+        versionTask?.cancel()
+        path = ProcessManager.resolve("claude")
+        account = Self.readAccount()
+        version = nil
+        isCheckingVersion = false
+        versionCheckFailed = false
+        guard let path else { return }
+        isCheckingVersion = true
+        let searchPath = ProcessManager.searchPath
+        versionTask = Task {
+            // The CLI prints "2.1.220 (Claude Code)"; the number is the part worth keeping.
+            let version = await cliVersion(at: path, searchPath: searchPath)?
+                .split(separator: " ").first.map(String.init)
+            guard !Task.isCancelled else { return }
+            self.version = version
+            self.versionCheckFailed = version == nil
+            self.isCheckingVersion = false
+        }
+    }
+
+    var readiness: AgentReadiness {
+        AgentReadiness(installed: path != nil, signedIn: account != nil,
+                       checking: isCheckingVersion, failed: versionCheckFailed)
+    }
+
+    // MARK: - Private
+
+    private static func readAccount() -> Account? {
+        let url = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".claude.json")
+        guard let data = try? Data(contentsOf: url),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let oauth = obj["oauthAccount"] as? [String: Any],
+              let email = oauth["emailAddress"] as? String else { return nil }
+        return Account(name: oauth["displayName"] as? String,
+                       email: email,
+                       organization: oauth["organizationName"] as? String,
+                       plan: planName(oauth["organizationType"] as? String))
+    }
+
+    private static func planName(_ type: String?) -> String? {
+        switch type {
+        case "claude_max": "Claude Max"
+        case "claude_pro": "Claude Pro"
+        case "claude_team": "Claude Team"
+        case "claude_enterprise": "Claude Enterprise"
+        default: type?.replacingOccurrences(of: "_", with: " ").capitalized
+        }
+    }
+}
+
+// The same story for Codex. Its sign-in lives in ~/.codex/auth.json: a ChatGPT login
+// leaves OAuth tokens there, an API-key login leaves the key, and the account details
+// ride inside the id token's claims.
+@MainActor
+@Observable
+final class CodexAgentInfo {
+    struct Account {
+        var method: String
+        var email: String?
+        var plan: String?
+    }
+
+    private(set) var path: String?
+    private(set) var version: String?
+    private(set) var account: Account?
+    private(set) var usage: CodexUsage?
+    private(set) var isRefreshingUsage = false
+    private var refreshID = UUID()
+    private(set) var isCheckingVersion = false
+    private(set) var versionCheckFailed = false
+    @ObservationIgnored private var versionTask: Task<Void, Never>?
+    @ObservationIgnored private var usageTask: Task<Void, Never>?
+
+    init() { refresh() }
+
+    func refresh() {
+        versionTask?.cancel()
+        usageTask?.cancel()
+        path = ProcessManager.resolve("codex")
+        account = Self.readAccount()
+        version = nil
+        isCheckingVersion = false
+        versionCheckFailed = false
+        usage = nil
+        isRefreshingUsage = false
+        refreshID = UUID()
+        guard let path else { return }
+        isCheckingVersion = true
+        let searchPath = ProcessManager.searchPath
+        let id = refreshID
+        versionTask = Task {
+            // The CLI prints "codex-cli 0.52.0"; the number is the part worth keeping.
+            let version = await cliVersion(at: path, searchPath: searchPath)?
+                .split(separator: " ").last.map(String.init)
+            guard !Task.isCancelled, refreshID == id else { return }
+            self.version = version
+            self.versionCheckFailed = version == nil
+            self.isCheckingVersion = false
+        }
+        guard account != nil else { return }
+        isRefreshingUsage = true
+        usageTask = Task {
+            let usage = await CodexUsageReader.read(at: path, searchPath: searchPath)
+            guard !Task.isCancelled, refreshID == id else { return }
+            self.usage = usage
+            self.isRefreshingUsage = false
+        }
+    }
+
+    var readiness: AgentReadiness {
+        AgentReadiness(installed: path != nil, signedIn: account != nil,
+                       checking: isCheckingVersion, failed: versionCheckFailed)
+    }
+
+    static func readAccount() -> Account? {
+        let url = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".codex/auth.json")
+        guard let data = try? Data(contentsOf: url),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+        return account(from: obj)
+    }
+
+    // Split from the file read so the parsing is testable.
+    static func account(from obj: [String: Any]) -> Account? {
+        if let tokens = obj["tokens"] as? [String: Any],
+           let idToken = tokens["id_token"] as? String,
+           let claims = claims(fromJWT: idToken) {
+            let auth = claims["https://api.openai.com/auth"] as? [String: Any]
+            return Account(method: "ChatGPT login",
+                           email: claims["email"] as? String,
+                           plan: planName(auth?["chatgpt_plan_type"] as? String))
+        }
+        if let key = obj["OPENAI_API_KEY"] as? String, !key.isEmpty {
+            return Account(method: "API key", email: nil, plan: nil)
+        }
+        return nil
+    }
+
+    // The middle piece of a JWT is the claims, base64url-encoded JSON. No signature
+    // check: this is the CLI's own file being read back, not something to verify.
+    static func claims(fromJWT token: String) -> [String: Any]? {
+        let pieces = token.split(separator: ".")
+        guard pieces.count == 3 else { return nil }
+        var body = String(pieces[1])
+            .replacingOccurrences(of: "-", with: "+")
+            .replacingOccurrences(of: "_", with: "/")
+        while body.count % 4 != 0 { body += "=" }
+        guard let data = Data(base64Encoded: body) else { return nil }
+        return (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+    }
+
+    static func planName(_ type: String?) -> String? {
+        switch type {
+        case "plus": "ChatGPT Plus"
+        case "pro": "ChatGPT Pro"
+        case "team": "ChatGPT Team"
+        case "free": "Free"
+        default: type?.capitalized
+        }
+    }
+}
+
+// Runs "<cli> --version" and hands back the line it printed.
+// Copilot keeps its sign-in in the system keychain or takes it from the gh CLI, so the
+// only honest way to read it is to ask the CLI. That takes a moment, like its version.
+@MainActor
+@Observable
+final class CopilotAgentInfo {
+    private(set) var path: String?
+    private(set) var version: String?
+    private(set) var account: CopilotServer.AuthStatus?
+    private(set) var isCheckingAccount = false
+    private(set) var accountCheckFailed = false
+    private var refreshID = UUID()
+    private(set) var isCheckingVersion = false
+    private(set) var versionCheckFailed = false
+    @ObservationIgnored private var versionTask: Task<Void, Never>?
+    @ObservationIgnored private var accountTask: Task<Void, Never>?
+
+    init() { refresh() }
+
+    func refresh() {
+        versionTask?.cancel()
+        accountTask?.cancel()
+        path = ProcessManager.resolve("copilot")
+        version = nil
+        isCheckingVersion = false
+        versionCheckFailed = false
+        account = nil
+        isCheckingAccount = false
+        accountCheckFailed = false
+        refreshID = UUID()
+        guard let path else { return }
+        isCheckingVersion = true
+        let searchPath = ProcessManager.searchPath
+        let id = refreshID
+        versionTask = Task {
+            // The CLI prints "GitHub Copilot CLI 1.0.83." and a line about updates; the
+            // number is the part worth keeping.
+            let version = await cliVersion(at: path, searchPath: searchPath)?
+                .split(whereSeparator: \.isNewline).first?
+                .split(separator: " ").last
+                .map { $0.trimmingCharacters(in: CharacterSet(charactersIn: ".")) }
+            guard !Task.isCancelled, refreshID == id else { return }
+            self.version = version
+            self.versionCheckFailed = version == nil
+            self.isCheckingVersion = false
+        }
+        isCheckingAccount = true
+        accountTask = Task {
+            let status = await CopilotServer.authStatus(at: path, searchPath: searchPath)
+            guard !Task.isCancelled, refreshID == id else { return }
+            self.account = status?.isAuthenticated == true ? status : nil
+            self.accountCheckFailed = status == nil
+            self.isCheckingAccount = false
+        }
+    }
+
+    var readiness: AgentReadiness {
+        AgentReadiness(installed: path != nil, signedIn: account != nil,
+                       checking: isCheckingVersion || isCheckingAccount,
+                       failed: versionCheckFailed || accountCheckFailed)
+    }
+}
+
+// One agent's account, read through the same info object the Agents pane uses, for a
+// screen that only cares about the agent its session runs on.
+@MainActor
+enum AgentAccount {
+    case claudeCode(ClaudeAgentInfo)
+    case codex(CodexAgentInfo)
+    case copilot(CopilotAgentInfo)
+
+    init(_ agent: AgentKind) {
+        switch agent {
+        case .claudeCode: self = .claudeCode(ClaudeAgentInfo())
+        case .codex: self = .codex(CodexAgentInfo())
+        case .copilot: self = .copilot(CopilotAgentInfo())
+        }
+    }
+
+    func refresh() {
+        switch self {
+        case .claudeCode(let info): info.refresh()
+        case .codex(let info): info.refresh()
+        case .copilot(let info): info.refresh()
+        }
+    }
+
+    // Nil until the answer is in. Copilot has to be asked, and a check that could not
+    // reach it says nothing either way about the sign-in.
+    var signedIn: Bool? {
+        switch self {
+        case .claudeCode(let info): info.path == nil ? nil : info.account != nil
+        case .codex(let info): info.path == nil ? nil : info.account != nil
+        case .copilot(let info):
+            info.path == nil || info.isCheckingAccount || info.accountCheckFailed
+                ? nil : info.account != nil
+        }
+    }
+
+    // Who it is signed in as, worded the way the Agents pane words it.
+    var summary: String? {
+        switch self {
+        case .claudeCode(let info):
+            info.account.map { account in
+                account.name.map { "\($0) · \(account.email)" } ?? account.email
+            }
+        case .codex(let info):
+            info.account.map { account in
+                account.email.map { "\(account.method) · \($0)" } ?? account.method
+            }
+        case .copilot(let info):
+            info.account?.summary
+        }
+    }
+}
+
+private nonisolated func cliVersion(at path: String, searchPath: String) async -> String? {
+    var env = ProcessInfo.processInfo.environment
+    env["PATH"] = searchPath
+    guard let output = try? await CommandRunner.run(
+        executable: path,
+        arguments: ["--version"],
+        environment: env,
+        timeout: .seconds(5),
+        outputByteLimit: 65_536
+    ), output.succeeded else { return nil }
+    let trimmed = output.output.trimmed
+    return trimmed.isEmpty ? nil : trimmed
+}
+
+// The Agents tab keeps both CLIs one click apart while their defaults and account
+// details stay with the agent they belong to.
+struct AgentSettingsView: View {
+    @Environment(SessionRunner.self) private var runner
+    @Environment(AppSettings.self) private var appSettings
+    @Environment(AccountUsageMonitor.self) private var usageMonitor: AccountUsageMonitor?
+    @State private var selectedAgent: AgentKind
+    @State private var claude = ClaudeAgentInfo()
+    @State private var codex = CodexAgentInfo()
+    @State private var copilot = CopilotAgentInfo()
+    @State private var loggingIn: AgentKind?
+
+    let requestedAgent: AgentKind?
+
+    private var defaults: SessionSettings { runner.defaults(for: selectedAgent) }
+
+    init(selectedAgent: AgentKind,
+         requestedAgent: AgentKind? = nil) {
+        _selectedAgent = State(initialValue: requestedAgent ?? selectedAgent)
+        self.requestedAgent = requestedAgent
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 20) {
+            defaultAgent.id(SettingsSearchTarget.agentDefault.id)
+            agentTabs.id(SettingsSearchTarget.agentConfigure.id)
+            agentSection(for: selectedAgent)
+        }
+        .sheet(item: $loggingIn, onDismiss: { refresh() }) { agent in
+            AgentLoginSheet(agent: agent).appOverlays()
+        }
+        .onChange(of: requestedAgent) { _, agent in
+            if let agent { selectedAgent = agent }
+        }
+    }
+
+    private func refresh() {
+        runner.refreshAvailableAgents()
+        claude.refresh()
+        codex.refresh()
+        copilot.refresh()
+        Task { await runner.refreshDiscoveredModels() }
+    }
+
+    // MARK: - Agent tabs
+
+    private var defaultAgent: some View {
+        ChoiceBlock("AGENT") {
+            SettingsCard {
+                HStack(alignment: .top, spacing: 12) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Default agent")
+                            .font(.system(size: 13, weight: .semibold))
+                        Text("New sessions use this agent unless you choose a different one when creating them.")
+                            .font(.system(size: 12))
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    Spacer(minLength: 0)
+                    OptionMenu(value: runner.agent.title) {
+                        AgentKind.allCases.map { agent in
+                            .item(agent.title,
+                                  checked: runner.agent == agent,
+                                  subtitle: agent.blurb) {
+                                runner.agent = agent
+                            }
+                        }
+                    }
+                    .fixedSize(horizontal: true, vertical: false)
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 13)
+            }
+        }
+    }
+
+    private var agentTabs: some View {
+        ChoiceBlock("CONFIGURE", note: "Choose which agent's account and settings to view. This does not change the default agent.") {
+            SettingsCard {
+                HStack(spacing: 4) {
+                    ForEach(AgentKind.allCases) { kind in
+                        ChoicePill(title: kind.title, selected: selectedAgent == kind) {
+                            selectedAgent = kind
+                        }
+                    }
+                    Spacer(minLength: 0)
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 12)
+            }
+        }
+    }
+
+    private func change(_ edit: (inout SessionSettings) -> Void) {
+        var updated = defaults
+        edit(&updated)
+        runner.setDefaults(updated, for: selectedAgent)
+    }
+
+    // MARK: - One agent
+
+    // What the pane shows about an agent, read off whichever info object owns it, so
+    // the screen itself is drawn once for both.
+    private struct AgentProfile {
+        let heading: String
+        let path: String?
+        let version: String?
+        let account: String?
+        // Kept apart from the account text: a check still under way has words on the
+        // row but no sign-in to show for them yet.
+        let signedIn: Bool
+        let plan: String?
+        let usage: [AccountUsageWindow]
+        let usageCheckedAt: Date?
+        let usageLoading: Bool
+        let usageEmptyMessage: String
+        let usageNote: String
+        let fileTitle: String
+        let configFile: String
+        let refresh: () -> Void
+    }
+
+    private func profile(for agent: AgentKind) -> AgentProfile {
+        switch agent {
+        case .claudeCode:
+            AgentProfile(
+                heading: "CLAUDE CODE",
+                path: claude.path,
+                version: claude.version,
+                account: AgentAccount.claudeCode(claude).summary,
+                signedIn: claude.account != nil,
+                plan: claude.account?.plan,
+                usage: usageMonitor?.usage[.claudeCode]?.windows
+                    ?? runner.latestRateLimit[.claudeCode].map(AccountUsageMonitor.liveWindows) ?? [],
+                usageCheckedAt: usageMonitor?.usage[.claudeCode]?.checkedAt
+                    ?? runner.rateLimitsUpdatedAt[.claudeCode],
+                usageLoading: usageMonitor?.usage[.claudeCode] == nil
+                    && usageMonitor?.refreshing.contains(.claudeCode) == true,
+                usageEmptyMessage: usageMonitor?.problems[.claudeCode]
+                    ?? "Sign in to Claude Code to view account usage.",
+                usageNote: "The same limits Claude Code's /usage shows, read from your Claude account and moved on by each turn.",
+                fileTitle: "Claude Code settings",
+                configFile: ".claude/settings.json",
+                refresh: {
+                    claude.refresh()
+                    Task { await usageMonitor?.refresh(.claudeCode) }
+                })
+        case .codex:
+            AgentProfile(
+                heading: "CODEX",
+                path: codex.path,
+                version: codex.version,
+                account: AgentAccount.codex(codex).summary,
+                signedIn: codex.account != nil,
+                plan: codex.account?.plan,
+                usage: codex.usage?.windows ?? usageMonitor?.usage[.codex]?.windows ?? [],
+                usageCheckedAt: codex.usage?.checkedAt ?? usageMonitor?.usage[.codex]?.checkedAt,
+                usageLoading: codex.isRefreshingUsage,
+                usageEmptyMessage: codex.account == nil
+                    ? "Sign in to Codex to view account usage."
+                    : "Codex did not return account usage details.",
+                usageNote: "Read directly from your Codex account when this page opens or refreshes.",
+                fileTitle: "Codex config",
+                configFile: ".codex/config.toml",
+                refresh: {
+                    codex.refresh()
+                    Task { await runner.refreshDiscoveredModels() }
+                })
+        case .copilot:
+            AgentProfile(
+                heading: "COPILOT",
+                path: copilot.path,
+                version: copilot.version,
+                account: copilot.account?.summary
+                    ?? (copilot.isCheckingAccount ? "Checking…" : nil),
+                signedIn: copilot.account != nil,
+                plan: nil,
+                usage: usageMonitor?.usage[.copilot]?.windows ?? [],
+                usageCheckedAt: usageMonitor?.usage[.copilot]?.checkedAt,
+                usageLoading: usageMonitor?.usage[.copilot] == nil
+                    && usageMonitor?.refreshing.contains(.copilot) == true,
+                usageEmptyMessage: usageMonitor?.problems[.copilot]
+                    ?? "Sign in with the GitHub CLI (gh auth login) to view Copilot's allowances.",
+                usageNote: "Copilot's monthly allowances, read from GitHub with the gh CLI's login.",
+                fileTitle: "Copilot config",
+                configFile: ".copilot/config.json",
+                refresh: {
+                    copilot.refresh()
+                    Task { await usageMonitor?.refresh(.copilot) }
+                    Task { await runner.refreshDiscoveredModels() }
+                })
+        }
+    }
+
+    private func agentSection(for agent: AgentKind) -> some View {
+        let profile = profile(for: agent)
+        return VStack(alignment: .leading, spacing: 20) {
+            ChoiceBlock(profile.heading) {
+                SettingsCard {
+                    statusRow(installed: profile.path != nil,
+                              signedIn: profile.signedIn,
+                              refresh: profile.refresh)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 12)
+                    SettingsRowDivider()
+                    if profile.path == nil {
+                        missingCard(agent)
+                    } else {
+                        details(profile, agent: agent)
+                    }
+                    SettingsRowDivider()
+                    signInRow(agent)
+                }
+            }
+            .id(SettingsSearchTarget.agentDetails.id)
+            accountUsage(profile).id(SettingsSearchTarget.agentUsage.id)
+            model(for: agent).id(SettingsSearchTarget.agentModel.id)
+            effort(for: agent).id(SettingsSearchTarget.agentEffort.id)
+            permissions(for: agent).id(SettingsSearchTarget.agentPermissions.id)
+            cost(for: agent).id(SettingsSearchTarget.agentCost.id)
+            files(title: profile.fileTitle,
+                  note: "The CLI's own configuration, at ~/\(profile.configFile). It belongs to \(agent.title), so the app only points at it.",
+                  path: FileManager.default.homeDirectoryForCurrentUser
+                      .appendingPathComponent(profile.configFile).path)
+                .id(SettingsSearchTarget.agentFiles.id)
+        }
+    }
+
+    private func details(_ profile: AgentProfile, agent: AgentKind) -> some View {
+        Group {
+            detailRow("Version", profile.version ?? "…")
+            // A warning, not a block: the minimum is the app's best reading of each CLI's
+            // history, and most of an older CLI may still work.
+            if let version = profile.version, agent.isOutdated(version) == true {
+                Text("The app needs \(agent.title) \(agent.minimumVersion) or newer. Some sessions may fail until the CLI is updated.")
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .warningCard()
+                    .padding(.horizontal, 14)
+                    .padding(.bottom, 10)
+            }
+            SettingsRowDivider()
+            detailRow("Account", profile.account ?? "Signed out.")
+            if let plan = profile.plan {
+                SettingsRowDivider()
+                detailRow("Plan", plan)
+            }
+            SettingsRowDivider()
+            detailRow("Path", profile.path ?? "", mono: true)
+        }
+    }
+
+    private func model(for agent: AgentKind) -> some View {
+        ChoiceBlock("MODEL", note: "Applies from each session's next turn on.") {
+            SettingsCard {
+                let choices = runner.modelOptions(for: agent)
+                ForEach(choices.indices, id: \.self) { index in
+                    let choice = choices[index]
+                    OptionRow(
+                        title: choice.title,
+                        detail: choice.detail,
+                        selected: runner.validModel(defaults.model, for: agent) == choice.id) {
+                            change {
+                                $0.model = choice.id
+                                if let effort = $0.effort,
+                                   runner.validEffort(effort, for: agent,
+                                                      model: choice.id) == nil {
+                                    $0.effort = nil
+                                }
+                            }
+                    }
+                    if index < choices.count - 1 { SettingsRowDivider() }
+                }
+            }
+        }
+        .task(id: agent) { await runner.discoverModels(for: agent) }
+    }
+
+    private func effort(for agent: AgentKind) -> some View {
+        ChoiceBlock("EFFORT", note: "How long the model thinks before it answers. More effort costs more tokens and more time. Default uses \(agent.title)'s own effort settings for the selected model.") {
+            SettingsCard {
+                HStack(spacing: 4) {
+                    ForEach(runner.effortOptions(for: agent, model: defaults.model),
+                            id: \.title) { choice in
+                        ChoicePill(
+                            title: choice.title,
+                            selected: runner.validEffort(defaults.effort, for: agent,
+                                                         model: defaults.model) == choice.id) {
+                                change { $0.effort = choice.id }
+                        }
+                        .frame(maxWidth: .infinity)
+                    }
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 12)
+            }
+        }
+    }
+
+    @ViewBuilder private func permissions(for agent: AgentKind) -> some View {
+        switch agent {
+        case .claudeCode: claudePermissions
+        case .codex: codexPermissions
+        case .copilot: copilotPermissions
+        }
+    }
+
+    private var claudePermissions: some View {
+        ChoiceBlock("PERMISSIONS") {
+            SettingsCard {
+                let modes = PermissionMode.defaultChoices
+                ForEach(modes.indices, id: \.self) { index in
+                    let choice = modes[index]
+                    OptionRow(title: choice.title,
+                              detail: choice.detail,
+                              selected: (defaults.permissionMode ?? .fallback) == choice) {
+                        change { $0.permissionMode = choice }
+                    }
+                    if index < modes.count - 1 { SettingsRowDivider() }
+                }
+            }
+        }
+    }
+
+    private var codexPermissions: some View {
+        ChoiceBlock("PERMISSIONS", note: "Used by every Codex session unless that session has its own choice. Changes apply from its next turn.") {
+            SettingsCard {
+                ForEach(CodexSandboxMode.allCases.indices, id: \.self) { index in
+                    let mode = CodexSandboxMode.allCases[index]
+                    OptionRow(title: mode.title,
+                              detail: mode.detail,
+                              selected: (defaults.codexSandboxMode ?? .workspaceWrite) == mode,
+                              warning: mode == .fullAccess) {
+                        change { $0.codexSandboxMode = mode }
+                    }
+                    if index < CodexSandboxMode.allCases.count - 1 { SettingsRowDivider() }
+                }
+            }
+        }
+    }
+
+    private var copilotPermissions: some View {
+        ChoiceBlock("PERMISSIONS", note: "Used by every Copilot session unless that session has its own choice. Changes apply from its next turn.") {
+            SettingsCard {
+                ForEach(CopilotAccessMode.allCases.indices, id: \.self) { index in
+                    let mode = CopilotAccessMode.allCases[index]
+                    OptionRow(title: mode.title,
+                              detail: mode.detail,
+                              selected: (defaults.copilotAccessMode ?? .workspace) == mode,
+                              warning: mode == .fullAccess) {
+                        change { $0.copilotAccessMode = mode }
+                    }
+                    if index < CopilotAccessMode.allCases.count - 1 { SettingsRowDivider() }
+                }
+            }
+        }
+    }
+
+    // Hiding it only takes the figure off the screen. Sessions still record what they
+    // spent, so turning this back on shows the full total rather than starting again.
+    private func cost(for agent: AgentKind) -> some View {
+        ChoiceBlock("COST", note: agent == .claudeCode
+                    ? nil
+                    : "\(agent.title) reports no cost of its own, so its sessions have nothing to show until it does.") {
+            SettingsCard {
+                SettingsToggleRow(
+                    "Show what a session has spent",
+                    detail: "The dollar figure on the session bar, and the Spent line in the hints.",
+                    isOn: Binding(get: { appSettings.showsCost(for: agent) },
+                                  set: { appSettings.setShowsCost($0, for: agent) }))
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 13)
+            }
+        }
+    }
+
+    // MARK: - Shared pieces
+
+    private func accountUsage(_ profile: AgentProfile) -> some View {
+        ChoiceBlock("CURRENT USAGE", note: profile.usageNote) {
+            SettingsCard {
+                if profile.usageLoading {
+                    usageMessage("Checking current usage…")
+                } else if profile.usage.isEmpty {
+                    usageMessage(profile.usageEmptyMessage)
+                } else {
+                    let windows = profile.usage
+                    ForEach(windows.indices, id: \.self) { index in
+                        usageRow(windows[index])
+                        if index < windows.count - 1 || profile.usageCheckedAt != nil {
+                            SettingsRowDivider()
+                        }
+                    }
+                    if let checkedAt = profile.usageCheckedAt {
+                        Text("Updated \(checkedAt.formatted(date: .abbreviated, time: .shortened))")
+                            .font(.system(size: 11))
+                            .foregroundStyle(.secondary)
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 9)
+                            .frame(maxWidth: .infinity, alignment: .trailing)
+                    }
+                }
+            }
+        }
+    }
+
+    private func usageMessage(_ text: String) -> some View {
+        Text(text)
+            .font(.system(size: 12))
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func usageRow(_ window: AccountUsageWindow) -> some View {
+        VStack(alignment: .leading, spacing: 7) {
+            HStack(alignment: .firstTextBaseline, spacing: 12) {
+                Text(window.title)
+                    .font(.system(size: 13, weight: .semibold))
+                Spacer(minLength: 0)
+                Text("\(window.usedPercent)% used")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(.secondary)
+            }
+            Meter(fraction: window.usedFraction, colour: window.colour, height: 5)
+            if let resetsAt = window.resetsAt {
+                Text("Resets \(resetsAt.formatted(date: .abbreviated, time: .shortened))")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func statusRow(installed: Bool, signedIn: Bool, refresh: @escaping () -> Void) -> some View {
+        HStack(spacing: 10) {
+            Circle()
+                .fill(!installed ? Theme.dotOff : !signedIn ? Theme.attention : Theme.dotOn)
+                .frame(width: 7, height: 7)
+            Text(!installed ? "Not installed" : !signedIn ? "Not signed in" : "Connected")
+                .font(.system(size: 13, weight: .semibold))
+            Spacer(minLength: 0)
+            InlineLink(title: "Refresh", action: refresh)
+        }
+    }
+
+    private func missingCard(_ agent: AgentKind) -> some View {
+        Text("Could not find the \"\(agent.command)\" command. Install \(agent.title) (\(agent.installHint)) and it will show up here; nothing in the app can run a session on it without that.")
+            .font(.system(size: 12))
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func signInRow(_ agent: AgentKind) -> some View {
+        HStack(alignment: .center, spacing: 12) {
+            Text("Sessions run whichever \"\(agent.command)\" is first on PATH. Signing in or out happens in the CLI itself; the button opens it right here, and Refresh picks the change up.")
+                .font(.system(size: 12))
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 0)
+            ActionButton(title: "Run \(agent.loginCommand)", tone: .outlined, icon: "terminal") {
+                loggingIn = agent
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
+    }
+
+    private func detailRow(_ label: String, _ value: String, mono: Bool = false) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 12) {
+            Text(label)
+                .font(.system(size: 12))
+                .foregroundStyle(.secondary)
+                .frame(width: 92, alignment: .leading)
+            Text(value)
+                .font(mono ? .mono(12) : .system(size: 13))
+                .textSelection(.enabled)
+                .lineLimit(1)
+                .truncationMode(.middle)
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+    }
+
+    private func files(title: String, note: String, path: String) -> some View {
+        ChoiceBlock("FILES") {
+            SettingsCard {
+                HStack(alignment: .top, spacing: 12) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(title)
+                            .font(.system(size: 13, weight: .semibold))
+                        Text(note)
+                            .font(.system(size: 12))
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    Spacer(minLength: 0)
+                    InlineLink(title: "Reveal") {
+                        NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)])
+                    }
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 13)
+            }
+        }
+    }
+}
+
+// Signing in belongs to the CLI, so the sheet does not imitate its login flow: it hosts
+// a real shell, starts the CLI's own login command in it, and lets the CLI take it from
+// there. The shell dies with the sheet, and whoever opened it re-reads the account
+// afterwards.
+struct AgentCommandSheet: View {
+    let title: String
+    let note: String
+    let command: String
+    @Environment(\.dismiss) private var dismiss
+    @State private var terminal: TerminalSession?
+    @State private var focused = true
+
+    var body: some View {
+        VStack(spacing: 0) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title).font(.serif(16))
+                Text(note)
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 20)
+            .headerBand()
+            if let terminal {
+                TerminalScreen(terminal: terminal, isFocused: $focused)
+                    .frame(height: 420)
+                    .transition(.fadeIn)
+            }
+            SheetFooter { dismiss() }
+        }
+        .smoothlyResizes(when: terminal != nil)
+        .frame(width: 680)
+        .background(Theme.background)
+        .onAppear(perform: start)
+        .onDisappear { terminal?.stop() }
+    }
+
+    private func start() {
+        guard terminal == nil else { return }
+        let session = TerminalSession(
+            directory: FileManager.default.homeDirectoryForCurrentUser.path,
+            name: command)
+        session.start()
+        // Queued into the pty now, run by the shell once it has read its rc files.
+        session.send(command + "\n")
+        terminal = session
+    }
+}
+
+struct AgentLoginSheet: View {
+    let agent: AgentKind
+
+    var body: some View {
+        AgentCommandSheet(
+            title: "Sign in to \(agent.title)",
+            note: "Follow the CLI's login below, then close this when it is done.",
+            command: agent.loginCommand)
+    }
+}
