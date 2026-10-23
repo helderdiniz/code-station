@@ -614,9 +614,7 @@ struct SessionFactsChip: View {
                                  ? AnyShapeStyle(.tertiary) : AnyShapeStyle(Theme.attentionText))
                 .lineLimit(1)
                 .motion(Motion.hover, value: status)
-            UsageRefreshButton(checking: checking) {
-                Task { await monitor.refresh(agent) }
-            }
+            UsageRefreshButton(checking: checking) { checkUsage(monitor) }
             .appTooltip("Check \(agent.title)'s account limits now.")
             .accessibilityLabel("Check \(agent.title) usage")
         }
@@ -640,12 +638,12 @@ struct SessionFactsChip: View {
     // the first time, or why the last read failed with a way to try again.
     @ViewBuilder private func usageNote(_ monitor: AccountUsageMonitor) -> some View {
         let agent = facts.agent
-        let refresh = { Task { await monitor.refresh(agent) } }
+        let refresh = { checkUsage(monitor) }
         if let problem = monitor.problems[agent] {
             VStack(alignment: .leading, spacing: 6) {
                 Text(Self.problemLine(problem, lastReading: monitor.usage[agent]?.checkedAt))
                     .fixedSize(horizontal: false, vertical: true)
-                InlineLink(title: "Try again", size: 11.5) { _ = refresh() }
+                InlineLink(title: "Try again", size: 11.5) { refresh() }
             }
             .font(.system(size: 11.5))
             .foregroundStyle(Theme.warningText)
@@ -662,13 +660,22 @@ struct SessionFactsChip: View {
                     .font(.system(size: 11.5))
                     .foregroundStyle(.secondary)
                 ActionButton(title: "Check usage", tone: .outlined, height: 24, size: 11,
-                             icon: "arrow.clockwise") { _ = refresh() }
+                             icon: "arrow.clockwise") { refresh() }
             }
             .padding(.horizontal, 13)
             .padding(.top, 10)
             .padding(.bottom, 12)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
+    }
+
+    // A check swaps the note for the windows, so the card changes size under the pointer
+    // and AppKit reports the pointer as gone. Held by hover alone, the card would close
+    // just as the reading it was opened for arrives.
+    private func checkUsage(_ monitor: AccountUsageMonitor) {
+        pinned = true
+        let agent = facts.agent
+        Task { await monitor.refresh(agent) }
     }
 
     static func problemLine(_ problem: String, lastReading: Date?) -> String {
