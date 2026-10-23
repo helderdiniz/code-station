@@ -8,11 +8,15 @@ import SwiftUI
 struct CopyButton: View {
     let title: String?
     var size: CGFloat = 11
+    // For a caller that marks the copy on what was copied, as well as on the button.
+    var onCopy: (() -> Void)? = nil
     let text: () -> String
 
-    init(_ title: String? = nil, size: CGFloat = 11, text: @escaping () -> String) {
+    init(_ title: String? = nil, size: CGFloat = 11, onCopy: (() -> Void)? = nil,
+         text: @escaping () -> String) {
         self.title = title
         self.size = size
+        self.onCopy = onCopy
         self.text = text
     }
 
@@ -20,6 +24,7 @@ struct CopyButton: View {
     // by the time the pointer moves on.
     private static let confirmation = Duration.milliseconds(1_500)
 
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var copied = false
     @State private var reset: Task<Void, Never>?
 
@@ -27,6 +32,7 @@ struct CopyButton: View {
         Button {
             Pasteboard.copy(text())
             copied = true
+            onCopy?()
             reset?.cancel()
             reset = Task {
                 try? await Task.sleep(for: Self.confirmation)
@@ -37,6 +43,7 @@ struct CopyButton: View {
             HStack(spacing: 4) {
                 Image(systemName: copied ? "checkmark" : "doc.on.doc")
                     .font(.system(size: size, weight: .semibold))
+                    .contentTransition(reduceMotion ? .identity : .symbolEffect(.replace))
                 if let title {
                     Text(copied ? "Copied" : title)
                         .font(.system(size: size, weight: .semibold))
@@ -48,6 +55,6 @@ struct CopyButton: View {
         }
         .buttonStyle(.plain)
         .hoverLift(amount: Motion.smallLift)
-        .animation(.easeOut(duration: 0.12), value: copied)
+        .motion(Motion.pop, value: copied)
     }
 }

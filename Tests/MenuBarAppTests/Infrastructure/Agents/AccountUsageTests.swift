@@ -176,18 +176,88 @@ struct AccountUsageTests {
         #expect(!AccountUsageWindow.resetLine(nextMonth, now: now, calendar: calendar).contains(":"))
     }
 
-    @Test func theUsageRowSaysHowOldTheReadingIs() {
+    @Test func theUsageBandSaysHowOldTheReadingIs() {
         #expect(SessionFactsChip.usageStatus(checkedAt: nil, checking: false, hasProblem: false)
-                == "Not checked yet")
+                == "not checked yet")
         #expect(SessionFactsChip.usageStatus(checkedAt: nil, checking: false, hasProblem: true)
-                == "Could not check")
+                == "couldn't check")
         #expect(SessionFactsChip.usageStatus(checkedAt: Date(), checking: true, hasProblem: false)
-                == "Checking…")
+                == "checking…")
         #expect(SessionFactsChip.usageStatus(checkedAt: Date(), checking: false, hasProblem: false)
                 == "checked just now")
         #expect(SessionFactsChip.usageStatus(checkedAt: Date().addingTimeInterval(-300),
                                              checking: false, hasProblem: false)
                 == "checked 5m ago")
+        // A failed check is the news, even with an older reading still on screen.
+        #expect(SessionFactsChip.usageStatus(checkedAt: Date().addingTimeInterval(-300),
+                                             checking: false, hasProblem: true)
+                == "couldn't check")
+    }
+
+    @Test func aFailedCheckSaysHowOldTheLastGoodReadingIs() {
+        #expect(SessionFactsChip.problemLine("Claude's usage could not be reached.", lastReading: nil)
+                == "Claude's usage could not be reached.")
+        #expect(SessionFactsChip.problemLine("Claude's usage could not be reached.",
+                                             lastReading: Date().addingTimeInterval(-52 * 60))
+                == "Claude's usage could not be reached. The last good reading was 52m ago.")
+    }
+
+    // MARK: - Pace
+
+    private func window(used: Int, resetsIn: TimeInterval?, length: TimeInterval?,
+                        now: Date) -> AccountUsageWindow {
+        AccountUsageWindow(id: "five_hour", title: "Current session", usedPercent: used,
+                           resetsAt: resetsIn.map { now.addingTimeInterval($0) },
+                           shortTitle: "Session", length: length)
+    }
+
+    @Test func placesThePaceMarkAtTheElapsedShareOfTheWindow() {
+        let now = Date()
+        let halfway = window(used: 10, resetsIn: 2.5 * 3_600, length: 5 * 3_600, now: now)
+        #expect(abs((halfway.elapsedFraction(now: now) ?? 0) - 0.5) < 0.0001)
+        // Without a length the start is unknown, so there is no mark to draw.
+        #expect(window(used: 10, resetsIn: 3_600, length: nil, now: now).elapsedFraction(now: now) == nil)
+        #expect(window(used: 10, resetsIn: nil, length: 5 * 3_600, now: now).elapsedFraction(now: now) == nil)
+        // A reset further off than the window is long means the window has not started.
+        #expect(window(used: 0, resetsIn: 6 * 3_600, length: 5 * 3_600, now: now).elapsedFraction(now: now) == nil)
+    }
+
+    @Test func flagsAWindowBurningFasterThanTime() {
+        let now = Date()
+        // Half the time gone: 55% is within the slack, 56% is ahead.
+        #expect(window(used: 55, resetsIn: 2.5 * 3_600, length: 5 * 3_600, now: now).pace(now: now) == .steady)
+        #expect(window(used: 56, resetsIn: 2.5 * 3_600, length: 5 * 3_600, now: now).pace(now: now) == .ahead)
+        #expect(window(used: 100, resetsIn: 2.5 * 3_600, length: 5 * 3_600, now: now).pace(now: now) == .usedUp)
+        // With no clock to measure against, only a full window is worth saying.
+        #expect(window(used: 90, resetsIn: nil, length: nil, now: now).pace(now: now) == .steady)
+        #expect(window(used: 100, resetsIn: nil, length: nil, now: now).pace(now: now) == .usedUp)
+    }
+
+    @Test func saysWhenAWindowResetsWithoutAHover() {
+        let now = Date()
+        #expect(window(used: 4, resetsIn: 3 * 3_600 + 12 * 60, length: nil, now: now)
+                    .resetsLine(now: now) == "resets in 3h 12m")
+        #expect(window(used: 4, resetsIn: 20 * 60, length: nil, now: now).resetsLine(now: now)
+                    == "resets in 20m")
+        let later = now.addingTimeInterval(3 * 86_400)
+        #expect(window(used: 4, resetsIn: 3 * 86_400, length: nil, now: now).resetsLine(now: now)
+                    == "resets \(AccountUsageWindow.resetLine(later, now: now))")
+        #expect(window(used: 4, resetsIn: nil, length: nil, now: now).resetsLine(now: now) == nil)
+    }
+
+    @Test func speaksAWindowWithItsPaceAndReset() {
+        let now = Date()
+        let busy = window(used: 71, resetsIn: 2 * 3_600 + 24 * 60, length: 5 * 3_600, now: now)
+        #expect(SessionFactsChip.windowSpoken(busy, pace: busy.pace(now: now),
+                                              resets: busy.resetsLine(now: now))
+                    == "Current session, 71% used, ahead of pace, resets in 2h 24m")
+    }
+
+    @Test func knowsHowLongClaudesWindowsRun() {
+        #expect(ClaudeUsage.length(of: "five_hour") == TimeInterval(5 * 3_600))
+        #expect(ClaudeUsage.length(of: "seven_day") == TimeInterval(7 * 86_400))
+        #expect(ClaudeUsage.length(of: "seven_day_opus") == TimeInterval(7 * 86_400))
+        #expect(ClaudeUsage.length(of: "extra_usage") == nil)
     }
 
     // MARK: - The monitor

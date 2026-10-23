@@ -564,6 +564,7 @@ struct CodexTests {
             ],
         ])
         #expect(usage?.windows.map(\.shortTitle) == ["5h", "Week"])
+        #expect(usage?.windows.map(\.length) == [5 * 3_600, 7 * 86_400])
         #expect(CodexUsage.span(minutes: 1_440) == "1d")
         #expect(CodexUsage.span(minutes: 90) == "90m")
         #expect(CodexUsage.span(minutes: 0) == nil)

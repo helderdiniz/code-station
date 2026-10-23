@@ -16,6 +16,13 @@ enum ClaudeUsage {
         ("seven_day_opus", "Current week (Opus)", "Week · Opus"),
     ]
 
+    // The session window is five hours and the rest run a week, which the endpoint takes
+    // as known rather than saying.
+    static func length(of kind: String) -> TimeInterval? {
+        if kind == "five_hour" { return 5 * 3_600 }
+        return kind.hasPrefix("seven_day") ? 7 * 86_400 : nil
+    }
+
     static func decode(_ data: Data, checkedAt: Date = Date()) -> AccountUsage? {
         guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             return nil
@@ -26,7 +33,7 @@ enum ClaudeUsage {
             return AccountUsageWindow(id: kind, title: title,
                                       usedPercent: percent(utilization),
                                       resetsAt: (raw["resets_at"] as? String).flatMap(isoDate),
-                                      shortTitle: shortTitle)
+                                      shortTitle: shortTitle, length: length(of: kind))
         }
         if let extra = object["extra_usage"] as? [String: Any],
            extra["is_enabled"] as? Bool == true,

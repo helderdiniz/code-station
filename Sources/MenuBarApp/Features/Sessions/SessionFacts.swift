@@ -140,7 +140,14 @@ struct SessionFactsChip: View {
     private static let cardGap: CGFloat = 7
     private static let cardWidth: CGFloat = 292
     private static let labelWidth: CGFloat = 62
+    // Context and every usage window share one column, so the meters read down the card
+    // as one scale rather than as bars that happen to be near each other.
+    private static let meterWidth: CGFloat = 120
     private static let radius: CGFloat = 12
+    // Strong enough to read on the cream card, still a step under the values.
+    private static let labelInk = Color.primary.opacity(0.42)
+    private static let opening = Animation.timingCurve(0.2, 0.8, 0.2, 1, duration: 0.26)
+    private static let closing = Animation.easeIn(duration: 0.16)
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(AccountUsageMonitor.self) private var usageMonitor: AccountUsageMonitor?
@@ -155,6 +162,13 @@ struct SessionFactsChip: View {
     // The pill is a plain button, which rarely holds the keyboard, so Escape is heard
     // across the window for as long as the card is open.
     @State private var escape = WindowKeyMonitor([], "\u{1b}")
+    @State private var copies = 0
+    @State private var showsCopied = false
+    @State private var copiedReset: Task<Void, Never>?
+    // How much of the window a compact or a clear just gave back, said beside the meter
+    // for a moment so the drop reads as the action working rather than as a glitch.
+    @State private var freed: Int?
+    @State private var freedReset: Task<Void, Never>?
 
     private var isOpen: Bool { pinned || hovering }
 
@@ -166,7 +180,7 @@ struct SessionFactsChip: View {
                 pinned = true
             }
         } label: { pill }
-            .buttonStyle(.plain)
+            .buttonStyle(PressDip(scale: 0.97))
             .onHover { pointerOnChip = $0; pointerMoved() }
             .accessibilityLabel(Self.accessibilityLabel(
                 state: state, facts: facts, showsBranch: showsBranch))
@@ -175,7 +189,19 @@ struct SessionFactsChip: View {
             .overlay(alignment: .topTrailing) {
                 if isOpen { hoverCard }
             }
-            .animation(reduceMotion ? nil : .easeOut(duration: 0.12), value: isOpen)
+            .animation(reduceMotion ? nil : isOpen ? Self.opening : Self.closing, value: isOpen)
+            .onChange(of: facts.context) { old, new in
+                guard let old, let new else { return }
+                let given = Int(((old - new) * 100).rounded())
+                guard given >= 1 else { return }
+                freed = given
+                freedReset?.cancel()
+                freedReset = Task {
+                    try? await Task.sleep(for: .seconds(3))
+                    guard !Task.isCancelled else { return }
+                    freed = nil
+                }
+            }
             .onChange(of: isOpen) { _, open in
                 if open {
                     escape.start {
@@ -188,6 +214,8 @@ struct SessionFactsChip: View {
             }
             .onDisappear {
                 closing?.cancel()
+                copiedReset?.cancel()
+                freedReset?.cancel()
                 escape.stop()
             }
     }
@@ -298,18 +326,23 @@ struct SessionFactsChip: View {
         .fixedSize()
         .offset(y: Self.pillHeight)
         .onHover { pointerOnCard = $0; pointerMoved() }
-        .transition(.fadeIn)
+        // A rise and a fade, without the scale the card could also take: the card holds
+        // tooltips and hover lifts, which AppKit cannot lay out under a scale.
+        .transition(.asymmetric(insertion: .opacity.combined(with: .offset(y: -4)),
+                                removal: .opacity.combined(with: .offset(y: -3))))
     }
 
     private var card: some View {
         VStack(spacing: 0) {
             let rows = self.rows
             head(hasRows: !rows.isEmpty)
+                .modifier(RowArrival(position: 0))
             ForEach(Array(rows.enumerated()), id: \.element) { position, fact in
                 row(fact)
                     .overlay(alignment: .bottom) {
                         if position < rows.count - 1 { rule }
                     }
+                    .modifier(RowArrival(position: position + 1))
             }
         }
         .frame(width: Self.cardWidth, alignment: .leading)
@@ -355,9 +388,28 @@ struct SessionFactsChip: View {
                         .font(.mono(11.5, .semibold))
                         .lineLimit(1)
                         .truncationMode(.tail)
+                        .background { if !reduceMotion { BrandSweep(trigger: copies) } }
                     Spacer(minLength: 6)
-                    CopyButton(size: 10) { branch }
+                    CopyButton(size: 10, onCopy: branchCopied) { branch }
                         .appTooltip("Copy the branch name.")
+                        .overlay { if !reduceMotion { CopyBurst(trigger: copies) } }
+                        .overlay(alignment: .trailing) {
+                            if showsCopied {
+                                Text("Copied")
+                                    .font(.system(size: 10, weight: .semibold))
+                                    .foregroundStyle(Theme.dotOnText)
+                                    .padding(.horizontal, 7)
+                                    .padding(.vertical, 2)
+                                    .background(RoundedRectangle(cornerRadius: 5).fill(Theme.card))
+                                    .overlay(RoundedRectangle(cornerRadius: 5).strokeBorder(Theme.border))
+                                    .fixedSize()
+                                    .offset(x: -24)
+                                    .allowsHitTesting(false)
+                                    .accessibilityHidden(true)
+                                    .transition(.opacity.combined(with: .offset(x: 6)))
+                            }
+                        }
+                        .motion(Motion.reveal, value: showsCopied)
                 }
             }
         }
@@ -367,6 +419,18 @@ struct SessionFactsChip: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Theme.sunken)
         .overlay(alignment: .bottom) { if hasRows { rule } }
+    }
+
+    private func branchCopied() {
+        copies += 1
+        showsCopied = true
+        AccessibilityNotification.Announcement("Copied").post()
+        copiedReset?.cancel()
+        copiedReset = Task {
+            try? await Task.sleep(for: .milliseconds(1_500))
+            guard !Task.isCancelled else { return }
+            showsCopied = false
+        }
     }
 
     private func preciseElapsed(_ since: Date, now: Date) -> some View {
@@ -387,7 +451,7 @@ struct SessionFactsChip: View {
     // it has checkouts to open them in, so that fact is a row each rather than one row,
     // and carries which of them it stands for. The account's limit windows work the same.
     private enum Fact: Hashable {
-        case changes, pullRequest(Int), model, context, cost, usage, usageWindow(String)
+        case changes, pullRequest(Int), model, context, cost, usage, usageNote, usageWindow(String)
     }
 
     private var rows: [Fact] {
@@ -399,8 +463,13 @@ struct SessionFactsChip: View {
         if facts.cost != nil { rows.append(.cost) }
         if let usageMonitor, usageMonitor.supports(facts.agent) {
             rows.append(.usage)
-            let windows = usageMonitor.usage[facts.agent]?.windows ?? []
-            rows.append(contentsOf: windows.map { Fact.usageWindow($0.id) })
+            let agent = facts.agent
+            let usage = usageMonitor.usage[agent]
+            if !usageMonitor.refreshing.contains(agent),
+               usageMonitor.problems[agent] != nil || usage == nil {
+                rows.append(.usageNote)
+            }
+            rows.append(contentsOf: (usage?.windows ?? []).map { Fact.usageWindow($0.id) })
         }
         return rows
     }
@@ -421,21 +490,28 @@ struct SessionFactsChip: View {
             if let cost = facts.cost { costRow(cost) }
         case .usage:
             if let usageMonitor { usageRow(usageMonitor) }
+        case .usageNote:
+            if let usageMonitor { usageNote(usageMonitor) }
         case .usageWindow(let id):
-            if let window = usageMonitor?.usage[facts.agent]?.windows.first(where: { $0.id == id }) {
-                usageWindowRow(window)
+            if let usageMonitor,
+               let window = usageMonitor.usage[facts.agent]?.windows.first(where: { $0.id == id }) {
+                usageWindowRow(window, checking: usageMonitor.refreshing.contains(facts.agent))
             }
         }
+    }
+
+    private func label(_ text: String) -> some View {
+        Text(text)
+            .font(.mono(9.5, .semibold))
+            .kerning(1.2)
+            .foregroundStyle(Self.labelInk)
+            .frame(width: Self.labelWidth, alignment: .leading)
     }
 
     private func row<Content: View>(_ label: String,
                                     @ViewBuilder content: () -> Content) -> some View {
         HStack(alignment: .center, spacing: 12) {
-            Text(label)
-                .font(.mono(9.5, .semibold))
-                .kerning(1.2)
-                .foregroundStyle(.tertiary)
-                .frame(width: Self.labelWidth, alignment: .leading)
+            self.label(label)
             content()
             Spacer(minLength: 0)
         }
@@ -445,7 +521,7 @@ struct SessionFactsChip: View {
 
     private func changesRow(_ changes: SessionFacts.Changes) -> some View {
         row("CHANGES") {
-            Button(action: acting(openChanges)) {
+            CardLink(action: acting(openChanges)) { _ in
                 HStack(spacing: 7) {
                     if changes.files > 0 {
                         Text(counted(changes.files, "file"))
@@ -454,10 +530,7 @@ struct SessionFactsChip: View {
                     DiffPair(added: changes.added, removed: changes.removed, size: 10.5)
                 }
                 .lineLimit(1)
-                .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
-            .hoverLift()
             .appTooltip("Opens Changes.")
         }
     }
@@ -466,10 +539,10 @@ struct SessionFactsChip: View {
     // list of them reading as one fact about the session.
     private func pullRequestRow(_ pullRequest: PullRequest, first: Bool) -> some View {
         row(first ? "PULL REQ" : "") {
-            Button(action: acting {
+            CardLink(action: acting {
                 guard let url = URL(string: pullRequest.url) else { return }
                 NSWorkspace.shared.open(url)
-            }) {
+            }) { hovering in
                 HStack(spacing: 6) {
                     if namesRepositories, let repository = pullRequest.repository {
                         Text(repository)
@@ -484,12 +557,10 @@ struct SessionFactsChip: View {
                         .font(.mono(11.5, .semibold))
                     Image(systemName: "arrow.up.right")
                         .font(.system(size: 8.5, weight: .semibold))
+                        .offset(x: hovering ? 1.5 : 0, y: hovering ? -1.5 : 0)
                 }
                 .foregroundStyle(Theme.accent)
-                .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
-            .hoverLift()
             .appTooltip {
                 Tooltip(title: "Pull request #\(pullRequest.number)",
                         subtitle: pullRequest.url,
@@ -514,74 +585,175 @@ struct SessionFactsChip: View {
 
     private func costRow(_ cost: Double) -> some View {
         row("COST") {
-            Text(Money.short(cost))
-                .font(.mono(11.5))
-                .appTooltip("What this session has spent.")
+            HStack(spacing: 10) {
+                Text(Money.short(cost))
+                    .font(.mono(11.5))
+                Text("spent this session")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
         }
     }
 
-    // The account's limits are only read when asked for here, so the row says how old the
-    // reading is and carries the button that reads it again.
+    // The account's limits are only read when asked for here, so the band says how old
+    // the reading is and carries the button that reads it again. It is sunken like the
+    // head, since what sits under it belongs to the account rather than to the session.
     private func usageRow(_ monitor: AccountUsageMonitor) -> some View {
         let agent = facts.agent
         let checking = monitor.refreshing.contains(agent)
         let problem = monitor.problems[agent]
         let status = Self.usageStatus(checkedAt: monitor.usage[agent]?.checkedAt,
                                       checking: checking, hasProblem: problem != nil)
-        return row("USAGE") {
-            HStack(spacing: 6) {
-                Text(status)
-                    .font(.mono(10.5))
-                    .foregroundStyle(problem == nil ? AnyShapeStyle(.tertiary) : AnyShapeStyle(Theme.attention))
-                    .lineLimit(1)
-                    .appTooltip { problem.map { Tooltip(title: "Usage", note: $0) } ?? Tooltip(title: "") }
-                Spacer(minLength: 0)
-                GlyphButton(icon: "arrow.clockwise", side: 22, tint: Theme.accent) {
-                    Task { await monitor.refresh(agent) }
-                }
-                .disabled(checking)
-                .opacity(checking ? 0.5 : 1)
-                .appTooltip("Check \(agent.title)'s account limits now.")
-                .accessibilityLabel("Check \(agent.title) usage")
+        return HStack(spacing: 12) {
+            label("USAGE")
+            Spacer(minLength: 0)
+            Text(status)
+                .font(.mono(10.5))
+                .foregroundStyle(problem == nil || checking
+                                 ? AnyShapeStyle(.tertiary) : AnyShapeStyle(Theme.attentionText))
+                .lineLimit(1)
+                .motion(Motion.hover, value: status)
+            UsageRefreshButton(checking: checking) {
+                Task { await monitor.refresh(agent) }
             }
-            .frame(maxWidth: .infinity)
+            .appTooltip("Check \(agent.title)'s account limits now.")
+            .accessibilityLabel("Check \(agent.title) usage")
         }
+        .padding(.horizontal, 13)
+        .frame(height: 34)
+        .background(Theme.sunken)
     }
 
     // "checked 4m ago", or why there is nothing to show yet.
     static func usageStatus(checkedAt: Date?, checking: Bool, hasProblem: Bool) -> String {
-        if checking { return "Checking…" }
+        if checking { return "checking…" }
+        if hasProblem { return "couldn't check" }
         if let checkedAt {
             let age = RelativeTime.short(checkedAt)
             return age == "now" ? "checked just now" : "checked \(age) ago"
         }
-        return hasProblem ? "Could not check" : "Not checked yet"
+        return "not checked yet"
     }
 
-    private func usageWindowRow(_ window: AccountUsageWindow) -> some View {
-        row("") {
-            HStack(spacing: 8) {
-                Text(window.shortTitle ?? window.title)
+    // What stands in for the windows when there are none to trust: an offer to read them
+    // the first time, or why the last read failed with a way to try again.
+    @ViewBuilder private func usageNote(_ monitor: AccountUsageMonitor) -> some View {
+        let agent = facts.agent
+        let refresh = { Task { await monitor.refresh(agent) } }
+        if let problem = monitor.problems[agent] {
+            VStack(alignment: .leading, spacing: 6) {
+                Text(Self.problemLine(problem, lastReading: monitor.usage[agent]?.checkedAt))
+                    .fixedSize(horizontal: false, vertical: true)
+                InlineLink(title: "Try again", size: 11.5) { _ = refresh() }
+            }
+            .font(.system(size: 11.5))
+            .foregroundStyle(Theme.warningText)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(RoundedRectangle(cornerRadius: 8).fill(Theme.warningBackground))
+            .padding(.horizontal, 13)
+            .padding(.top, 9)
+            .padding(.bottom, 11)
+        } else {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Your plan's limits load only when you ask.")
                     .font(.system(size: 11.5))
                     .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-                    .frame(width: 84, alignment: .leading)
-                Meter(fraction: window.usedFraction, colour: window.colour, height: 5)
-                    .frame(width: 52)
-                Text("\(window.usedPercent)%")
-                    .font(.mono(11, .semibold))
-                    .foregroundStyle(window.colour)
-                    .fixedSize()
+                ActionButton(title: "Check usage", tone: .outlined, height: 24, size: 11,
+                             icon: "arrow.clockwise") { _ = refresh() }
             }
-            .contentShape(Rectangle())
-            .appTooltip {
-                Tooltip(title: window.title,
-                        note: window.resetsAt.map { "Resets \(AccountUsageWindow.resetLine($0))." })
-            }
-            .accessibilityElement(children: .ignore)
-            .accessibilityLabel("\(window.title), \(window.usedPercent)% used")
+            .padding(.horizontal, 13)
+            .padding(.top, 10)
+            .padding(.bottom, 12)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
+    }
+
+    static func problemLine(_ problem: String, lastReading: Date?) -> String {
+        guard let lastReading else { return problem }
+        let age = RelativeTime.short(lastReading)
+        let when = age == "now" ? "just now" : "\(age) ago"
+        return "\(problem) The last good reading was \(when)."
+    }
+
+    // One window of the account's limits: its name in the label column, the meter in the
+    // same column as the context one, and when it resets underneath, so nothing needs a
+    // hover to be read. The mark on the meter is where an even pace would be by now.
+    private func usageWindowRow(_ window: AccountUsageWindow, checking: Bool) -> some View {
+        let now = Date()
+        let pace = window.pace(now: now)
+        let resets = window.resetsLine(now: now)
+        return HStack(alignment: .top, spacing: 12) {
+            Text(window.shortTitle ?? window.title)
+                .font(.system(size: 11.5))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .frame(width: Self.labelWidth, height: 15, alignment: .leading)
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 10) {
+                    LedgerMeter(fraction: window.usedFraction, colour: window.colour,
+                                pace: window.elapsedFraction(now: now), shimmering: checking)
+                        .frame(width: Self.meterWidth)
+                    percent(window.usedPercent, colour: window.colour)
+                }
+                .frame(height: 15)
+                if let caption = Self.windowCaption(pace: pace, resets: resets) {
+                    caption
+                        .font(.mono(9.5))
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(1)
+                }
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 13)
+        .padding(.top, 8)
+        .padding(.bottom, 7)
+        .contentShape(Rectangle())
+        .appTooltip { Tooltip(title: window.title) }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(Self.windowSpoken(window, pace: pace, resets: resets))
+    }
+
+    private static func windowCaption(pace: AccountUsageWindow.Pace, resets: String?) -> Text? {
+        let verdict: Text? = switch pace {
+        case .usedUp: Text("Used up.").fontWeight(.semibold).foregroundStyle(Theme.deletion)
+        case .ahead: Text("Ahead of pace.").fontWeight(.semibold).foregroundStyle(Theme.attentionText)
+        case .steady: nil
+        }
+        switch (verdict, resets) {
+        case (let verdict?, let resets?): return Text("\(verdict) \(resets)")
+        case (let verdict?, nil): return verdict
+        case (nil, let resets?): return Text(resets)
+        case (nil, nil): return nil
+        }
+    }
+
+    // "Current session, 71% used, ahead of pace, resets in 2h 24m".
+    static func windowSpoken(_ window: AccountUsageWindow, pace: AccountUsageWindow.Pace,
+                             resets: String?) -> String {
+        var parts = ["\(window.title)", "\(window.usedPercent)% used"]
+        switch pace {
+        case .usedUp: parts.append("used up")
+        case .ahead: parts.append("ahead of pace")
+        case .steady: break
+        }
+        if let resets { parts.append(resets) }
+        return parts.joined(separator: ", ")
+    }
+
+    // A percentage that rolls to its new value, so a fresh reading or a compact is seen
+    // moving rather than swapped.
+    private func percent(_ value: Int, colour: Color) -> some View {
+        Text("\(value)%")
+            .font(.mono(11, .semibold))
+            .foregroundStyle(colour)
+            .contentTransition(reduceMotion ? .identity : .numericText(value: Double(value)))
+            .motion(LedgerMeter.fill, value: value)
+            .fixedSize()
     }
 
     // The window is the one reading here that says a session is getting heavy, so it is
@@ -590,36 +762,45 @@ struct SessionFactsChip: View {
     @ViewBuilder private func contextRow(_ fraction: Double) -> some View {
         let actions = contextActions()
         row(facts.agent.asksPermissions ? "CONTEXT" : "WINDOW") {
-            if actions.isEmpty {
-                contextReading(fraction, clearable: false)
-                    .appTooltip(usageTooltip)
-            } else {
-                contextReading(fraction, clearable: true)
-                    .appMenu {
-                        // The menu takes the pointer off the card, and a card that went
-                        // with it would take the reading being acted on with it.
-                        pinned = true
-                        return contextActions()
-                    }
-                    .appTooltip(usageTooltip)
+            HStack(spacing: 8) {
+                if actions.isEmpty {
+                    contextReading(fraction, clearable: false)
+                        .appTooltip(usageTooltip)
+                } else {
+                    contextReading(fraction, clearable: true)
+                        .appMenu {
+                            // The menu takes the pointer off the card, and a card that went
+                            // with it would take the reading being acted on with it.
+                            pinned = true
+                            return contextActions()
+                        }
+                        .appTooltip(usageTooltip)
+                }
+                if let freed {
+                    Text("freed \(freed)%")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.secondary)
+                        .fixedSize()
+                        .transition(.opacity.combined(with: .offset(y: 3)))
+                }
             }
+            .motion(Motion.reveal, value: freed)
         }
     }
 
     private func contextReading(_ fraction: Double, clearable: Bool) -> some View {
         let colour = SessionFacts.contextColour(fraction, agent: facts.agent)
         return HStack(spacing: 10) {
-            Meter(fraction: fraction, colour: colour, height: 5)
-                .frame(width: 110)
+            LedgerMeter(fraction: fraction, colour: colour)
+                .frame(width: Self.meterWidth)
             HStack(spacing: 4) {
-                Text(SessionFacts.percent(fraction))
-                    .font(.mono(11, .semibold))
+                percent(Int((fraction * 100).rounded()), colour: colour)
                 if clearable {
                     Image(systemName: "chevron.down")
                         .font(.system(size: 7, weight: .semibold))
+                        .foregroundStyle(colour)
                 }
             }
-            .foregroundStyle(colour)
             .fixedSize()
         }
         .contentShape(Rectangle())
@@ -641,6 +822,229 @@ struct SessionFactsChip: View {
         pointerOnCard = false
         pointerOnChip = false
         hovering = false
+    }
+}
+
+// MARK: - The card's motion
+
+// A button that dips under the press. Only the label moves, so whatever is attached to
+// the button itself, a tooltip or a card hanging off it, is never scaled.
+private struct PressDip: ButtonStyle {
+    let scale: CGFloat
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed && !reduceMotion ? scale : 1)
+            .motion(Motion.hover, value: configuration.isPressed)
+    }
+}
+
+// Rows rise into place one after another as the card opens, so the eye runs down the
+// card in the order it reads. A row that arrives later, like a usage window after its
+// first read, rises the same way.
+private struct RowArrival: ViewModifier {
+    let position: Int
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var arrived = false
+
+    func body(content: Content) -> some View {
+        let shown = arrived || reduceMotion
+        content
+            .opacity(shown ? 1 : 0)
+            .offset(y: shown ? 0 : 4)
+            .onAppear {
+                guard !reduceMotion else { return }
+                let delay = 0.06 + Double(position) * 0.028
+                withAnimation(.timingCurve(0.2, 0.8, 0.2, 1, duration: 0.32).delay(delay)) {
+                    arrived = true
+                }
+            }
+    }
+}
+
+// A value in the card that leads somewhere. It lifts a point and warms under the
+// pointer, the way a link on a page does, and hands its content the hover so an arrow
+// inside can lean the way it goes.
+private struct CardLink<Content: View>: View {
+    let action: () -> Void
+    @ViewBuilder let content: (_ hovering: Bool) -> Content
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @FocusState private var focused: Bool
+    @State private var hovering = false
+
+    var body: some View {
+        let moving = hovering && !reduceMotion
+        Button(action: action) {
+            content(moving)
+                .padding(.horizontal, 4)
+                .padding(.vertical, 2)
+                .background(RoundedRectangle(cornerRadius: 5).fill(hovering ? Theme.field : .clear))
+                .offset(y: moving ? -1 : 0)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(PressDip(scale: 0.97))
+        .focused($focused)
+        .overlay(FocusRingStroke(focused: focused))
+        .padding(.horizontal, -4)
+        .padding(.vertical, -2)
+        .onHover { hovering = $0 }
+        .motion(Motion.hover, value: hovering)
+    }
+}
+
+// The card's meter: it fills from empty as the card opens and slides between readings
+// after that, so a fresh check or a compact is seen as a change. It can carry the mark
+// where an even pace would be by now, and shimmers while a new reading is on its way.
+private struct LedgerMeter: View {
+    static let fill = Animation.timingCurve(0.2, 0.8, 0.2, 1, duration: 0.7)
+    static let height: CGFloat = 5
+
+    let fraction: Double
+    let colour: Color
+    var pace: Double? = nil
+    var shimmering = false
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var filled = false
+
+    var body: some View {
+        Meter(fraction: filled || reduceMotion ? fraction : 0, colour: colour, height: Self.height)
+            .motion(Self.fill, value: fraction)
+            .overlay {
+                if shimmering && !reduceMotion { Shimmer().clipShape(Capsule()) }
+            }
+            .overlay(alignment: .leading) {
+                if let pace {
+                    GeometryReader { geometry in
+                        RoundedRectangle(cornerRadius: 1)
+                            .fill(Color.primary.opacity(0.38))
+                            .frame(width: 1.5, height: Self.height + 6)
+                            .offset(x: geometry.size.width * pace - 0.75, y: -3)
+                    }
+                    .accessibilityHidden(true)
+                }
+            }
+            .onAppear {
+                guard !reduceMotion else { return }
+                withAnimation(Self.fill) { filled = true }
+            }
+    }
+}
+
+private struct Shimmer: View {
+    var body: some View {
+        TimelineView(.animation) { timeline in
+            GeometryReader { geometry in
+                let phase = timeline.date.timeIntervalSinceReferenceDate
+                    .truncatingRemainder(dividingBy: 0.9) / 0.9
+                LinearGradient(colors: [.clear, .white.opacity(0.6), .clear],
+                               startPoint: .leading, endPoint: .trailing)
+                    .frame(width: geometry.size.width * 0.5)
+                    .offset(x: geometry.size.width * (phase * 1.5 - 0.5))
+            }
+        }
+        .allowsHitTesting(false)
+    }
+}
+
+// The usage band's refresh. The glyph turns while a check is out and the button will not
+// take a second one. The turn is on the glyph alone, since AppKit cannot lay out a
+// rotated button that carries a tooltip.
+private struct UsageRefreshButton: View {
+    let checking: Bool
+    let action: () -> Void
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @FocusState private var focused: Bool
+    @State private var hovering = false
+
+    private static let side: CGFloat = 22
+    private static let period = 0.7
+
+    var body: some View {
+        let shape = RoundedRectangle(cornerRadius: 6)
+        Button(action: action) {
+            Group {
+                if checking && !reduceMotion {
+                    TimelineView(.animation) { timeline in
+                        let turn = timeline.date.timeIntervalSinceReferenceDate
+                            .truncatingRemainder(dividingBy: Self.period) / Self.period
+                        glyph.rotationEffect(.degrees(turn * 360))
+                    }
+                } else {
+                    glyph
+                }
+            }
+            .frame(width: Self.side, height: Self.side)
+            .background(shape.fill(hovering && !checking ? Theme.field : Theme.card))
+            .overlay(shape.strokeBorder(Theme.border))
+            .contentShape(shape)
+        }
+        .buttonStyle(PressDip(scale: 0.88))
+        .disabled(checking)
+        .opacity(checking ? 0.55 : 1)
+        .focused($focused)
+        .overlay(FocusRingStroke(focused: focused))
+        .hoverLift(hovering, amount: Motion.smallLift)
+        .onHover { hovering = $0 }
+        .motion(Motion.hover, value: hovering)
+    }
+
+    private var glyph: some View {
+        Image(systemName: "arrow.clockwise")
+            .font(.system(size: 9.5, weight: .semibold))
+            .foregroundStyle(Theme.accent)
+    }
+}
+
+// A band of the brand yellow that runs once across the branch as it is copied, so the
+// copy is seen landing on the name and not only on the button.
+private struct BrandSweep: View {
+    let trigger: Int
+
+    var body: some View {
+        GeometryReader { geometry in
+            LinearGradient(colors: [.clear, Theme.brand.opacity(0.55), .clear],
+                           startPoint: .leading, endPoint: .trailing)
+                .frame(width: geometry.size.width * 0.4)
+                .keyframeAnimator(initialValue: 1.0, trigger: trigger) { band, phase in
+                    band
+                        .offset(x: geometry.size.width * (phase * 1.4 - 0.4))
+                        .opacity(phase >= 1 ? 0 : 1)
+                } keyframes: { _ in
+                    MoveKeyframe(0)
+                    CubicKeyframe(1, duration: 0.6)
+                }
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 3))
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+    }
+}
+
+// A ring that bursts out of the copy button as the tick lands. It is drawn over the
+// button rather than inside it, so the button itself is never scaled.
+private struct CopyBurst: View {
+    let trigger: Int
+
+    var body: some View {
+        RoundedRectangle(cornerRadius: 8)
+            .strokeBorder(Theme.dotOn, lineWidth: 1.5)
+            .padding(-4)
+            .keyframeAnimator(initialValue: 1.0, trigger: trigger) { ring, phase in
+                ring
+                    .scaleEffect(1 + phase * 0.35)
+                    .opacity(phase >= 1 ? 0 : 1 - phase)
+            } keyframes: { _ in
+                MoveKeyframe(0)
+                CubicKeyframe(1, duration: 0.5)
+            }
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
     }
 }
 

@@ -10,6 +10,9 @@ struct AccountUsageWindow: Equatable, Sendable, Identifiable {
     let resetsAt: Date?
     // What the window is called where a line is short, like a hint's row.
     var shortTitle: String? = nil
+    // How long the window runs from start to reset. Left out where the source does not
+    // say, since a guessed start would put the pace mark in the wrong place.
+    var length: TimeInterval? = nil
 
     var usedFraction: Double { Double(usedPercent) / 100 }
 }
@@ -73,7 +76,8 @@ struct CodexUsage: Equatable, Sendable {
         }
         return AccountUsageWindow(id: id, title: title,
                                   usedPercent: min(100, max(0, usedPercent)), resetsAt: resetsAt,
-                                  shortTitle: shortTitle)
+                                  shortTitle: shortTitle,
+                                  length: integer(raw["windowDurationMins"]).flatMap { $0 > 0 ? TimeInterval($0 * 60) : nil })
     }
 
     // How long a window runs, in a word: "5h", "Week".

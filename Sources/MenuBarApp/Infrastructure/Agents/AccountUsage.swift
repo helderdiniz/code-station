@@ -28,6 +28,45 @@ extension AccountUsageWindow {
         }
         return date.formatted(.dateTime.day().month(.abbreviated))
     }
+
+    // How far through the window the clock is, from 0 at its start to 1 at its reset.
+    // Nil when the window has no known start, or has not started yet.
+    func elapsedFraction(now: Date = Date()) -> Double? {
+        guard let resetsAt, let length, length > 0 else { return nil }
+        let start = resetsAt.addingTimeInterval(-length)
+        guard now > start else { return nil }
+        return min(1, now.timeIntervalSince(start) / length)
+    }
+
+    enum Pace: Equatable {
+        case steady
+        // More of the limit has gone than of the time, by enough to be worth saying.
+        case ahead
+        case usedUp
+    }
+
+    // A few points of slack, so a window that is a hair over an even pace does not
+    // raise a flag for nothing.
+    static let paceSlack = 5
+
+    func pace(now: Date = Date()) -> Pace {
+        if usedPercent >= 100 { return .usedUp }
+        guard let elapsed = elapsedFraction(now: now) else { return .steady }
+        return usedPercent > Int((elapsed * 100).rounded()) + Self.paceSlack ? .ahead : .steady
+    }
+
+    // "resets in 3h 12m" while the reset is under a day away, then the day and time.
+    func resetsLine(now: Date = Date(), calendar: Calendar = .current) -> String? {
+        guard let resetsAt else { return nil }
+        let left = resetsAt.timeIntervalSince(now)
+        guard left > 0 else { return "resets now" }
+        if left < 86_400 {
+            let minutes = Int((left / 60).rounded(.up))
+            let span = minutes >= 60 ? "\(minutes / 60)h \(minutes % 60)m" : "\(minutes)m"
+            return "resets in \(span)"
+        }
+        return "resets \(Self.resetLine(resetsAt, now: now, calendar: calendar))"
+    }
 }
 
 enum AccountUsageReading: Sendable {
@@ -115,7 +154,8 @@ final class AccountUsageMonitor {
             fractions[kind].map {
                 AccountUsageWindow(id: kind, title: title,
                                    usedPercent: min(100, max(0, Int(($0.utilization * 100).rounded()))),
-                                   resetsAt: $0.resetsAt, shortTitle: shortTitle)
+                                   resetsAt: $0.resetsAt, shortTitle: shortTitle,
+                                   length: ClaudeUsage.length(of: kind))
             }
         }
     }
