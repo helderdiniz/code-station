@@ -122,13 +122,13 @@ struct AgentCommandsTests {
         let found = AgentCommands.all(for: .claudeCode, workingDirectories: [],
                                       home: scratch.path("home"), environment: [:])
 
-        // A skill goes by the name its file gives it, and one Claude keeps for itself is
-        // left out, as Claude leaves it out of its own menu.
-        #expect(found.map(\.name) == ["clear", "compact", "plan", "ship", "validate-pr-comments",
+        // A skill goes by its folder's name whatever its front matter says, and one Claude
+        // keeps for itself is left out, as Claude leaves it out of its own menu.
+        #expect(found.map(\.name) == ["clear", "compact", "plan", "release-helper", "validate-pr-comments",
                                       "init", "review", "security-review"])
         #expect(found.first { $0.name == "validate-pr-comments" }?.summary
             == "Check review comments against the code")
-        #expect(found.first { $0.name == "ship" }?.scope == .user)
+        #expect(found.first { $0.name == "release-helper" }?.scope == .user)
     }
 
     @Test func aSkillFolderLinkedFromElsewhereStillCounts() throws {
@@ -198,9 +198,80 @@ struct AgentCommandsTests {
                                       named: "notes") == "First line second line")
         #expect(AgentCommands.summary(of: "---\ndescription: Starts here\n  and carries on\nname: x\n---\n",
                                       named: "x") == "Starts here and carries on")
-        // A key nested under another ends where its siblings start.
-        #expect(AgentCommands.summary(of: "---\nmetadata:\n  description: Nested\n  type: reference\n---\n",
-                                      named: "x") == "Nested")
+        #expect(AgentCommands.summary(of: "---\r\ndescription: Saved on Windows\r\n---\r\n",
+                                      named: "x") == "Saved on Windows")
+        #expect(AgentCommands.body(of: "---\r\ndescription: Saved on Windows\r\n---\r\nRun it.\r\n")
+            == "Run it.")
+    }
+
+    // A key indented under another belongs to that key, not to the file.
+    @Test func aNestedKeySaysNothingAboutTheFile() throws {
+        #expect(AgentCommands.summary(of: "---\nmetadata:\n  description: Nested\n---\nThe prompt.\n",
+                                      named: "x") == "The prompt.")
+
+        _ = try write("""
+        ---
+        description: Still offered
+        metadata:
+          user-invocable: false
+        ---
+        """, to: "home/.claude/skills/kept/SKILL.md")
+        let found = AgentCommands.all(for: .claudeCode, workingDirectories: [],
+                                      home: scratch.path("home"), environment: [:])
+        #expect(found.first { $0.name == "kept" }?.summary == "Still offered")
+    }
+
+    private func installPlugin(_ key: String, named name: String) throws -> URL {
+        let root = scratch.path("home/.claude/plugins/cache/\(key)")
+        _ = try write("{\"name\": \"\(name)\"}", to: "home/.claude/plugins/cache/\(key)/.claude-plugin/plugin.json")
+        return root
+    }
+
+    private func writeInstalls(_ installs: [String: [[String: String]]]) throws {
+        let data = try JSONSerialization.data(withJSONObject: ["version": 2, "plugins": installs])
+        _ = try write(String(decoding: data, as: UTF8.self), to: "home/.claude/plugins/installed_plugins.json")
+    }
+
+    // Only what Claude would load in the lead checkout: switched on, with the checkout's
+    // own setting beating the person's, and installed for everyone or for this project.
+    @Test func aPluginIsOfferedWhenClaudeWouldLoadIt() throws {
+        let tools = try installPlugin("tools", named: "tools")
+        _ = try write("---\ndescription: Find a trace\n---\n", to: "home/.claude/plugins/cache/tools/skills/trace/SKILL.md")
+        _ = try write("Write the notes.\n", to: "home/.claude/plugins/cache/tools/commands/notes.md")
+        let off = try installPlugin("off", named: "off")
+        _ = try write("---\ndescription: Off\n---\n", to: "home/.claude/plugins/cache/off/skills/hidden/SKILL.md")
+        let elsewhere = try installPlugin("elsewhere", named: "elsewhere")
+        _ = try write("---\ndescription: Elsewhere\n---\n", to: "home/.claude/plugins/cache/elsewhere/skills/far/SKILL.md")
+        try writeInstalls([
+            "tools@market": [["scope": "user", "installPath": tools.path]],
+            "off@market": [["scope": "user", "installPath": off.path]],
+            "elsewhere@market": [["scope": "project", "projectPath": scratch.path("other").path,
+                                  "installPath": elsewhere.path]],
+        ])
+        _ = try write(#"{"enabledPlugins": {"tools@market": true, "off@market": true, "elsewhere@market": true}}"#,
+                      to: "home/.claude/settings.json")
+        _ = try write(#"{"enabledPlugins": {"off@market": false}}"#, to: "project/.claude/settings.local.json")
+
+        let found = AgentCommands.all(for: .claudeCode, workingDirectories: [scratch.path("project").path],
+                                      home: scratch.path("home"), environment: [:])
+
+        #expect(found.filter { $0.scope == .plugin }.map(\.name) == ["tools:trace", "tools:notes"])
+        #expect(found.first { $0.name == "tools:trace" }?.summary == "Find a trace")
+    }
+
+    @Test func aWorktreeLoadsThePluginsOfTheCheckoutItCameFrom() throws {
+        let here = try installPlugin("here", named: "here")
+        _ = try write("Run it.\n", to: "home/.claude/plugins/cache/here/commands/run.md")
+        try writeInstalls(["here@market": [["scope": "project", "projectPath": scratch.path("main").path,
+                                            "installPath": here.path]]])
+        _ = try write(#"{"enabledPlugins": {"here@market": true}}"#, to: "worktree/.claude/settings.json")
+        _ = try write("gitdir: \(scratch.path("main/.git/worktrees/wt").path)\n", to: "worktree/.git")
+        _ = try write("../..\n", to: "main/.git/worktrees/wt/commondir")
+
+        let found = AgentCommands.all(for: .claudeCode, workingDirectories: [scratch.path("worktree").path],
+                                      home: scratch.path("home"), environment: [:])
+
+        #expect(found.first { $0.name == "here:run" }?.scope == .plugin)
     }
 
     @Test func onlyClaudeIsOfferedTheCommandsOnlyClaudeAnswers() {

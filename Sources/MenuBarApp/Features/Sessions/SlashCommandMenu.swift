@@ -101,6 +101,7 @@ struct SlashCommandMenu: View {
         case .builtIn: agent.title.uppercased()
         case .user: "YOURS"
         case .project: "PROJECT"
+        case .plugin: "PLUGIN"
         }
     }
 }

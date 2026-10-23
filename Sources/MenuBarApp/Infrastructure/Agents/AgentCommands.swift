@@ -17,6 +17,8 @@ struct AgentCommand: Identifiable, Equatable, Sendable {
         case user
         // A file in the checkout, offered only to sessions working there.
         case project
+        // Part of a plugin the CLI loads, named after the plugin.
+        case plugin
     }
 
     let name: String
@@ -43,8 +45,10 @@ enum AgentCommands {
         var taken = Set(found.map(\.name))
         for folder in folders(for: agent, home: home, workingDirectories: workingDirectories,
                               environment: environment) {
-            let commands = folder.holdsSkills ? skills(in: folder.url, scope: folder.scope)
-                                              : onDisk(in: folder.url, scope: folder.scope)
+            let commands = switch folder.holds {
+            case .commands: onDisk(in: folder.url, scope: folder.scope, namespace: folder.namespace)
+            case .skills: skills(in: folder.url, scope: folder.scope, namespace: folder.namespace)
+            }
             for command in commands where taken.insert(command.name).inserted {
                 found.append(command)
             }
@@ -89,9 +93,18 @@ enum AgentCommands {
     }
 
     struct Folder: Equatable, Sendable {
+        enum Holds: Equatable, Sendable {
+            // Markdown files, each one a command.
+            case commands
+            // A folder per skill, each holding a SKILL.md.
+            case skills
+        }
+
         let url: URL
         let scope: AgentCommand.Scope
-        var holdsSkills = false
+        let holds: Holds
+        // Put in front of every name found here, as a plugin's name is.
+        var namespace: String? = nil
     }
 
     // Where each CLI keeps the commands people write. A workspace session works in
@@ -106,24 +119,93 @@ enum AgentCommands {
                 ?? home.appendingPathComponent(".claude")
             // Claude settles a skill's name the other way round from a command's: your own
             // skill over the project's, and a skill over any command of the same name.
-            return [Folder(url: base.appendingPathComponent("skills"), scope: .user, holdsSkills: true)]
+            return [Folder(url: base.appendingPathComponent("skills"), scope: .user, holds: .skills)]
                 + roots.map { Folder(url: $0.appendingPathComponent(".claude/skills"), scope: .project,
-                                     holdsSkills: true) }
-                + roots.map { Folder(url: $0.appendingPathComponent(".claude/commands"), scope: .project) }
-                + [Folder(url: base.appendingPathComponent("commands"), scope: .user)]
+                                     holds: .skills) }
+                + roots.map { Folder(url: $0.appendingPathComponent(".claude/commands"), scope: .project,
+                                     holds: .commands) }
+                + [Folder(url: base.appendingPathComponent("commands"), scope: .user, holds: .commands)]
+                + pluginFolders(base: base, lead: roots.first)
         case .codex:
             let base = environment["CODEX_HOME"].map { URL(fileURLWithPath: $0) }
                 ?? home.appendingPathComponent(".codex")
-            return [Folder(url: base.appendingPathComponent("prompts"), scope: .user)]
+            return [Folder(url: base.appendingPathComponent("prompts"), scope: .user, holds: .commands)]
         case .copilot:
-            return roots.map { Folder(url: $0.appendingPathComponent(".github/prompts"), scope: .project) }
-                + [Folder(url: home.appendingPathComponent(".copilot/prompts"), scope: .user)]
+            return roots.map { Folder(url: $0.appendingPathComponent(".github/prompts"), scope: .project,
+                                      holds: .commands) }
+                + [Folder(url: home.appendingPathComponent(".copilot/prompts"), scope: .user, holds: .commands)]
         }
+    }
+
+    // The plugins Claude loads in the lead checkout, which is the folder it runs in. A
+    // plugin counts when it is switched on in the person's settings or the checkout's,
+    // the nearer setting winning, and is installed either for everyone or for this
+    // project. A worktree belongs to the project of the checkout it came from, and that
+    // checkout's path is the one a project install records.
+    static func pluginFolders(base: URL, lead: URL?) -> [Folder] {
+        var settings = [base.appendingPathComponent("settings.json")]
+        if let lead {
+            settings += [lead.appendingPathComponent(".claude/settings.json"),
+                         lead.appendingPathComponent(".claude/settings.local.json")]
+        }
+        var enabled: [String: Bool] = [:]
+        for file in settings {
+            for (key, value) in jsonObject(at: file)?["enabledPlugins"] as? [String: Any] ?? [:] {
+                if let on = value as? Bool { enabled[key] = on }
+            }
+        }
+
+        let installed = jsonObject(at: base.appendingPathComponent("plugins/installed_plugins.json"))?["plugins"]
+            as? [String: Any] ?? [:]
+        let project = lead.map { [$0, mainCheckout(of: $0)].map { $0.resolvingSymlinksInPath().path } } ?? []
+        var folders: [Folder] = []
+        for key in enabled.filter(\.value).keys.sorted() {
+            let installs = installed[key] as? [[String: Any]] ?? []
+            let forProject = installs.first { install in
+                ["project", "local"].contains(install["scope"] as? String)
+                    && (install["projectPath"] as? String).map {
+                        project.contains(URL(fileURLWithPath: $0).resolvingSymlinksInPath().path)
+                    } == true
+            }
+            guard let install = forProject ?? installs.first(where: { $0["scope"] as? String == "user" }),
+                  let path = install["installPath"] as? String else { continue }
+            let root = URL(fileURLWithPath: path)
+            let name = jsonObject(at: root.appendingPathComponent(".claude-plugin/plugin.json"))?["name"] as? String
+                ?? String(key.prefix { $0 != "@" })
+            folders += [Folder(url: root.appendingPathComponent("skills"), scope: .plugin, holds: .skills,
+                               namespace: name),
+                        Folder(url: root.appendingPathComponent("commands"), scope: .plugin, holds: .commands,
+                               namespace: name)]
+        }
+        return folders
+    }
+
+    private static func jsonObject(at url: URL) -> [String: Any]? {
+        guard let data = try? Data(contentsOf: url) else { return nil }
+        return try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+    }
+
+    // A linked worktree's .git is a file that points into the main checkout's .git
+    // folder, and the commondir file there leads back to it. A submodule's pointer has
+    // no commondir, so it stays its own checkout.
+    static func mainCheckout(of checkout: URL) -> URL {
+        guard let pointer = try? String(contentsOf: checkout.appendingPathComponent(".git"), encoding: .utf8),
+              pointer.hasPrefix("gitdir:") else { return checkout }
+        let target = String(pointer.dropFirst("gitdir:".count)).trimmed
+        let gitDirectory = target.hasPrefix("/") ? URL(fileURLWithPath: target)
+                                                 : checkout.appendingPathComponent(target)
+        guard let common = (try? String(contentsOf: gitDirectory.appendingPathComponent("commondir"),
+                                        encoding: .utf8))?.trimmed
+        else { return checkout }
+        let shared = (common.hasPrefix("/") ? URL(fileURLWithPath: common)
+                                            : gitDirectory.appendingPathComponent(common)).standardizedFileURL
+        return shared.lastPathComponent == ".git" ? shared.deletingLastPathComponent() : checkout
     }
 
     // The markdown files in one folder. Subfolders name what they hold, the way all three
     // CLIs read them, so `review/api.md` is `/review:api`.
-    static func onDisk(in folder: URL, scope: AgentCommand.Scope) -> [AgentCommand] {
+    static func onDisk(in folder: URL, scope: AgentCommand.Scope,
+                       namespace: String? = nil) -> [AgentCommand] {
         let files = FileManager.default
         guard let walker = files.enumerator(at: folder,
                                             includingPropertiesForKeys: [.isRegularFileKey],
@@ -135,7 +217,8 @@ enum AgentCommands {
         let base = folder.resolvingSymlinksInPath().pathComponents
         var found: [AgentCommand] = []
         for case let url as URL in walker where url.pathExtension.lowercased() == "md" {
-            guard let name = commandName(of: url, under: base) else { continue }
+            guard let plain = commandName(of: url, under: base) else { continue }
+            let name = namespace.map { "\($0):\(plain)" } ?? plain
             let text = (try? String(contentsOf: url, encoding: .utf8)) ?? ""
             found.append(AgentCommand(name: name, summary: summary(of: text, named: name),
                                       scope: scope, file: url))
@@ -145,8 +228,10 @@ enum AgentCommands {
 
     // One folder per skill, holding a SKILL.md. The folder is often a link to a skill kept
     // in another checkout, so it is read where the link points rather than checked
-    // against the folder it sits in, the way a command file is.
-    static func skills(in folder: URL, scope: AgentCommand.Scope) -> [AgentCommand] {
+    // against the folder it sits in, the way a command file is. Claude names a skill after
+    // its folder, even when the front matter gives it some other name.
+    static func skills(in folder: URL, scope: AgentCommand.Scope,
+                       namespace: String? = nil) -> [AgentCommand] {
         let entries = (try? FileManager.default.contentsOfDirectory(
             at: folder, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles])) ?? []
         var found: [AgentCommand] = []
@@ -156,7 +241,7 @@ enum AgentCommands {
                   // Claude keeps these for itself and leaves them out of its own menu.
                   frontMatterValue("user-invocable", in: text)?.lowercased() != "false"
             else { continue }
-            let name = frontMatterValue("name", in: text) ?? entry.lastPathComponent
+            let name = namespace.map { "\($0):\(entry.lastPathComponent)" } ?? entry.lastPathComponent
             found.append(AgentCommand(name: name, summary: summary(of: text, named: name),
                                       scope: scope, file: file))
         }
@@ -193,7 +278,7 @@ enum AgentCommands {
     // The prompt itself, with the front matter block taken off the top. Everything in
     // that block is for the CLI that reads it, so none of it belongs in a prompt.
     static func body(of text: String) -> String {
-        var lines = text.split(separator: "\n", omittingEmptySubsequences: false)
+        var lines = text.split(omittingEmptySubsequences: false, whereSeparator: \.isNewline)
         guard lines.first?.trimmedLine == "---",
               let close = lines.dropFirst().firstIndex(where: { $0.trimmedLine == "---" })
         else { return text.trimmingCharacters(in: .whitespacesAndNewlines) }
@@ -201,15 +286,17 @@ enum AgentCommands {
         return lines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    // A value may carry on over the lines indented below its key, as a folded or literal
-    // block does. The menu shows one line, so they are joined with spaces either way.
+    // Only keys at the left edge count. An indented key belongs to some other key, so a
+    // `description` kept under `metadata` does not describe the file. A value may carry on
+    // over the lines indented below its key, as a folded or literal block does. The menu
+    // shows one line, so they are joined with spaces either way.
     private static func frontMatterValue(_ key: String, in text: String) -> String? {
-        let lines = text.split(separator: "\n", omittingEmptySubsequences: false)
+        let lines = text.split(omittingEmptySubsequences: false, whereSeparator: \.isNewline)
         guard lines.first?.trimmedLine == "---" else { return nil }
         for (index, raw) in lines.enumerated().dropFirst() {
             let line = raw.trimmedLine
             if line == "---" { return nil }
-            guard line.lowercased().hasPrefix(key + ":") else { continue }
+            guard raw.indentation == 0, line.lowercased().hasPrefix(key + ":") else { continue }
             var parts = [String(line.dropFirst(key.count + 1)).trimmed]
             if parts[0].range(of: #"^[|>][+-]?$"#, options: .regularExpression) != nil { parts = [] }
             for next in lines.dropFirst(index + 1) where !next.trimmedLine.isEmpty {
