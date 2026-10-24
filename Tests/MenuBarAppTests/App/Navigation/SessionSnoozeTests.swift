@@ -114,6 +114,32 @@ struct SessionSnoozeTests {
         #expect(reloaded.session(sleeping.id)?.snooze == .untilWoken)
     }
 
+    @Test(arguments: [SessionSnooze.untilReply, .untilWoken, .until(Date.distantFuture)])
+    func wakingKeepsTheAgentRunningAndAQuestionEndsEverySnooze(_ snooze: SessionSnooze) async throws {
+        let fixture = try RunnerHarness(agent: .claudeCode, script: #"""
+        printf '%s\n' '{"type":"assistant","message":{"content":[{"type":"text","text":"Working."}]}}'
+        wait_for "$folder/ask"
+        printf '%s\n' '{"type":"control_request","request_id":"question","request":{"subtype":"can_use_tool","tool_name":"AskUserQuestion","input":{"questions":[{"question":"Which option?","header":"Choice","options":[{"label":"One","description":"First"},{"label":"Two","description":"Second"}]}]},"requires_user_interaction":true}}'
+        wait_for "$folder/finish"
+        """#)
+        defer { fixture.tearDown() }
+        fixture.runner.send("Work", sessionID: fixture.session.id, store: fixture.store)
+        #expect(await waitUntil {
+            fixture.store.transcript(of: fixture.session.id).contains { $0.text.contains("Working.") }
+        })
+        fixture.store.snooze(fixture.session.id, snooze)
+        #expect(fixture.runner.state(fixture.session.id).isBusy)
+        SessionSnoozeMenu.wake(fixture.session.id, store: fixture.store)
+        #expect(fixture.runner.state(fixture.session.id).isBusy)
+        #expect(!fixture.store.isSnoozed(fixture.session.id))
+        fixture.store.snooze(fixture.session.id, snooze)
+        try Data().write(to: fixture.scratch.path("ask"))
+        #expect(await waitUntil { fixture.runner.question(fixture.session.id) != nil })
+        #expect(!fixture.store.isSnoozed(fixture.session.id))
+        #expect(fixture.store.snoozeReminders.isEmpty)
+        #expect(fixture.store.session(fixture.session.id)?.projectID == fixture.session.projectID)
+    }
+
     @Test func choicesLandOnTheNextMorningAndTheNextMonday() throws {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = try #require(TimeZone(identifier: "UTC"))

@@ -80,6 +80,19 @@ enum Theme {
         light: NSColor(srgbRed: 0.361, green: 0.200, blue: 0.588, alpha: 1),
         dark: NSColor(srgbRed: 0.690, green: 0.522, blue: 0.969, alpha: 1))
 
+    static let snoozeSurface = adaptive(
+        light: NSColor(srgbRed: 236.0 / 255, green: 230.0 / 255, blue: 242.0 / 255, alpha: 1),
+        dark: NSColor(srgbRed: 57.0 / 255, green: 49.0 / 255, blue: 62.0 / 255, alpha: 1))
+    static let snoozeText = adaptive(
+        light: NSColor(srgbRed: 105.0 / 255, green: 81.0 / 255, blue: 118.0 / 255, alpha: 1),
+        dark: NSColor(srgbRed: 201.0 / 255, green: 182.0 / 255, blue: 220.0 / 255, alpha: 1))
+    static let snoozePaper = adaptive(
+        light: NSColor(srgbRed: 222.0 / 255, green: 209.0 / 255, blue: 233.0 / 255, alpha: 1),
+        dark: NSColor(srgbRed: 89.0 / 255, green: 71.0 / 255, blue: 99.0 / 255, alpha: 1))
+    static let snoozeEdge = adaptive(
+        light: NSColor(srgbRed: 194.0 / 255, green: 172.0 / 255, blue: 207.0 / 255, alpha: 1),
+        dark: NSColor(srgbRed: 117.0 / 255, green: 97.0 / 255, blue: 128.0 / 255, alpha: 1))
+
     // The mark on anything the app itself owns: the brand tile, and Home wherever it
     // needs a colour of its own.
     static let brand = Color(red: 0.867, green: 0.878, blue: 0.282)

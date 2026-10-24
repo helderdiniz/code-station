@@ -9,12 +9,16 @@ import SwiftUI
 enum Motion {
     static let hoverDuration: TimeInterval = 0.12
     static let revealDuration: TimeInterval = 0.18
+    static let controlDuration: TimeInterval = 0.26
+    static let popDuration: TimeInterval = 0.3
+    static let leaveDuration: TimeInterval = 0.12
+    static let popDamping = 0.66
 
     // A colour settling under the pointer: over almost before it is noticed.
     static let hover = Animation.easeOut(duration: hoverDuration)
     // A control taking a new state. The spring overshoots by a hair, which is what makes
     // a switch feel thrown rather than redrawn.
-    static let control = Animation.spring(response: 0.26, dampingFraction: 0.78)
+    static let control = Animation.spring(response: controlDuration, dampingFraction: 0.78)
     // Something arriving or leaving: a menu unfolding, a pane swapped for another.
     static let reveal = Animation.easeOut(duration: revealDuration)
     // A dialog's card rising into place. A touch softer than a control, so a large
@@ -22,12 +26,12 @@ enum Motion {
     static let arrive = Animation.spring(response: 0.3, dampingFraction: 0.85)
     // A small mark landing, such as the badge on a dialog row. It bounces more than a
     // control, since on something this small a firmer spring reads as no motion at all.
-    static let pop = Animation.spring(response: 0.3, dampingFraction: 0.66)
+    static let pop = Animation.spring(response: popDuration, dampingFraction: popDamping)
     // A line drawing itself: quick out of the gate, then a long gentle finish.
     static let draw = Animation.timingCurve(0.2, 0.7, 0.1, 1, duration: 0.28)
     // Anything put away. Leaving is always quicker than arriving, so closing never
     // feels like waiting.
-    static let leave = Animation.easeIn(duration: 0.12)
+    static let leave = Animation.easeIn(duration: leaveDuration)
 
     // How far a control swells under the pointer. Kept this small on purpose: at this
     // size the lift is felt as the control waking up, and much past it the window starts

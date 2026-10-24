@@ -2669,7 +2669,10 @@ struct SessionView: View {
     // A snoozed session says so where the next prompt is typed, with the way back.
     @ViewBuilder private func snoozeStrip(_ session: ChatSession) -> some View {
         if let snooze = store.snooze(of: session.id) {
-            SessionSnoozeStrip(snooze: snooze) { store.wake(session.id) }
+            SessionSnoozeStrip(snooze: snooze) {
+                SessionSnoozeMenu.wake(session.id, store: store)
+                composerFocused = true
+            }
                 .transition(.fadeIn)
         }
     }

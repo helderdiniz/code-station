@@ -7,6 +7,14 @@ import Testing
 // the appearance the two collapse into each other in one mode while still compiling and
 // still looking right in the other, so the pairs are measured here instead.
 struct WarningContrastTests {
+    @Test func snoozeTextIsReadableInBothAppearances() throws {
+        for appearance in try appearances() {
+            let ink = try swatch(Theme.snoozeText, in: appearance)
+            let surface = try swatch(Theme.snoozeSurface, in: appearance)
+            #expect(ink.contrast(against: surface) >= 4.5)
+        }
+    }
+
     // What the permission card puts on its own tint, read as ink over surface.
     @Test func permissionCardIsReadableInBothAppearances() throws {
         for appearance in try appearances() {

@@ -654,6 +654,7 @@ struct AppSidebar: View {
                                                     destination: destination(for: session),
                                                     revealingInSidebar: false)
                             },
+                            onWake: { SessionSnoozeMenu.wake(session.id, store: store) },
                             onDelete: { confirmRemoveSession(session) },
                             onRename: { name in
                                 store.renameSession(session.id, to: name)
@@ -681,9 +682,9 @@ struct AppSidebar: View {
                        icon: session.isPinned ? "pin.slash" : "pin") {
                      store.setPinned(!session.isPinned, forSession: session.id)
                  },
-                 SessionUnread.menuEntry(for: session.id, store: store),
-                 SessionSnoozeMenu.entry(for: session, store: store, dialogs: dialogs),
-                 .item("Rename…") { renamingID = session.id },
+                 SessionUnread.menuEntry(for: session.id, store: store)]
+                 + SessionSnoozeMenu.entries(for: session, store: store, dialogs: dialogs)
+                 + [.item("Rename…") { renamingID = session.id },
                  SessionTitle.menuEntry(for: session.id, runner: runner, store: store),
                  .separator,
                  .item("Delete session", kind: .destructive) {
@@ -2057,7 +2058,7 @@ struct PinnedMark: View {
 
 // A session as a compact card. It carries the same state, title and activity the session
 // shows on its project and on Home, so it reads the same wherever it is met.
-private struct SessionCard: View {
+struct SessionCard: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(PullRequestReviewStore.self) private var pullRequestReviews
     let session: ChatSession
@@ -2085,6 +2086,7 @@ private struct SessionCard: View {
     let isRenaming: Bool
     let checked: Bool?
     let onOpen: () -> Void
+    let onWake: () -> Void
     let onDelete: () -> Void
     let onRename: (String) -> Void
     let onCancelRename: () -> Void
@@ -2096,6 +2098,7 @@ private struct SessionCard: View {
     @FocusState private var focused: Bool
     @FocusState private var cardFocused: Bool
     @FocusState private var deleteFocused: Bool
+    @AccessibilityFocusState private var cardAccessibilityFocused: Bool
 
     private var tone: SessionTone {
         SessionTone(busy: busy, needsInput: needsInput, finished: finished,
@@ -2103,37 +2106,69 @@ private struct SessionCard: View {
     }
 
     var body: some View {
-        Group {
-            if isRenaming {
-                cardContent
-            } else {
-                Button(action: onOpen) {
-                    HStack(spacing: 8) {
-                        if let checked { SidebarCheckbox(isOn: checked) }
-                        cardContent
+        VStack(spacing: 0) {
+            Group {
+                if isRenaming {
+                    cardContent
+                        .frame(minHeight: snoozed == nil ? 0 : 74, alignment: .top)
+                } else {
+                    Button(action: onOpen) {
+                        HStack(spacing: 8) {
+                            if let checked { SidebarCheckbox(isOn: checked) }
+                            cardContent
+                        }
+                        .frame(minHeight: snoozed == nil ? 0 : 74, alignment: .top)
+                        .contentShape(Rectangle())
                     }
-                    .contentShape(Rectangle())
-                }
                     .buttonStyle(.plain)
                     .sidebarFocusRing($cardFocused)
+                    .accessibilityFocused($cardAccessibilityFocused)
                     .accessibilityLabel(session.title)
                     .accessibilityValue(accessibilityStatus)
                     .accessibilityAddTraits(selected || checked == true ? [.isSelected] : [])
+                }
+            }
+            .overlay(alignment: .topTrailing) {
+                SessionSnoozeTag(snoozed: snoozed != nil)
+                    .frame(width: 39, height: 66)
+                    .padding(.leading, 10)
+                    .padding(.trailing, 11)
+                    .padding(.top, 4)
+                    .clipped()
+                    .allowsHitTesting(false)
+                    .accessibilityHidden(true)
+            }
+            .overlay(alignment: .trailing) {
+                TrailingRowAction(
+                    visible: checked == nil && !isRenaming && (hovering || cardFocused || deleteFocused),
+                    icon: "trash", title: "Delete", tone: .delete,
+                    width: TrailingRowAction.deleteWidth, base: cardFill, cornerRadius: 8,
+                    accessibilityLabel: "Delete session \(session.title)",
+                    tooltip: "Delete session",
+                    focus: $deleteFocused, action: onDelete)
+                    .padding(1.4)
+            }
+            .appTooltip { tooltip }
+
+            if let snoozed {
+                SessionSnoozePocket(snooze: snoozed) {
+                    cardFocused = true
+                    cardAccessibilityFocused = true
+                    onWake()
+                }
+                .disabled(checked != nil)
+                .transition(reduceMotion ? .opacity.animation(Motion.reveal)
+                    : .asymmetric(insertion: .fadeIn.animation(Motion.reveal),
+                                  removal: .fold.animation(Motion.leave)))
             }
         }
-        // Inset by the card's ring, so a running or selected card keeps its outline
-        // all the way round under the zone.
-        .overlay(alignment: .trailing) {
-            TrailingRowAction(
-                visible: checked == nil && !isRenaming && (hovering || cardFocused || deleteFocused),
-                icon: "trash", title: "Delete", tone: .delete,
-                width: TrailingRowAction.deleteWidth, base: cardFill, cornerRadius: 8,
-                accessibilityLabel: "Delete session \(session.title)",
-                tooltip: "Delete session",
-                focus: $deleteFocused, action: onDelete)
-                .padding(1.4)
-        }
-        .appTooltip { tooltip }
+        .background(RoundedRectangle(cornerRadius: 9).fill(cardFill))
+        .clipShape(RoundedRectangle(cornerRadius: 9))
+        .overlay(RoundedRectangle(cornerRadius: 9)
+            .stroke(cardStroke, lineWidth: selected ? 1.4 : 1.2))
+        .motion(Motion.control, value: [busy, finished, failed, selected])
+        .motion(snoozed == nil ? Motion.leave : Motion.reveal, value: snoozed)
+        .contentShape(RoundedRectangle(cornerRadius: 9))
         .onPointerHover { hovering = $0 }
         .onChange(of: isRenaming, initial: true) { _, renaming in
             guard renaming else { return }
@@ -2191,9 +2226,6 @@ private struct SessionCard: View {
                 if session.isTroubleshooting {
                     MonoChip(text: "TROUBLESHOOT", size: 8.5, tint: Theme.secret)
                 }
-                if snoozed != nil {
-                    MonoChip(text: "SNOOZED", size: 8.5)
-                }
                 if uncommitted { UncommittedMark() }
                 if connected { MobileConnectionMark() }
                 // Review threads on this session's pull request still waiting for an answer.
@@ -2242,17 +2274,11 @@ private struct SessionCard: View {
 
                 ActivityLine(activity: activity())
             }
-            .padding(.horizontal, 10)
+            .padding(.leading, 10)
+            .padding(.trailing, snoozed == nil ? 10 : 60)
             .padding(.top, band == nil ? 5 : 7)
             .padding(.bottom, edge)
         }
-        .background(RoundedRectangle(cornerRadius: 9).fill(cardFill))
-        .clipShape(RoundedRectangle(cornerRadius: 9))
-        .overlay(RoundedRectangle(cornerRadius: 9)
-            .stroke(cardStroke, lineWidth: selected ? 1.4 : 1.2))
-        .animation(reduceMotion ? nil : .easeOut(duration: 0.25), value: [busy, finished, failed])
-        .animation(reduceMotion ? nil : .easeOut(duration: 0.15), value: selected)
-        .contentShape(RoundedRectangle(cornerRadius: 9))
     }
 
     // The hint carries the branch and full path because the compact card leaves both out.
@@ -2296,11 +2322,10 @@ private struct SessionCard: View {
         return worktrees.isComplete ? "Runs in its own git worktree." : nil
     }
 
-    // White is what being open looks like, so only the selected card gets it - two white
-    // cards in the rail read as two open sessions. A card that is doing something says so
-    // through its ring, its band, its state light and its word, which no other card has.
+    // Snoozed cards keep a solid surface behind their tag. Selection and run state
+    // still have their own ring, band, light and word.
     private var cardFill: Color {
-        if selected { return Theme.card }
+        if selected || snoozed != nil { return Theme.card }
         return hovering ? Theme.field : Theme.sunken
     }
 
@@ -2308,6 +2333,7 @@ private struct SessionCard: View {
         if selected { return Theme.accent.opacity(0.64) }
         if checked == true { return Theme.accent.opacity(0.4) }
         if failed { return Theme.deletion.opacity(0.45) }
+        if snoozed != nil { return Theme.snoozeEdge }
         return tone == .idle ? .clear : tone.ring
     }
 }

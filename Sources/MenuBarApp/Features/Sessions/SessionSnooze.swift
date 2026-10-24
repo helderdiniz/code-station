@@ -65,7 +65,7 @@ extension SessionSnooze {
                 Self.comesBack(snooze(now: now, calendar: calendar).deadline ?? now,
                                now: now, calendar: calendar)
             case .untilWoken:
-                "Stays snoozed until you wake it from its menu."
+                "Stays snoozed until you choose Wake up. A question still wakes it."
             }
         }
 

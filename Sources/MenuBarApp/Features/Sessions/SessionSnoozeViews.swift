@@ -1,71 +1,151 @@
 import SwiftUI
 
-// How a session is put to sleep and brought back: the entry in its row's menu, the
-// question of how long, and the line over the composer while it sleeps.
 enum SessionSnoozeMenu {
     @MainActor
-    static func entry(for session: ChatSession, store: ProjectStore,
-                      dialogs: DialogPresenter) -> MenuEntry {
-        if store.isSnoozed(session.id) {
-            .item("Wake up", icon: "bell") { store.wake(session.id) }
-        } else {
-            .item("Snooze…", icon: "moon.zzz") {
-                dialogs.show(SessionSnoozeDialog.make(for: session, store: store))
-            }
+    static func entries(for session: ChatSession, store: ProjectStore,
+                        dialogs: DialogPresenter) -> [MenuEntry] {
+        let snoozed = store.isSnoozed(session.id)
+        var entries: [MenuEntry] = []
+        if snoozed {
+            entries.append(.item("Wake up", icon: "bell") { wake(session.id, store: store) })
         }
+        entries.append(.item(snoozed ? "Change snooze…" : "Snooze…", icon: "moon.zzz") {
+            dialogs.show(SessionSnoozeDialog.make(for: session, store: store))
+        })
+        return entries
+    }
+
+    @MainActor
+    static func wake(_ sessionID: UUID, store: ProjectStore) {
+        store.wake(sessionID)
+        AccessibilityNotification.Announcement("Session awake. Notifications are back on.").post()
     }
 }
 
-// The pick, shared between the dialog's pills and its Snooze button.
 @MainActor
 @Observable
-private final class SnoozeChoice {
-    var choice: SessionSnooze.Choice = .untilReply
-    // Fixed when the dialog opens, so the time it names is the time the snooze gets.
-    let now = Date()
+final class SnoozeChoice {
+    var choice: SessionSnooze.Choice
+    let now: Date
+
+    init(snooze: SessionSnooze? = nil, now: Date = Date()) {
+        self.now = now
+        choice = SessionSnooze.Choice.allCases.first { $0.snooze(now: now) == snooze } ?? .untilReply
+    }
 }
 
 enum SessionSnoozeDialog {
     @MainActor
     static func make(for session: ChatSession, store: ProjectStore) -> Dialog {
-        let picked = SnoozeChoice()
-        var dialog = Dialog(
-            title: "Snooze \"\(session.title)\"",
-            message: "The session stays quiet and is marked as snoozed in the sidebar. A question from the agent wakes it.",
-            content: AnyView(SnoozeChoices(picked: picked)),
-            actions: [
-                Dialog.Action(label: "Snooze", kind: .primary) {
-                    store.snooze(session.id, picked.choice.snooze(now: picked.now))
-                },
-                Dialog.Action(label: "Cancel", kind: .cancel),
-            ])
+        let picked = SnoozeChoice(snooze: store.snooze(of: session.id))
+        let confirm = Dialog.Action(label: "Snooze session", kind: .primary) {
+            let snooze = picked.choice.snooze(now: picked.now)
+            store.snooze(session.id, snooze)
+            AccessibilityNotification.Announcement(
+                "Snoozed \(snooze.phrase()). The agent keeps working.").post()
+        }
+        var dialog = Dialog(title: "A little quiet time.", actions: [confirm])
+        dialog.content = AnyView(SnoozeDialogContent(title: session.title, picked: picked, confirm: confirm))
         dialog.width = 540
+        dialog.isModal = true
+        dialog.framesItself = true
         return dialog
     }
 }
 
-private struct SnoozeChoices: View {
+private struct SnoozeDialogContent: View {
+    let title: String
     @Bindable var picked: SnoozeChoice
+    let confirm: Dialog.Action
+    @Environment(DialogPresenter.self) private var dialogs
+    @FocusState private var focused: Focus?
     @Namespace private var track
 
+    private enum Focus: Hashable {
+        case close, choice(SessionSnooze.Choice), cancel, confirm
+    }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 4) {
-                ForEach(SessionSnooze.Choice.allCases) { choice in
-                    ChoicePill(title: choice.title(now: picked.now), selected: picked.choice == choice,
-                               thumb: track) {
-                        picked.choice = choice
-                    }
-                }
+        VStack(alignment: .leading, spacing: 18) {
+            HStack {
+                Text("A little quiet time.").font(.serif(22, .semibold))
+                Spacer()
+                GlyphButton(icon: "xmark", side: 28) { dialogs.dismiss() }
+                    .focused($focused, equals: .close)
+                    .focusEffectDisabled()
+                    .overlay(FocusRingStroke(focused: focused == .close))
+                    .accessibilityLabel("Close snooze options")
             }
-            .padding(3)
-            .background(RoundedRectangle(cornerRadius: 10).fill(Theme.field))
+            Text("The agent keeps working. Notifications stay quiet.\nA question from the agent always wakes the session.")
+                .font(.system(size: 13))
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            Text(title)
+                .font(.system(size: 12, weight: .semibold))
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(12)
+                .surface(Theme.field, cornerRadius: 9, border: Theme.border)
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 8) { choice(.untilReply); choice(.morning) }
+                HStack(spacing: 8) { choice(.monday); choice(.untilWoken) }
+            }
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel("Snooze until")
             Text(picked.choice.note(now: picked.now))
                 .font(.system(size: 11.5))
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
                 .contentTransition(.opacity)
                 .motion(Motion.control, value: picked.choice)
+            HStack(spacing: 8) {
+                Spacer()
+                ActionButton(title: "Cancel", tone: .sunken, keyboardShortcut: .cancelAction) {
+                    dialogs.dismiss()
+                }
+                .focused($focused, equals: .cancel)
+                .focusEffectDisabled()
+                .overlay(FocusRingStroke(focused: focused == .cancel))
+                ActionButton(title: confirm.label, tone: .dark, keyboardShortcut: .defaultAction) {
+                    dialogs.run(confirm)
+                }
+                .focused($focused, equals: .confirm)
+                .focusEffectDisabled()
+                .overlay(FocusRingStroke(focused: focused == .confirm))
+            }
+        }
+        .padding(24)
+        .background(Theme.card)
+        .onKeyPress(keys: [.tab]) { press in
+            let stops: [Focus] = [.close, .choice(picked.choice), .cancel, .confirm]
+            let index = stops.firstIndex { $0 == focused } ?? 0
+            let step = press.modifiers.contains(.shift) ? -1 : 1
+            focused = stops[(index + step + stops.count) % stops.count]
+            return .handled
+        }
+        .onExitCommand { dialogs.dismiss() }
+        .onAppear { focused = .choice(picked.choice) }
+        .onDisappear { dialogs.restoreFocus() }
+    }
+
+    private func choice(_ choice: SessionSnooze.Choice) -> some View {
+        ChoicePill(title: choice.title(now: picked.now), selected: picked.choice == choice, thumb: track) {
+            picked.choice = choice
+            focused = .choice(choice)
+        }
+        .focused($focused, equals: .choice(choice))
+        .focusEffectDisabled()
+        .overlay(FocusRingStroke(focused: focused == .choice(choice)))
+        .accessibilityAddTraits(picked.choice == choice ? [.isSelected] : [])
+        .accessibilityValue(picked.choice == choice ? "Selected" : "Not selected")
+        .onKeyPress(keys: [.leftArrow, .rightArrow, .upArrow, .downArrow]) { press in
+            let choices = SessionSnooze.Choice.allCases
+            let index = choices.firstIndex(of: choice) ?? 0
+            let step = press.key == .leftArrow || press.key == .upArrow ? -1 : 1
+            let next = choices[(index + step + choices.count) % choices.count]
+            picked.choice = next
+            focused = .choice(next)
+            return .handled
         }
     }
 }
@@ -113,24 +193,87 @@ struct SnoozeReminder: View {
     }
 }
 
-// Over the composer while the session sleeps, with the way back.
+struct SessionSnoozePocket: View {
+    let snooze: SessionSnooze
+    let wake: () -> Void
+
+    var body: some View {
+        HStack(spacing: 7) {
+            Image(systemName: "moon")
+                .font(.system(size: 14))
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 3) {
+                Text("Snoozed").font(.system(size: 10.5, weight: .semibold))
+                Text(snooze.phrase().prefix(1).uppercased() + snooze.phrase().dropFirst())
+                    .font(.system(size: 10))
+                    .fixedSize(horizontal: false, vertical: true)
+                    .contentTransition(.opacity)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .accessibilityElement(children: .combine)
+            SnoozeWakeButton(compact: true, wake: wake)
+                .accessibilityHint("Restores notifications. The agent keeps working.")
+        }
+        .foregroundStyle(Theme.snoozeText)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 9)
+        .frame(maxWidth: .infinity, minHeight: 49)
+        .background(Theme.snoozeSurface)
+        .overlay(alignment: .top) { Theme.snoozeEdge.frame(height: 0.7) }
+        .motion(Motion.control, value: snooze)
+    }
+}
+
 struct SessionSnoozeStrip: View {
     let snooze: SessionSnooze
     let wake: () -> Void
 
     var body: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "moon.zzz.fill")
-                .font(.system(size: 11, weight: .semibold))
-            Text("Snoozed \(snooze.phrase())")
-                .font(.system(size: 12, weight: .medium))
+        HStack(spacing: 9) {
+            Image(systemName: "moon")
+                .font(.system(size: 14))
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 3) {
+                Text("Snoozed \(snooze.phrase())")
+                    .font(.system(size: 12, weight: .semibold))
+                    .contentTransition(.opacity)
+                Text("The agent keeps working.")
+                    .font(.system(size: 11))
+            }
+            .fixedSize(horizontal: false, vertical: true)
+            .accessibilityElement(children: .combine)
             Spacer(minLength: 8)
-            InlineLink(title: "Wake up", size: 12, action: wake)
+            SnoozeWakeButton(wake: wake)
         }
-        .foregroundStyle(.secondary)
+        .foregroundStyle(Theme.snoozeText)
         .padding(.horizontal, 12)
-        .padding(.vertical, 7)
-        .background(RoundedRectangle(cornerRadius: 8).fill(Theme.sunken))
-        .accessibilityElement(children: .combine)
+        .padding(.vertical, 9)
+        .surface(Theme.snoozeSurface, cornerRadius: 8, border: Theme.snoozeEdge)
+        .motion(Motion.control, value: snooze)
+    }
+}
+
+private struct SnoozeWakeButton: View {
+    var compact = false
+    let wake: () -> Void
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: wake) {
+            Text("Wake up")
+                .font(.system(size: compact ? 10 : 11, weight: .semibold))
+                .foregroundStyle(Theme.snoozeText)
+                .fixedSize()
+                .padding(.horizontal, compact ? 5 : 10)
+                .padding(.vertical, 6)
+                .background(hovering ? Theme.snoozeText.opacity(0.08) : .clear, in: Capsule())
+                .overlay(Capsule().stroke(compact ? .clear : Theme.snoozeEdge, lineWidth: 0.7))
+                .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .sidebarFocusRing()
+        .hoverLift(hovering)
+        .onPointerHover { hovering = $0 }
+        .motion(Motion.hover, value: hovering)
     }
 }
