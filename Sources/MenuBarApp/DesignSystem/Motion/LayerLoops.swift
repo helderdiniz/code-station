@@ -217,3 +217,74 @@ final class BreathingCircleView: LoopLayerView {
         circle.add(LayerLoop.repeating(group, period: look.period), forKey: "breath")
     }
 }
+
+// A small arc turning while docker or git is at work on something. Under Reduce Motion it
+// holds still as a three-quarter ring, which still reads as "busy".
+struct LoopSpinner: View {
+    var colour: Color = Theme.secondaryText
+    var size: CGFloat = 11
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        LoopSpinnerLayer(colour: colour, moving: !reduceMotion)
+            .frame(width: size, height: size)
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+    }
+}
+
+private struct LoopSpinnerLayer: NSViewRepresentable {
+    let colour: Color
+    let moving: Bool
+
+    func makeNSView(context: Context) -> LoopSpinnerView { LoopSpinnerView() }
+
+    func updateNSView(_ view: LoopSpinnerView, context: Context) {
+        view.update(colour: colour.resolve(in: context.environment).cgColor, moving: moving)
+    }
+}
+
+final class LoopSpinnerView: LoopLayerView {
+    static let period: CFTimeInterval = 0.8
+
+    private let turner = CALayer()
+    private let arc = CAShapeLayer()
+    private(set) var moving = false
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        arc.fillColor = nil
+        arc.lineWidth = 1.6
+        arc.lineCap = .round
+        arc.strokeEnd = 0.75
+        turner.addSublayer(arc)
+        layer?.addSublayer(turner)
+    }
+
+    var loops: [String] { turner.animationKeys() ?? [] }
+
+    func update(colour: CGColor, moving: Bool) {
+        LayerLoop.still { arc.strokeColor = colour }
+        guard moving != self.moving else { return }
+        self.moving = moving
+        restartLoops()
+    }
+
+    override func layoutLayers() {
+        turner.bounds = bounds
+        turner.position = CGPoint(x: bounds.midX, y: bounds.midY)
+        arc.frame = bounds
+        arc.path = CGPath(ellipseIn: bounds.insetBy(dx: 1, dy: 1), transform: nil)
+    }
+
+    override func restartLoops() {
+        turner.removeAnimation(forKey: "turn")
+        guard moving else { return }
+        let turn = CABasicAnimation(keyPath: "transform.rotation.z")
+        turn.fromValue = 0
+        turn.toValue = CGFloat.pi * 2
+        turn.duration = Self.period
+        turner.add(LayerLoop.repeating(turn, period: Self.period), forKey: "turn")
+    }
+}

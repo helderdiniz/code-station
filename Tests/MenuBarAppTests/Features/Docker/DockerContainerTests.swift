@@ -103,7 +103,7 @@ struct DockerServiceTests {
         #expect(service.containers.busy.isEmpty)
         #expect(await recorder.commands == [
             ["stop", "container-1", "container-2"],
-            ["ps", "--no-trunc", "--size", "--format", "{{json .}}"]
+            ["ps", "--all", "--no-trunc", "--size", "--format", "{{json .}}"]
         ])
     }
 
@@ -123,13 +123,18 @@ struct DockerServiceTests {
         #expect(await service.delete(network) == nil)
         #expect(await service.delete(volume) == nil)
 
+        // Each removal reads its list again, then the disk use it changed.
+        let disk = ["system", "df", "--format", "{{json .}}"]
         #expect(await recorder.commands == [
             ["image", "rm", "postgres:17-alpine"],
             ["image", "ls", "--no-trunc", "--format", "{{json .}}"],
+            disk,
             ["network", "rm", "network-id"],
             ["network", "ls", "--no-trunc", "--format", "{{json .}}"],
+            disk,
             ["volume", "rm", "app_data"],
-            ["volume", "ls", "--format", "{{json .}}"]
+            ["volume", "ls", "--format", "{{json .}}"],
+            disk
         ])
     }
 }

@@ -113,8 +113,9 @@ private struct ToolsMenuModifier: ViewModifier {
         let containers = docker.containers
         guard containers.hasLoaded else { return ("checking…", nil) }
         guard containers.failure == nil else { return ("unavailable", Theme.deletion) }
-        guard !containers.items.isEmpty else { return ("none running", nil) }
-        return ("\(containers.items.count) running", Theme.addition)
+        let running = docker.runningCount
+        guard running > 0 else { return ("none running", nil) }
+        return ("\(running) running", Theme.addition)
     }
 
     // The card speaks for the screen it opens, which is the Mac's own list. A project's

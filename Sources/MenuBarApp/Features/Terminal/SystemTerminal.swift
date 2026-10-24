@@ -92,4 +92,23 @@ enum SystemTerminal {
                                                configuration: NSWorkspace.OpenConfiguration())
         }
     }
+
+    // Runs one command in a terminal window of its own, such as following a container's
+    // logs. A terminal only takes a script as a file, so the command is written to a
+    // throwaway .command file and that is opened.
+    @discardableResult
+    static func run(_ command: String) -> Bool {
+        let script = FileManager.default.temporaryDirectory
+            .appendingPathComponent("code-station-\(UUID().uuidString).command")
+        let text = "#!/bin/zsh -l\nrm -f \(script.path.shellQuoted)\n\(command)\n"
+        do {
+            try text.write(to: script, atomically: true, encoding: .utf8)
+            try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: script.path)
+        } catch {
+            return false
+        }
+        NSWorkspace.shared.open([script], withApplicationAt: appURL,
+                                configuration: NSWorkspace.OpenConfiguration())
+        return true
+    }
 }

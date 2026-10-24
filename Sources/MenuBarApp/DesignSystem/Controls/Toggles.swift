@@ -84,16 +84,20 @@ private struct AppCheckbox: View {
 }
 
 // The box alone, for a row that is itself the thing being ticked and has no toggle of
-// its own to put it in.
+// its own to put it in. A box heading a list can be mixed, when only some of the list is
+// ticked: it fills like a ticked one and carries a dash instead of the tick.
 struct CheckboxMark: View {
     let isOn: Bool
+    var mixed = false
+
+    private var filled: Bool { isOn || mixed }
 
     var body: some View {
         RoundedRectangle(cornerRadius: 5)
-            .fill(isOn ? Theme.accentFill : Theme.card)
+            .fill(filled ? Theme.accentFill : Theme.card)
             .frame(width: 16, height: 16)
             .overlay(RoundedRectangle(cornerRadius: 5)
-                .stroke(isOn ? .clear : Theme.border, lineWidth: 1.5))
+                .stroke(filled ? .clear : Theme.border, lineWidth: 1.5))
             .overlay {
                 // The tick is always there and grows into the filled box, so ticking a
                 // line is one movement rather than a mark appearing on top of a box that
@@ -101,8 +105,14 @@ struct CheckboxMark: View {
                 Image(systemName: "checkmark")
                     .font(.system(size: 9, weight: .bold))
                     .foregroundStyle(.white)
-                    .scaleEffect(isOn ? 1 : 0.4)
-                    .opacity(isOn ? 1 : 0)
+                    .scaleEffect(isOn && !mixed ? 1 : 0.4)
+                    .opacity(isOn && !mixed ? 1 : 0)
+            }
+            .overlay {
+                Capsule()
+                    .fill(.white)
+                    .frame(width: mixed ? 8 : 3, height: 2)
+                    .opacity(mixed ? 1 : 0)
             }
     }
 }
