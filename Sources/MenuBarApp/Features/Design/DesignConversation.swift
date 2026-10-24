@@ -543,12 +543,10 @@ struct DesignConversation: View {
                         onSend: { promptSentAt = .now },
                         dictates: !conversationMinimized,
                         above: {
-                            let queued = runner.queued(sessionID).count
-                            if queued > 0 {
-                                Text(counted(queued, "prompt") + " queued")
-                                    .font(.mono(9.5, .semibold))
-                                    .foregroundStyle(.secondary)
-                            }
+                            // The panel shares its height with the transcript, so about
+                            // three rows show and the rest scroll.
+                            SessionQueueStrip(sessionID: sessionID, busy: runner.state(sessionID).isBusy,
+                                              blocked: blocked, maxListHeight: 162) { composerFocused = true }
                         },
                         accessory: {
                             SessionBotPicker(avatars: appSettings.agentAvatars,
@@ -556,6 +554,7 @@ struct DesignConversation: View {
                                              sessionID: sessionID,
                                              size: 22)
                         })
+                        .motion(Motion.reveal, value: runner.queued(sessionID).isEmpty)
     }
 
     private var botSelection: Binding<String> {

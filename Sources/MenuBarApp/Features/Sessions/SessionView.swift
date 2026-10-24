@@ -2459,7 +2459,8 @@ struct SessionView: View {
                             runChoices(session, project: project)
                             contextNudge(session)
                             promptSuggestion(busy: state.isBusy, blocked: blocked)
-                            queueStrip(busy: state.isBusy, blocked: blocked)
+                            SessionQueueStrip(sessionID: sessionID, busy: state.isBusy,
+                                              blocked: blocked) { composerFocused = true }
                         },
                         accessory: {
                             SessionBotPicker(avatars: appSettings.agentAvatars,
@@ -2468,6 +2469,7 @@ struct SessionView: View {
                                              size: 22)
                         })
                         .motion(Motion.reveal, value: store.isSnoozed(sessionID))
+                        .motion(Motion.reveal, value: runner.queued(sessionID).isEmpty)
     }
 
     // The choices the next turn will run on, on the line the eye is already on when
@@ -2664,76 +2666,11 @@ struct SessionView: View {
         return true
     }
 
-    // Prompts typed ahead, above the composer where what happens next belongs. A queue that
-    // is not moving on its own - the last turn failed, or was stopped - gets a button,
-    // since nothing else would ever start it.
     // A snoozed session says so where the next prompt is typed, with the way back.
     @ViewBuilder private func snoozeStrip(_ session: ChatSession) -> some View {
         if let snooze = store.snooze(of: session.id) {
             SessionSnoozeStrip(snooze: snooze) { store.wake(session.id) }
                 .transition(.fadeIn)
-        }
-    }
-
-    @ViewBuilder private func queueStrip(busy: Bool, blocked: Bool) -> some View {
-        let waiting = runner.queued(sessionID)
-        if !waiting.isEmpty {
-            VStack(alignment: .leading, spacing: 8) {
-                HStack(spacing: 6) {
-                    // The count sits in the heading because the list can be scrolled past
-                    // or capped, and how much is waiting is the part worth knowing.
-                    Text(busy ? "QUEUED · \(waiting.count) · RUNS WHEN THIS TURN ENDS"
-                              : "QUEUED · \(waiting.count)")
-                        .font(.system(size: 11, weight: .semibold))
-                        .kerning(1.2)
-                    Spacer(minLength: 8)
-                    if !busy && !blocked {
-                        InlineLink(title: "Send now", size: 12) {
-                            runner.runQueue(sessionID, store: store)
-                        }
-                    }
-                }
-                .foregroundStyle(Theme.accent)
-
-                ForEach(waiting) { item in
-                    HStack(alignment: .top, spacing: 8) {
-                        Text(item.text)
-                            .font(.system(size: 13))
-                            .lineLimit(2)
-                            .fixedSize(horizontal: false, vertical: true)
-                        Spacer(minLength: 0)
-                        Button {
-                            runner.recall(item.id, sessionID: sessionID)
-                            composerFocused = true
-                        } label: {
-                            Image(systemName: "pencil")
-                                .font(.system(size: 11, weight: .medium))
-                                .foregroundStyle(.secondary)
-                                .padding(2)
-                                .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
-                        .hoverLift(amount: Motion.smallLift)
-                        .appTooltip("Take it back into the composer to rework")
-                        Button {
-                            runner.unqueue(item.id, sessionID: sessionID)
-                        } label: {
-                            Image(systemName: "xmark")
-                                .font(.system(size: 11, weight: .medium))
-                                .foregroundStyle(.secondary)
-                                .padding(2)
-                                .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
-                        .hoverLift(amount: Motion.smallLift)
-                        .appTooltip("Remove from the queue")
-                    }
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 10)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .fieldSurface(cornerRadius: 8)
-                }
-            }
         }
     }
 
