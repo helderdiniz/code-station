@@ -292,12 +292,14 @@ struct ExplorerView: View {
     private var navigatorFooter: some View {
         HStack(spacing: 6) {
             Image(systemName: "folder").accessibilityHidden(true)
-            Text("In \(rootURL.lastPathComponent)").lineLimit(1).truncationMode(.middle)
+            Text(repositories.isEmpty ? "In \(rootURL.lastPathComponent)" : "In this workspace")
+                .lineLimit(1).truncationMode(.middle)
                 .appTooltip("Find searches \(root)")
             Spacer(minLength: 0)
         }
         .font(.system(size: 10)).foregroundStyle(.secondary)
         .padding(12)
+        .background(Theme.background)
         .overlay(alignment: .top) { Rectangle().fill(Theme.hairline).frame(height: 1) }
     }
 
