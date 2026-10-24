@@ -147,6 +147,9 @@ struct ExplorerView: View {
     // Cmd+H hides the app on a Mac, so find in files takes Ctrl+H, next to Ctrl+F.
     @State private var findInFilesMonitor = WindowKeyMonitor(.control, "h")
     @State private var escapeMonitor = WindowKeyMonitor([], "\u{1b}")
+    // Closes the file in front, the way Cmd+W closes a tab in an editor. With no file
+    // open the stroke goes on to close the window as usual.
+    @State private var closeTabMonitor = WindowKeyMonitor(.command, "w")
     // The query marked on the line a find in files result opened at. It goes once the
     // text is edited, since the marks would no longer sit on the words they were for.
     @State private var revealedMatches: [NSRange] = []
@@ -210,7 +213,15 @@ struct ExplorerView: View {
         .background(WindowAnchor(monitor: commandFindMonitor))
         .background(WindowAnchor(monitor: findInFilesMonitor))
         .background(WindowAnchor(monitor: escapeMonitor))
+        .background(WindowAnchor(monitor: closeTabMonitor))
         .onAppear {
+            closeTabMonitor.start {
+                guard dialogs.current == nil, renaming == nil,
+                      let open = documents.tabs.first(where: { $0.path == selected?.path }) ?? documents.tabs.last
+                else { return false }
+                closeTab(open)
+                return true
+            }
             escapeMonitor.start {
                 guard dialogs.current == nil, renaming == nil else { return false }
                 if detailsPresented { detailsPresented = false; return true }
@@ -241,6 +252,7 @@ struct ExplorerView: View {
             findMonitors.forEach { $0.stop() }
             findInFilesMonitor.stop()
             escapeMonitor.stop()
+            closeTabMonitor.stop()
             rememberPlace()
         }
         .onChange(of: findQuery) {
