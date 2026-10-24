@@ -41,6 +41,7 @@ struct AppSidebar: View {
     @State private var filterBox = SidebarFilterBox()
     @State private var oldSessions = OldSessionsWatch()
     @State private var dropSlot: SidebarDropSlot?
+    @State private var picks = SidebarMultiSelection()
     @FocusState private var filterFocused: Bool
 
     private struct SessionRevealTarget: Equatable {
@@ -100,6 +101,10 @@ struct AppSidebar: View {
         .task(id: oldSessions.rule(store: store, runner: runner, days: appSettings.oldSessionDays)) {
             await oldSessions.watch(store: store, runner: runner, days: appSettings.oldSessionDays)
         }
+        .onChange(of: rowCount) { _, _ in
+            picks.keep { store.project($0) != nil || store.workspace($0) != nil
+                || store.sidebarSession($0) != nil }
+        }
         .onChange(of: commandPalette.newSessionRequest) { _, _ in
             startSessionInSelection()
         }
@@ -154,10 +159,17 @@ struct AppSidebar: View {
             SidebarFilterBar(box: $filterBox, focused: $filterFocused,
                              openCommandPalette: commandPalette.open,
                              showsShortcutHint: !paneOwnsFindShortcut)
-            SidebarArrangementBar(sort: $settings.projectSort, grouping: $settings.projectGrouping)
+            if picks.isActive {
+                SidebarSelectionBar(count: picks.ids.count, onDone: picks.clear)
+                    .transition(.fadeIn)
+            } else {
+                SidebarArrangementBar(sort: $settings.projectSort, grouping: $settings.projectGrouping)
+                    .transition(.fadeIn)
+            }
         }
         .animation(reduceMotion ? nil : .timingCurve(0.2, 0.8, 0.2, 1, duration: 0.4),
                    value: waiting.isEmpty)
+        .motion(Motion.reveal, value: picks.isActive)
     }
 
     private var sessionNotices: [NoticedSession] {
@@ -279,6 +291,7 @@ struct AppSidebar: View {
                         .animation(reduceMotion ? nil : .easeOut(duration: 0.22), value: appSettings.projectGrouping)
                         .animation(reduceMotion ? nil : .easeOut(duration: 0.22), value: collapsedGroups)
                         .animation(reduceMotion ? nil : .easeOut(duration: 0.22), value: filterBox.text)
+                        .motion(Motion.reveal, value: picks.isActive)
                     }
                     .scrollPosition($scrollPosition)
                     .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y } action: { _, offset in
@@ -468,7 +481,10 @@ struct AppSidebar: View {
             runningCount: running,
             needsYouCount: needsYouCount(sessions),
             isRenaming: renamingID == workspace.id,
-            onOpen: { openWorkspace(workspace) },
+            checked: checked(workspace.id),
+            onOpen: {
+                if picks.isActive { picks.click(workspace.id) } else { openWorkspace(workspace) }
+            },
             onToggle: { toggleExpanded(workspace.id, expanded: expanded) },
             onNewSession: { choosingWorkspaceSession = workspace },
             onRename: { name in
@@ -477,8 +493,10 @@ struct AppSidebar: View {
             },
             onCancelRename: { renamingID = nil }
         )
+        .onPressAndHold { beginSelection(with: workspace.id) }
         .appContextMenu {
-            [.item(workspace.isPinned ? "Unpin" : "Pin",
+            if picks.isActive { return selectionMenu(adding: workspace.id) }
+            return [.item(workspace.isPinned ? "Unpin" : "Pin",
                    icon: workspace.isPinned ? "pin.slash" : "pin") {
                  store.setPinned(!workspace.isPinned, forWorkspace: workspace.id)
              },
@@ -545,7 +563,10 @@ struct AppSidebar: View {
             },
             canRunTask: running == 0,
             isRenaming: renamingID == project.id,
-            onOpen: { openProject(project) },
+            checked: checked(project.id),
+            onOpen: {
+                if picks.isActive { picks.click(project.id) } else { openProject(project) }
+            },
             onToggle: { toggleExpanded(project.id, expanded: expanded) },
             onNewSession: { requestNewSession(in: project) },
             onRunTask: { runTask(project) },
@@ -555,7 +576,10 @@ struct AppSidebar: View {
             },
             onCancelRename: { renamingID = nil }
         )
-        .appContextMenu { headerMenu(project) }
+        .onPressAndHold { beginSelection(with: project.id) }
+        .appContextMenu {
+            picks.isActive ? selectionMenu(adding: project.id) : headerMenu(project)
+        }
         .sidebarRevealGlow(store.navigation.sidebarHighlight == project.id)
         .sidebarReorder(project.id, enabled: canReorder, slot: $dropSlot) {
             dropItem($0, beside: project.id, after: $1)
@@ -616,7 +640,12 @@ struct AppSidebar: View {
                             uncommitted: uncommitted(session),
                             connected: mobileAccess.isConnected(session: session.id),
                             isRenaming: renamingID == session.id,
+                            checked: checked(session.id),
                             onOpen: {
+                                if picks.isActive {
+                                    picks.click(session.id)
+                                    return
+                                }
                                 store.selectSession(session.id,
                                                     destination: destination(for: session),
                                                     revealingInSidebar: false)
@@ -641,8 +670,10 @@ struct AppSidebar: View {
                     }
                 }
             }
+            .onPressAndHold { beginSelection(with: session.id) }
             .appContextMenu {
-                [.item(session.isPinned ? "Unpin" : "Pin",
+                if picks.isActive { return selectionMenu(adding: session.id) }
+                return [.item(session.isPinned ? "Unpin" : "Pin",
                        icon: session.isPinned ? "pin.slash" : "pin") {
                      store.setPinned(!session.isPinned, forSession: session.id)
                  },
@@ -870,6 +901,55 @@ struct AppSidebar: View {
             scroller.scrollTo(id, anchor: .top)
         }
         store.navigation.projectToReveal = nil
+    }
+
+    // MARK: - Selecting several rows
+
+    // Changes whenever a row joins or leaves the sidebar, which is when a picked row can
+    // stop existing.
+    private var rowCount: Int {
+        store.projects.count + store.workspaces.count + store.sidebarSessions.count
+    }
+
+    // Nil outside the selection, so a row only draws its box while there is one.
+    private func checked(_ id: UUID) -> Bool? {
+        picks.isActive ? picks.contains(id) : nil
+    }
+
+    // A hold that ends under a dialog or on a row being renamed is aimed at that, not at
+    // the row behind it.
+    private func beginSelection(with id: UUID) {
+        guard dialogs.current == nil, renamingID == nil else { return }
+        picks.hold(id)
+    }
+
+    // A right-click on a row that is not ticked yet adds it, so the menu always acts on
+    // the row it was opened from as well as the rest.
+    private func selectionMenu(adding id: UUID) -> [MenuEntry] {
+        picks.add(id)
+        let targets = SidebarBulkAction.targets(picks.ids, in: store)
+        let snooze = SidebarBulkAction.snoozeMenu(targets, in: store)
+        return snooze + (snooze.isEmpty ? [] : [.separator])
+            + [.item("Delete…", kind: .destructive,
+                     subtitle: SidebarBulkAction.summary(of: targets)) {
+                    confirmBulkDelete(targets)
+                },
+               .separator,
+               .item("Clear selection", action: picks.clear)]
+    }
+
+    private func confirmBulkDelete(_ targets: SidebarBulkAction.Targets) {
+        guard !targets.isEmpty else { return }
+        dialogs.show(SidebarBulkAction.confirmation(
+            for: targets, in: store, shortcuts: shortcuts, workingTrees: workingTrees) {
+            picks.clear()
+            Task {
+                if case .failure(let failure) = await SidebarBulkAction.run(
+                    targets, in: store, runner: runner, shortcuts: shortcuts) {
+                    dialogs.show(.notice(failure.title, message: failure.message))
+                }
+            }
+        })
     }
 
     // MARK: - Creating and removing sessions
@@ -1135,6 +1215,10 @@ struct AppSidebar: View {
                 .keyboardShortcut("f", modifiers: .command)
             Button("") { jumpToFirstNeedingAttention() }
                 .keyboardShortcut("a", modifiers: [.command, .shift])
+            if picks.isActive {
+                Button("") { picks.clear() }
+                    .keyboardShortcut(.escape, modifiers: [])
+            }
         }
         .buttonStyle(.plain)
         .opacity(0)
@@ -1424,6 +1508,7 @@ private struct WorkspaceHeaderRow: View {
     let runningCount: Int
     let needsYouCount: Int
     let isRenaming: Bool
+    let checked: Bool?
     let onOpen: () -> Void
     let onToggle: () -> Void
     let onNewSession: () -> Void
@@ -1437,7 +1522,9 @@ private struct WorkspaceHeaderRow: View {
     @FocusState private var rowFocused: Bool
     @FocusState private var actionFocused: Bool
 
-    private var showsNewSession: Bool { !isRenaming && (hovering || rowFocused || actionFocused) }
+    private var showsNewSession: Bool {
+        checked == nil && !isRenaming && (hovering || rowFocused || actionFocused)
+    }
 
     var body: some View {
         TreeRow(selected: selected, isExpanded: isExpanded, hovering: hovering) {
@@ -1465,6 +1552,7 @@ private struct WorkspaceHeaderRow: View {
             } else {
                 Button(action: onOpen) {
                     HStack(spacing: 9) {
+                        if let checked { SidebarCheckbox(isOn: checked) }
                         SidebarIdentityTile(
                             avatar: workspace.sidebarAvatar,
                             name: workspace.name,
@@ -1482,12 +1570,13 @@ private struct WorkspaceHeaderRow: View {
                 }
                 .buttonStyle(.plain)
                 .sidebarFocusRing($rowFocused)
-                .accessibilityLabel("Open \(workspace.name)")
+                .accessibilityLabel(checked == nil ? "Open \(workspace.name)" : workspace.name)
                 .accessibilityValue(SidebarRowValue.text(
                     current: selected ? "Current workspace" : nil,
                     viewing: !isExpanded ? activeSessionTitle : nil,
                     pinned: workspace.isPinned))
-                .accessibilityAddTraits(selected && activeSessionTitle == nil ? [.isSelected] : [])
+                .accessibilityAddTraits(selected && activeSessionTitle == nil || checked == true
+                                        ? [.isSelected] : [])
 
                 // The count belongs to the row whether or not it is the current one:
                 // the sidebar is read at a glance, and a row that drops its number
@@ -1588,6 +1677,7 @@ private struct ProjectHeaderRow: View {
     let cost: Double
     let canRunTask: Bool
     let isRenaming: Bool
+    let checked: Bool?
     let onOpen: () -> Void
     let onToggle: () -> Void
     let onNewSession: () -> Void
@@ -1605,7 +1695,7 @@ private struct ProjectHeaderRow: View {
     private var isTask: Bool { project.kind == .adHoc }
     private var showsNeedsYou: Bool { !isExpanded && needsYouCount > 0 }
     private var showsNewSession: Bool {
-        !isTask && !isRenaming && (hovering || rowFocused || actionFocused)
+        !isTask && checked == nil && !isRenaming && (hovering || rowFocused || actionFocused)
     }
 
     var body: some View {
@@ -1634,6 +1724,7 @@ private struct ProjectHeaderRow: View {
             } else {
                 Button(action: onOpen) {
                     HStack(spacing: 9) {
+                        if let checked { SidebarCheckbox(isOn: checked) }
                         SidebarIdentityTile(
                             avatar: project.sidebarAvatar,
                             name: project.name,
@@ -1675,12 +1766,13 @@ private struct ProjectHeaderRow: View {
                 }
                 .buttonStyle(.plain)
                 .sidebarFocusRing($rowFocused)
-                .accessibilityLabel("Open \(project.name)")
+                .accessibilityLabel(checked == nil ? "Open \(project.name)" : project.name)
                 .accessibilityValue(SidebarRowValue.text(
                     current: selected ? "Current project" : nil,
                     viewing: !isExpanded ? activeSessionTitle : nil,
                     pinned: project.isPinned))
-                .accessibilityAddTraits(selected && activeSessionTitle == nil ? [.isSelected] : [])
+                .accessibilityAddTraits(selected && activeSessionTitle == nil || checked == true
+                                        ? [.isSelected] : [])
 
                 // On a task the running light gives way under the pointer to Run. The
                 // name gives way while the pointer is here, so the wider label does not
@@ -1694,7 +1786,7 @@ private struct ProjectHeaderRow: View {
                             // A task is run with its saved prompt rather than opened
                             // empty. The button waits while a run is still working in
                             // the task's folder.
-                            if hovering, canRunTask {
+                            if hovering, canRunTask, checked == nil {
                                 RowAction(icon: "play.fill", title: "Run", compact: selected, action: onRunTask)
                                     .appTooltip("Run the task's saved prompt in a fresh session")
                                     .fixedSize()
@@ -1984,6 +2076,7 @@ private struct SessionCard: View {
     let uncommitted: Bool
     let connected: Bool
     let isRenaming: Bool
+    let checked: Bool?
     let onOpen: () -> Void
     let onDelete: () -> Void
     let onRename: (String) -> Void
@@ -2007,19 +2100,25 @@ private struct SessionCard: View {
             if isRenaming {
                 cardContent
             } else {
-                Button(action: onOpen) { cardContent }
+                Button(action: onOpen) {
+                    HStack(spacing: 8) {
+                        if let checked { SidebarCheckbox(isOn: checked) }
+                        cardContent
+                    }
+                    .contentShape(Rectangle())
+                }
                     .buttonStyle(.plain)
                     .sidebarFocusRing($cardFocused)
                     .accessibilityLabel(session.title)
                     .accessibilityValue(accessibilityStatus)
-                    .accessibilityAddTraits(selected ? [.isSelected] : [])
+                    .accessibilityAddTraits(selected || checked == true ? [.isSelected] : [])
             }
         }
         // Inset by the card's ring, so a running or selected card keeps its outline
         // all the way round under the zone.
         .overlay(alignment: .trailing) {
             TrailingRowAction(
-                visible: !isRenaming && (hovering || cardFocused || deleteFocused),
+                visible: checked == nil && !isRenaming && (hovering || cardFocused || deleteFocused),
                 icon: "trash", title: "Delete", tone: .delete,
                 width: TrailingRowAction.deleteWidth, base: cardFill, cornerRadius: 8,
                 accessibilityLabel: "Delete session \(session.title)",
@@ -2193,6 +2292,7 @@ private struct SessionCard: View {
 
     private var cardStroke: Color {
         if selected { return Theme.accent.opacity(0.64) }
+        if checked == true { return Theme.accent.opacity(0.4) }
         if failed { return Theme.deletion.opacity(0.45) }
         return tone == .idle ? .clear : tone.ring
     }
@@ -2304,5 +2404,20 @@ private struct SidebarRevealGlow: ViewModifier {
 private extension View {
     func sidebarRevealGlow(_ revealed: Bool) -> some View {
         modifier(SidebarRevealGlow(revealed: revealed))
+    }
+}
+
+// The box a row wears while several rows are being picked. It slides in from the edge the
+// row starts at, so the row reads as making room for it.
+private struct SidebarCheckbox: View {
+    let isOn: Bool
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        CheckboxMark(isOn: isOn)
+            .motion(Motion.control, value: isOn)
+            .transition(reduceMotion ? .opacity : .opacity.combined(with: .move(edge: .leading)))
+            .accessibilityHidden(true)
     }
 }
