@@ -43,7 +43,7 @@ struct RootView: View {
             // A sheet is a window of its own, so the layer under it cannot draw over it; each
             // sheet gets one of its own to ask its own questions in.
             .sheet(item: $sheet) { sheet in
-                sheetContent(sheet).appOverlays()
+                sheetContent(sheet).background(QuitConfirmation()).appOverlays()
             }
     }
 
@@ -61,6 +61,7 @@ struct RootView: View {
             .onPreferenceChange(PaneFindShortcutKey.self) { paneOwnsFindShortcut = $0 }
             ScheduledTaskConfirmation()
             AppUpdateRestartPrompt()
+            QuitConfirmation(isFront: sheet == nil)
             VStack(spacing: 8) {
                 if let attention, attention != dismissedAttention {
                     AttentionBanner(title: attention.title,

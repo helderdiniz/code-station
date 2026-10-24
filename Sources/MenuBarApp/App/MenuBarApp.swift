@@ -73,6 +73,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private let shortcuts = ShortcutStore()
     private let appUpdates = AppUpdateChecker()
     private let accountUsage = AccountUsageMonitor()
+    private let quitGuard = QuitGuard()
     private var window: NSWindow?
 
     func applicationWillFinishLaunching(_ notification: Notification) {
@@ -105,6 +106,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         AppNotifier.shared.openSession = { [weak self] sessionID in
             self?.projects.selectSession(sessionID)
             self?.showManager()
+        }
+        NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.willPowerOffNotification, object: nil, queue: .main
+        ) { [quitGuard] _ in
+            MainActor.assumeIsolated { quitGuard.allow() }
         }
         showManager()
         scheduledTasks.start()
@@ -172,6 +178,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     // way back into it except the Dock. Waiting for the last window to close is not
     // enough: a detached Design window, minimised or on another Space, would keep the
     // app running unseen, so the main window decides on its own.
+    func windowShouldClose(_ sender: NSWindow) -> Bool {
+        guard sender === window, quitGuard.shouldAsk(running: runningSessions) else { return true }
+        quitGuard.ask()
+        return false
+    }
+
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        // The update's own restart prompt has already said which sessions it stops.
+        guard !appUpdates.isRelaunching, quitGuard.shouldAsk(running: runningSessions) else { return .terminateNow }
+        showManager()
+        quitGuard.ask()
+        return .terminateCancel
+    }
+
+    private var runningSessions: Int {
+        projects.sessions.count { runner.isBusy($0.id, store: projects) }
+    }
+
     func windowWillClose(_ notification: Notification) {
         guard notification.object as? NSWindow === window else { return }
         // Quitting from inside the close would tear the window down while AppKit is
@@ -216,7 +240,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                     .environment(dispatchAuth)
                     .environment(shortcuts)
                     .environment(appUpdates)
-                    .environment(accountUsage))
+                    .environment(accountUsage)
+                    .environment(quitGuard))
             // The window owns its size instead of shrinking to the view's ideal size. The
             // minimum comes from the view, because the hosting controller resets the
             // window's own contentMinSize to zero.

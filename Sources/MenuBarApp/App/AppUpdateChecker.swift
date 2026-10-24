@@ -88,6 +88,7 @@ final class AppUpdateChecker {
     private(set) var isChecking = false
     private(set) var dismissedVersion: String?
     private(set) var installState = AppUpdateInstallState.idle
+    private(set) var isRelaunching = false
 
     @ObservationIgnored private let installedVersion: AppVersion?
     @ObservationIgnored private let preferences: UserDefaults
@@ -236,6 +237,7 @@ final class AppUpdateChecker {
             installState = .failed(error.localizedDescription)
             return
         }
+        isRelaunching = true
         NSApp.terminate(nil)
     }
 
