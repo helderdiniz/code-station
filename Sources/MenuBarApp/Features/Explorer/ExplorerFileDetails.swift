@@ -6,6 +6,9 @@ struct ExplorerFileDetails: View {
     let path: String
     let status: GitStatusKind?
     let text: String?
+    let copyPath: () -> Void
+    let openExternally: () -> Void
+    let revealInFinder: () -> Void
     let close: () -> Void
 
     var body: some View {
@@ -28,15 +31,13 @@ struct ExplorerFileDetails: View {
                 Text("Location").font(.system(size: 11, weight: .semibold))
                 Text(path).font(.mono(11)).foregroundStyle(.secondary).textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
-                InlineLink(title: "Copy path") { Pasteboard.copy(node.path) }
+                InlineLink(title: "Copy path", action: copyPath)
                 if let destination = node.linkDestination {
                     Text("Links to \(destination)").font(.mono(11)).foregroundStyle(.secondary)
                 }
                 Rectangle().fill(Theme.border).frame(height: 1)
-                ActionButton(title: "Open externally", tone: .outlined, height: 30, size: 12) {
-                    NSWorkspace.shared.open(node.url)
-                }
-                InlineLink(title: "Reveal in Finder") { NSWorkspace.shared.activateFileViewerSelecting([node.url]) }
+                ActionButton(title: "Open externally", tone: .outlined, height: 30, size: 12, action: openExternally)
+                InlineLink(title: "Reveal in Finder", action: revealInFinder)
             }
             .padding(16)
         }

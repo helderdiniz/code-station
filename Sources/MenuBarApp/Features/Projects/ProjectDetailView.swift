@@ -18,6 +18,7 @@ struct ProjectDetailView: View {
 
     private enum Tab: Hashable { case sessions, changes, explorer }
 
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var tab: Tab = .sessions
     @State private var choosingSessionKind: Project?
     @State private var terminalFocused = false
@@ -41,7 +42,10 @@ struct ProjectDetailView: View {
                 header(project)
                 statusStrip(project)
                 if store.isMissing(project) { missingFolder(project) }
-                content(project)
+                // The group hands the transition to each page, so whichever one is chosen
+                // lifts in under the tab that chose it.
+                Group { content(project) }
+                    .transition(.headerPage(reduceMotion: reduceMotion))
                 if let openRun = shortcuts.output(for: shortcutScope) {
                     ShortcutOutputDrawer(run: openRun) {
                         shortcuts.showOutput(nil, for: shortcutScope)

@@ -130,6 +130,7 @@ struct ExplorerFindDialog: View {
 
     @FocusState private var fieldFocused: Bool
     @Namespace private var thumb
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -286,7 +287,7 @@ struct ExplorerFindDialog: View {
             }
             .onChange(of: names.selectedIndex) {
                 if let path = names.selected?.path {
-                    withAnimation(.easeOut(duration: 0.1)) { proxy.scrollTo(path, anchor: .center) }
+                    withAnimation(reduceMotion ? nil : Motion.hover) { proxy.scrollTo(path, anchor: .center) }
                 }
             }
         }
@@ -368,7 +369,7 @@ struct ExplorerFindDialog: View {
             }
             .onChange(of: contents.selectedIndex) {
                 if let selected = contents.selected {
-                    withAnimation(.easeOut(duration: 0.1)) { proxy.scrollTo(selected.id, anchor: .center) }
+                    withAnimation(reduceMotion ? nil : Motion.hover) { proxy.scrollTo(selected.id, anchor: .center) }
                 }
             }
         }

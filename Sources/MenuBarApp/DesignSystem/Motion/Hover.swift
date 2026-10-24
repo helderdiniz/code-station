@@ -82,7 +82,7 @@ private struct SelfTrackedHoverLift: ViewModifier {
     func body(content: Content) -> some View {
         content
             .hoverLift(hovering, amount: amount)
-            .onHover { hovering = $0 }
+            .onPointerHover { hovering = $0 }
     }
 }
 
