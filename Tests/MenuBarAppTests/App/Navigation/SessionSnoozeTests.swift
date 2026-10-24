@@ -102,4 +102,27 @@ struct SessionSnoozeTests {
         #expect(SessionSnooze.Choice.untilReply.snooze().endsOnReply)
         #expect(SessionSnooze.Choice.untilWoken.snooze().deadline == nil)
     }
+
+    @Test func timedChoicesNameTheirDay() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try #require(TimeZone(identifier: "UTC"))
+        calendar.locale = Locale(identifier: "en_GB")
+        func date(_ year: Int, _ month: Int, _ day: Int, _ hour: Int) -> Date {
+            calendar.date(from: DateComponents(year: year, month: month, day: day, hour: hour))!
+        }
+
+        let saturdayEvening = date(2026, 10, 24, 20)
+        #expect(SessionSnooze.Choice.morning.title(now: saturdayEvening, calendar: calendar)
+            .hasSuffix("tomorrow"))
+        #expect(SessionSnooze.Choice.morning.note(now: saturdayEvening, calendar: calendar)
+            .hasPrefix("Comes back tomorrow, "))
+        #expect(SessionSnooze.Choice.monday.note(now: saturdayEvening, calendar: calendar)
+            .hasPrefix("Comes back on "))
+
+        let earlyMonday = date(2026, 10, 26, 7)
+        #expect(SessionSnooze.Choice.morning.title(now: earlyMonday, calendar: calendar)
+            .hasSuffix("today"))
+        #expect(SessionSnooze.Choice.monday.note(now: earlyMonday, calendar: calendar)
+            .hasPrefix("Comes back today, "))
+    }
 }

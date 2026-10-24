@@ -35,8 +35,6 @@ struct AppSidebar: View {
     @State private var askingTask: Project?
     @State private var importingSessions: SessionImportRequest?
     @State private var sessionVisibility = SidebarSessionVisibility()
-    // The containers whose snoozed sessions are being shown under their rail.
-    @State private var showingSnoozed: Set<UUID> = []
     @State private var renderedSessionIDs: Set<UUID> = []
     @State private var scrollPosition = ScrollPosition(edge: .top)
     @State private var scrollOffset: CGFloat = 0
@@ -469,8 +467,7 @@ struct AppSidebar: View {
     private func workspaceSection(_ workspace: ProjectWorkspace,
                                   sessions: [ChatSession]) -> some View {
         let expanded = isExpanded(workspace)
-        let listed = awakeSessions(sessions, in: workspace.id)
-        let visible = visibleSessions(listed.shown, in: workspace.id)
+        let visible = visibleSessions(sessions, in: workspace.id)
         let running = sessions.count { runner.isBusy($0.id, store: store) }
         let projects = workspace.projectIDs.compactMap(store.project)
 
@@ -479,7 +476,7 @@ struct AppSidebar: View {
             projects: projects,
             selected: store.sidebarDestination?.containerID == workspace.id,
             activeSessionTitle: activeSessionTitle(in: workspace.id),
-            isExpanded: expanded && (!visible.isEmpty || listed.snoozed > 0),
+            isExpanded: expanded && !visible.isEmpty,
             sessionCount: sessions.count,
             runningCount: running,
             needsYouCount: needsYouCount(sessions),
@@ -516,8 +513,8 @@ struct AppSidebar: View {
         }
         .id(workspace.id)
 
-        if expanded, !visible.isEmpty || listed.snoozed > 0 {
-            sessionRail(listed.shown, visible: visible, snoozed: listed.snoozed, in: workspace.id,
+        if expanded, !visible.isEmpty {
+            sessionRail(sessions, visible: visible, in: workspace.id,
                         tint: sidebarRailTint(for: workspace.sidebarAvatar,
                                               name: workspace.name,
                                               monogramTint: Theme.workspaceTint),
@@ -545,15 +542,14 @@ struct AppSidebar: View {
     @ViewBuilder
     private func projectSection(_ project: Project, sessions: [ChatSession]) -> some View {
         let expanded = isExpanded(project)
-        let listed = awakeSessions(sessions, in: project.id)
-        let visible = visibleSessions(listed.shown, in: project.id)
+        let visible = visibleSessions(sessions, in: project.id)
         let running = sessions.count { runner.isBusy($0.id, store: store) }
 
         ProjectHeaderRow(
             project: project,
             selected: store.sidebarDestination?.containerID == project.id,
             activeSessionTitle: activeSessionTitle(in: project.id),
-            isExpanded: expanded && (!visible.isEmpty || listed.snoozed > 0),
+            isExpanded: expanded && !visible.isEmpty,
             isMissing: store.isMissing(project),
             sessionCount: sessions.count,
             runningCount: running,
@@ -592,8 +588,8 @@ struct AppSidebar: View {
 
         // An expanded project with nothing under it draws no cards at all: an empty rail
         // still carries its padding, which reads as the row shifting on every click.
-        if expanded, !visible.isEmpty || listed.snoozed > 0 {
-            sessionRail(listed.shown, visible: visible, snoozed: listed.snoozed, in: project.id,
+        if expanded, !visible.isEmpty {
+            sessionRail(sessions, visible: visible, in: project.id,
                         tint: sidebarRailTint(for: project.sidebarAvatar,
                                               name: project.name,
                                               monogramTint: Theme.projectTint(for: project.name)),
@@ -602,21 +598,11 @@ struct AppSidebar: View {
         }
     }
 
-    // A snoozed session is out of the way, so its card leaves the rail and a quiet row at
-    // the foot says how many are sleeping. Clicking it shows them, which is also where
-    // one is woken from.
-    private func awakeSessions(_ sessions: [ChatSession],
-                               in containerID: UUID) -> (shown: [ChatSession], snoozed: Int) {
-        let awake = sessions.filter { !store.isSnoozed($0.id) }
-        let snoozed = sessions.count - awake.count
-        return (showingSnoozed.contains(containerID) ? sessions : awake, snoozed)
-    }
-
     // The cards under an open row. A project and a workspace draw the same rail; they
     // differ only in what a card says about its branch and whether its folders hold
     // uncommitted work.
     @ViewBuilder
-    private func sessionRail(_ sessions: [ChatSession], visible: [ChatSession], snoozed: Int,
+    private func sessionRail(_ sessions: [ChatSession], visible: [ChatSession],
                              in containerID: UUID, tint: Theme.ProjectTint,
                              branch: @escaping (ChatSession) -> String?,
                              uncommitted: @escaping (ChatSession) -> Bool) -> some View {
@@ -706,7 +692,7 @@ struct AppSidebar: View {
             }
             .sidebarRailSegment(colour: tint.colour,
                                 isFirst: session.id == visible.first?.id,
-                                isLast: hidden == 0 && snoozed == 0 && session.id == visible.last?.id,
+                                isLast: hidden == 0 && session.id == visible.last?.id,
                                 stackSpacing: Self.listSpacing)
             .transition(.fold)
         }
@@ -716,23 +702,8 @@ struct AppSidebar: View {
                     sessionVisibility.showAll(containerID)
                 }
             }
-            .sidebarRailSegment(colour: tint.colour, isFirst: false, isLast: snoozed == 0,
+            .sidebarRailSegment(colour: tint.colour, isFirst: false, isLast: true,
                                 stackSpacing: Self.listSpacing)
-            .transition(.fold)
-        }
-        if snoozed > 0 {
-            let showing = showingSnoozed.contains(containerID)
-            SidebarRailRow(colour: tint.colour) {
-                SeeMoreCard(title: showing ? "Hide snoozed" : "\(counted(snoozed, "session")) snoozed…") {
-                    if showing {
-                        showingSnoozed.remove(containerID)
-                    } else {
-                        showingSnoozed.insert(containerID)
-                    }
-                }
-            }
-            .sidebarRailSegment(colour: tint.colour, isFirst: visible.isEmpty && hidden == 0,
-                                isLast: true, stackSpacing: Self.listSpacing)
             .transition(.fold)
         }
     }

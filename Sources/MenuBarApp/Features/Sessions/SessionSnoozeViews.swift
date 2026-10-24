@@ -21,6 +21,8 @@ enum SessionSnoozeMenu {
 @Observable
 private final class SnoozeChoice {
     var choice: SessionSnooze.Choice = .untilReply
+    // Fixed when the dialog opens, so the time it names is the time the snooze gets.
+    let now = Date()
 }
 
 enum SessionSnoozeDialog {
@@ -29,15 +31,15 @@ enum SessionSnoozeDialog {
         let picked = SnoozeChoice()
         var dialog = Dialog(
             title: "Snooze \"\(session.title)\"",
-            message: "The session leaves the sidebar and stays quiet. A question from the agent wakes it.",
+            message: "The session stays quiet and is marked as snoozed in the sidebar. A question from the agent wakes it.",
             content: AnyView(SnoozeChoices(picked: picked)),
             actions: [
                 Dialog.Action(label: "Snooze", kind: .primary) {
-                    store.snooze(session.id, picked.choice.snooze())
+                    store.snooze(session.id, picked.choice.snooze(now: picked.now))
                 },
                 Dialog.Action(label: "Cancel", kind: .cancel),
             ])
-        dialog.width = 480
+        dialog.width = 540
         return dialog
     }
 }
@@ -50,7 +52,7 @@ private struct SnoozeChoices: View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 4) {
                 ForEach(SessionSnooze.Choice.allCases) { choice in
-                    ChoicePill(title: choice.title, selected: picked.choice == choice,
+                    ChoicePill(title: choice.title(now: picked.now), selected: picked.choice == choice,
                                thumb: track) {
                         picked.choice = choice
                     }
@@ -58,7 +60,7 @@ private struct SnoozeChoices: View {
             }
             .padding(3)
             .background(RoundedRectangle(cornerRadius: 10).fill(Theme.field))
-            Text(picked.choice.note)
+            Text(picked.choice.note(now: picked.now))
                 .font(.system(size: 11.5))
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
