@@ -7,8 +7,15 @@ import SwiftUI
 struct DispatchView: View {
     @Environment(DispatchStore.self) private var store
     @Environment(DispatchAuthStore.self) private var auth
+    @Environment(DispatchRunner.self) private var runner
     @Environment(DialogPresenter.self) private var dialogs
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(MenuPresenter.self) private var menus
+    @State private var query = ""
+    @State private var searchClosedFolders: Set<UUID> = []
+    @State private var showingLibrary = false
+    @FocusState private var searchFocused: Bool
 
     @State private var showingEnvironments = false
     @State private var renamingFolderID: UUID?
@@ -19,7 +26,11 @@ struct DispatchView: View {
     // The sheet only learns its parent a moment after it opens, so start from the window
     // that is key while the sheet is being built. Without this the first frame uses a
     // fallback size and the sheet visibly jumps once the real size arrives.
-    @State private var parentSize: CGSize? = NSApp.keyWindow?.contentLayoutRect.size
+    @State private var parentSize: CGSize?
+
+    init(parentSize: CGSize? = NSApp.keyWindow?.contentLayoutRect.size) {
+        _parentSize = State(initialValue: parentSize)
+    }
 
     private var environment: ApiEnvironment { auth.active }
 
@@ -29,14 +40,25 @@ struct DispatchView: View {
             header
             Divider().overlay(Theme.hairline)
             HStack(spacing: 0) {
-                sidebar
-                Divider().overlay(Theme.hairline)
-                detail
+                if !compact || showingLibrary {
+                    sidebar
+                    Divider().overlay(Theme.hairline)
+                }
+                if !compact || !showingLibrary {
+                    detail.motion(Motion.reveal, value: store.selectedID)
+                }
+
             }
-            SheetFooter(dismiss: { dismiss() }) {
-                Text(environment.isDangerous
-                     ? "Live environments ask for confirmation before every send."
-                     : "Requests are shared by all environments. Each environment keeps its own credentials and responses.")
+            SheetFooter(dismiss: {
+                if dialogs.current != nil { dialogs.dismiss() }
+                else if menus.isOpen { menus.dismiss() }
+                else if let id = store.selectedID, runner.isRunning(id, in: environment) { runner.cancel(id, in: environment) }
+                else { dismiss() }
+            }) {
+                Text(store.saveError ?? store.loadError
+                     ?? (store.hasPendingChanges ? "Saving changes…" : environment.isDangerous
+                         ? "Changes saved · Live sends always ask for confirmation."
+                         : "Changes saved locally · ⌘↵ Send · ⌘K Find a request"))
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
             }
@@ -44,8 +66,26 @@ struct DispatchView: View {
         .frame(width: sheetSize.width, height: sheetSize.height)
         .background(Theme.background)
         .background(ParentWindowSize(size: $parentSize))
-        .sheet(isPresented: $showingEnvironments) { EnvironmentsView(previewRequest: store.requests.first { $0.id == store.selectedID }) }
-        .onAppear { store.selectedID = nil }
+        .sheet(isPresented: $showingEnvironments) {
+            EnvironmentsView(previewRequest: store.selected).appOverlays()
+        }
+        .onDisappear { store.save() }
+        .onChange(of: query) { _, _ in searchClosedFolders = [] }
+        .motion(Motion.reveal, value: environment)
+        .background {
+            ZStack {
+                Button("", action: focusSearch).keyboardShortcut("k", modifiers: .command)
+                Button("", action: focusSearch).keyboardShortcut("k", modifiers: .control)
+            }
+            .buttonStyle(.plain).opacity(0).accessibilityHidden(true)
+        }
+    }
+
+    private func focusSearch() {
+        guard dialogs.current == nil, !showingEnvironments else { return }
+        menus.dismiss()
+        showingLibrary = true
+        searchFocused = true
     }
 
     // A sheet wider than its window gets clipped rather than growing it, so both sizes
@@ -55,61 +95,136 @@ struct DispatchView: View {
         guard let parentSize else { return CGSize(width: 940, height: 660) }
         let room = CGSize(width: parentSize.width - 48, height: parentSize.height - 36)
         if expanded { return room }
-        return CGSize(width: max(940, min(compact.width, room.width)),
-                      height: max(640, min(compact.height, room.height)))
+        return CGSize(width: max(480, min(compact.width, room.width)),
+                      height: max(420, min(compact.height, room.height)))
     }
+
+    private var compact: Bool { sheetSize.width < 900 }
 
     private var header: some View {
         HStack(spacing: 10) {
-            Text("Dispatch").font(.serif(16))
-            Text(counted(store.requests.count, "request"))
-                .font(.system(size: 12))
-                .foregroundStyle(.secondary)
-            if environment.isDangerous {
-                Circle()
-                    .fill(Theme.deletion)
-                    .frame(width: 7, height: 7)
-                    .padding(.leading, 2)
-                Text(environment.label.uppercased())
-                    .font(.mono(11, .bold))
-                    .kerning(1)
-                    .foregroundStyle(Theme.deletion)
+            if compact {
+                GlyphButton(icon: "sidebar.left", active: showingLibrary) { showingLibrary.toggle() }
+                    .accessibilityLabel(showingLibrary ? "Show request" : "Show request library")
             }
-            Spacer()
-            EnvironmentPills(environments: auth.environments, selected: environment) {
-                auth.active = $0
+            Image(systemName: "paperplane")
+                .foregroundStyle(environment.accent)
+                .frame(width: 29, height: 29)
+                .background(environment.accent.opacity(0.10), in: RoundedRectangle(cornerRadius: 8))
+            Text("Dispatch").font(.serif(20))
+            Spacer(minLength: 0)
+            tokenStatus
+            HStack(spacing: 8) {
+                Circle().fill(environment.brightAccent).frame(width: 6, height: 6)
+                Text(environment.label + (environment.isDangerous ? " · Live" : ""))
+                    .font(.system(size: 12, weight: .semibold))
+                MenuChevron(tint: environment.accent)
             }
-            .frame(maxWidth: 500)
-            .fixedSize(horizontal: true, vertical: false)
-            InlineLink(title: "Environments", tint: environment.accent) {
+            .foregroundStyle(environment.accent)
+            .padding(.horizontal, 12).frame(height: 34)
+            .surface(environment.accent.opacity(0.07), cornerRadius: 8,
+                     border: environment.accent.opacity(0.25))
+            .appMenu {
+                auth.environments.map { env in
+                    .item(env.label, checked: env == environment,
+                          subtitle: env.isDangerous ? "Live data" : nil) { auth.active = env }
+                } + [.separator, .item("Environment settings") { showingEnvironments = true }]
+            }
+            .accessibilityLabel("Send destination: \(environment.label)")
+            GlyphButton(icon: "slider.horizontal.3", tint: environment.accent) {
                 showingEnvironments = true
             }
+            .accessibilityLabel("Environment settings")
+            .appTooltip("Environment properties and authentication")
             GlyphButton(icon: expanded ? "arrow.down.right.and.arrow.up.left"
                                        : "arrow.up.left.and.arrow.down.right",
-                        side: 26, tint: environment.accent) {
-                expanded.toggle()
-            }
-            .appTooltip(expanded ? "Shrink" : "Expand to the window")
-            .accessibilityLabel(expanded ? "Shrink" : "Expand")
+                        side: 26, tint: environment.accent) { expanded.toggle() }
+                .appTooltip(expanded ? "Shrink" : "Expand to the window")
+                .accessibilityLabel(expanded ? "Shrink" : "Expand")
         }
-        .padding(.horizontal, 20)
+        .padding(.horizontal, compact ? 12 : 20)
         .padding(.vertical, 10)
         .background(environment.isDangerous ? Theme.deletion.opacity(0.10) : Theme.card)
+    }
+
+    private var tokenStatus: some View {
+        TimelineView(.periodic(from: .now, by: 30)) { _ in
+            let authenticated = auth.isAuthenticated(for: environment)
+            let busy = auth.busy.contains(environment) || auth.awaitingPaste.contains(environment)
+            let status = busy ? "Signing in…" : auth.failures[environment] != nil ? "Sign-in failed"
+                : authenticated ? "Token ready" : "Token needed"
+            HStack(spacing: 6) {
+                Image(systemName: authenticated ? "checkmark.shield" : "shield")
+                if !compact {
+                    Text(status)
+                    if authenticated, let token = auth.tokens[environment] {
+                        Text("· \(token.remainingText)").font(.mono(10))
+                    }
+                }
+            }
+            .font(.system(size: 11))
+            .foregroundStyle(authenticated ? environment.accent : .secondary)
+            .padding(6)
+            .contentShape(Rectangle())
+            .appMenu {
+                if busy {
+                    [.item("Cancel authentication") { auth.cancelAuthentication(environment) }]
+                } else {
+                    [.item(auth.config(for: environment).missing.isEmpty ? "Re-authenticate" : "Set up credentials") {
+                        if auth.config(for: environment).missing.isEmpty {
+                            auth.authenticate(environment)
+                            if auth.config(for: environment).grant.usesBrowser && !auth.config(for: environment).usesLoopback {
+                                showingEnvironments = true
+                            }
+                        } else { showingEnvironments = true }
+                    }, .item("Authentication settings") { showingEnvironments = true }]
+                }
+            }
+            .accessibilityLabel("\(environment.label) authentication: \(status)")
+        }
     }
 
     // MARK: - Sidebar
 
     private var sidebar: some View {
         VStack(alignment: .leading, spacing: 0) {
-            SectionLabel("REQUESTS")
-                .padding(.horizontal, 16)
-                .padding(.top, 16)
-                .padding(.bottom, 8)
+            HStack {
+                Text("Requests").font(.system(size: 13, weight: .semibold))
+                Text("\(store.requests.count)").font(.mono(10)).foregroundStyle(.secondary)
+                Spacer()
+                GlyphButton(icon: "plus", side: 24) { createRequest() }
+                    .accessibilityLabel("New request")
+            }
+            .padding(.horizontal, 16).padding(.top, 16).padding(.bottom, 12)
+
+            HStack(spacing: 6) {
+                Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                TextField("Find a request", text: $query)
+                    .textFieldStyle(.plain)
+                    .focused($searchFocused)
+                    .accessibilityLabel("Find a request by name, method or URL")
+                if !query.isEmpty {
+                    GlyphButton(icon: "xmark", side: 20) { query = "" }
+                        .accessibilityLabel("Clear search")
+                } else { Text("⌘K").foregroundStyle(.secondary) }
+            }
+            .font(.system(size: 11))
+            .padding(9).fieldSurface(cornerRadius: 8)
+            .overlay(RoundedRectangle(cornerRadius: 8).stroke(searchFocused ? environment.accent : .clear, lineWidth: 2))
+            .padding(.horizontal, 12).padding(.bottom, 12)
 
             ScrollView {
                 VStack(spacing: 4) {
                     ForEach(store.folders) { folder in
-                        folderSection(folder)
+                        if query.trimmed.isEmpty || !store.visibleRequests(in: folder.id, matching: query).isEmpty {
+                            folderSection(folder)
+                        }
+                    }
+                    if !query.trimmed.isEmpty && store.folders.allSatisfy({ store.visibleRequests(in: $0.id, matching: query).isEmpty }) {
+                        VStack(spacing: 10) {
+                            Text("No requests match “\(query)”.").foregroundStyle(.secondary)
+                            InlineLink(title: "Clear search") { query = "" }
+                        }.font(.system(size: 12)).padding(.vertical, 20)
                     }
                 }
                 .padding(.horizontal, 12)
@@ -119,51 +234,70 @@ struct DispatchView: View {
             VStack(spacing: 10) {
                 newMenu
 
-                tokenCard
+                Text("Shared across environments.\nCredentials stay separate.")
+                    .font(.system(size: 11)).foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
             .padding(16)
         }
-        .frame(width: 268)
+        .frame(width: compact ? nil : 238)
         .background(Theme.sidebar)
     }
 
     private func folderSection(_ folder: RequestFolder) -> some View {
-        let expanded = store.isExpanded(folder.id)
-        let requests = store.requests(in: folder.id)
+        let searching = !query.trimmed.isEmpty
+        let expanded = searching ? !searchClosedFolders.contains(folder.id) : store.isExpanded(folder.id)
+        let requests = store.visibleRequests(in: folder.id, matching: query)
         return VStack(alignment: .leading, spacing: 0) {
             FolderRow(folder: folder,
                       expanded: expanded,
-                      requestCount: store.requestCount(in: folder.id),
+                      requestCount: requests.count,
                       isRenaming: renamingFolderID == folder.id,
                       accent: environment.accent,
-                      onNewRequest: { store.add(to: folder.id) },
+                      onNewRequest: { createRequest(in: folder.id) },
+                      onToggle: { toggleFolder(folder.id) },
                       onDropRequest: { store.move($0, to: folder.id) },
                       onRename: { name in
                           store.renameFolder(folder.id, to: name)
                           renamingFolderID = nil
                       },
                       onCancelRename: { renamingFolderID = nil })
-                .contentShape(Rectangle())
-                .onTapGesture {
-                    guard renamingFolderID != folder.id else { return }
-                    store.toggleFolder(folder.id)
-                }
                 .appContextMenu {
                     folderContextMenu(for: folder)
                 }
 
-            if expanded, !requests.isEmpty {
-                SidebarRail(colour: environment.brightAccent) {
-                    ForEach(requests) { request in
-                        SidebarRailRow(colour: environment.brightAccent,
-                                       selectedColour: environment.accent,
-                                       selected: request.id == store.selectedID) {
-                            requestRow(request)
-                        }
+            if !requests.isEmpty {
+                VStack(spacing: 3) {
+                    ForEach(Array(requests.enumerated()), id: \.element.id) { index, request in
+                        requestRow(request)
+                            .opacity(expanded ? 1 : 0)
+                            .offset(y: reduceMotion || expanded ? 0 : -3)
+                            .animation(reduceMotion ? nil : Motion.reveal.delay(expanded ? min(Double(index) * 0.018, 0.072) : 0),
+                                       value: expanded)
                     }
                 }
+                .frame(height: expanded ? nil : 0, alignment: .top)
+                .opacity(expanded ? 1 : 0)
+                .clipped()
+                .disabled(!expanded)
+                .allowsHitTesting(expanded)
+                .accessibilityHidden(!expanded)
             }
         }
+        .motion(Motion.control, value: expanded)
+        .motion(Motion.control, value: requests.map(\.id))
+    }
+
+    private func toggleFolder(_ id: UUID) {
+        if query.trimmed.isEmpty { store.toggleFolder(id) }
+        else if !searchClosedFolders.insert(id).inserted { searchClosedFolders.remove(id) }
+    }
+
+    private func createRequest(in folder: UUID? = nil) {
+        query = ""
+        let request = store.add(to: folder)
+        renamingRequestID = request.id
+        showingLibrary = true
     }
 
     private func requestRow(_ request: SavedRequest) -> some View {
@@ -171,13 +305,16 @@ struct DispatchView: View {
                    selected: request.id == store.selectedID,
                    isRenaming: renamingRequestID == request.id,
                    accent: environment.accent,
+                   onSelect: {
+                       store.selectedID = request.id
+                       showingLibrary = false
+                   },
                    onRename: { name in
                        store.rename(request.id, to: name)
                        renamingRequestID = nil
                    },
                    onCancelRename: { renamingRequestID = nil })
             .contentShape(Rectangle())
-            .onTapGesture { store.selectedID = request.id }
             // Alongside the single tap rather than instead of it, so selecting a row
             // does not wait to see whether a second click is coming.
             .simultaneousGesture(TapGesture(count: 2).onEnded {
@@ -214,7 +351,7 @@ struct DispatchView: View {
 
     private func folderContextMenu(for folder: RequestFolder) -> [MenuEntry] {
         var entries: [MenuEntry] = [
-            .item("New request") { store.add(to: folder.id) }
+            .item("New request") { createRequest(in: folder.id) }
         ]
         guard !folder.isDefault else { return entries }
         entries.append(.item("Rename…") { renamingFolderID = folder.id })
@@ -227,6 +364,7 @@ struct DispatchView: View {
 
     private func requestContextMenu(for request: SavedRequest) -> [MenuEntry] {
         var entries: [MenuEntry] = [
+            .item(request.isPinned ? "Unpin request" : "Pin to top of folder") { store.togglePin(request.id) },
             .item("Rename…") {
                 store.selectedID = request.id
                 renamingRequestID = request.id
@@ -251,86 +389,14 @@ struct DispatchView: View {
     }
 
     private var newMenu: some View {
-        HStack(spacing: 7) {
-            Text("+ New")
-                .font(.system(size: 14, weight: .semibold))
-            Spacer(minLength: 0)
-            Image(systemName: "chevron.up")
-                .font(.system(size: 9, weight: .semibold))
-        }
-        .foregroundStyle(.white)
-        .padding(.horizontal, 14)
-        .padding(.vertical, 12)
-        .background(RoundedRectangle(cornerRadius: 10).fill(Color.black.opacity(0.88)))
-        .contentShape(Rectangle())
+        ActionButton(title: "New request", tone: .outlined, height: 34, size: 12,
+                     icon: "plus", disclosure: true, fills: true)
         .appMenu(edge: .top, matchWidth: true) {
-            [.item("New request", subtitle: "starts in Default") { store.add() },
+            [.item("New request", subtitle: "starts in Default") { createRequest() },
              .item("New folder", subtitle: "groups related requests") {
                  renamingFolderID = store.addFolder().id
              }]
         }
-    }
-
-    // The active environment's token, next to the list because every request borrows it.
-    private var tokenCard: some View {
-        let config = auth.config(for: environment)
-        let ready = config.missing.isEmpty
-        return VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 7) {
-                Circle()
-                    .fill(auth.isAuthenticated(for: environment)
-                          ? environment.brightAccent : Theme.dotOff)
-                    .frame(width: 7, height: 7)
-                Text("\(environment.label) token")
-                    .font(.system(size: 12, weight: .semibold))
-                Spacer(minLength: 0)
-                if let token = auth.tokens[environment], auth.isAuthenticated(for: environment) {
-                    Text(token.remainingText)
-                        .font(.mono(10))
-                        .foregroundStyle(.secondary)
-                }
-            }
-
-            Text(ready ? config.tokenHost : "No credentials yet")
-                .font(.mono(10))
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-                .truncationMode(.middle)
-
-            if auth.busy.contains(environment) || auth.awaitingPaste.contains(environment) {
-                // Nothing tells the app that the browser tab was closed, so the wait
-                // has to be something the user can call off from right here.
-                HStack(spacing: 10) {
-                    Text(auth.busy.contains(environment)
-                         ? (config.grant.usesBrowser ? "Waiting for the browser…" : "Signing in…")
-                         : "Waiting for the code")
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                    Spacer(minLength: 0)
-                    InlineLink(title: "Cancel", size: 11, tint: Theme.deletion) {
-                        auth.cancelAuthentication(environment)
-                    }
-                }
-            } else {
-                InlineLink(title: ready ? "Re-authenticate" : "Set up credentials",
-                           size: 11, tint: environment.accent) {
-                    guard ready else {
-                        showingEnvironments = true
-                        return
-                    }
-                    auth.authenticate(environment)
-                    // A callback that is not ours needs the paste field, which lives in
-                    // the Environments sheet, so the sign-in and the sheet arrive together.
-                    if config.grant.usesBrowser && !config.usesLoopback {
-                        showingEnvironments = true
-                    }
-                }
-            }
-        }
-        .padding(.horizontal, 11)
-        .padding(.vertical, 10)
-        .surface(Theme.card, cornerRadius: 10, border: environment.accent.opacity(0.3))
     }
 
     // MARK: - Detail
@@ -342,6 +408,8 @@ struct DispatchView: View {
             RequestDetail(request: request)
                 .id(request.id)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .transition(.asymmetric(insertion: reduceMotion ? .opacity : .opacity.combined(with: .offset(x: 8)),
+                                        removal: .identity))
         } else {
             VStack(spacing: 10) {
                 Image(systemName: "arrow.up.arrow.down.circle")
@@ -361,7 +429,8 @@ private func deleteDialog(for request: SavedRequest, store: DispatchStore,
                           auth: DispatchAuthStore) -> Dialog {
     Dialog.impact("Delete \"\(request.name.isEmpty ? "Untitled" : request.name)\"?",
                   rows: [.init(title: "Request",
-                               detail: "The URL, headers, body and auth set up on it are deleted.")],
+                               detail: "The URL, headers, body and auth set up on it are deleted."),
+                         .init(title: "Other requests and environment credentials", detail: "Kept in every environment.", kept: true)],
                   warning: "The request cannot be restored.",
                   action: "Delete request") {
         store.remove(request.id)
@@ -389,6 +458,7 @@ private struct FolderRow: View {
     let isRenaming: Bool
     let accent: Color
     let onNewRequest: () -> Void
+    let onToggle: () -> Void
     let onDropRequest: (UUID) -> Void
     let onRename: (String) -> Void
     let onCancelRename: () -> Void
@@ -397,6 +467,7 @@ private struct FolderRow: View {
     @State private var hovering = false
     @State private var isDropTarget = false
     @FocusState private var nameFocused: Bool
+    @FocusState private var rowFocused: Bool
 
     var body: some View {
         HStack(spacing: 7) {
@@ -457,6 +528,17 @@ private struct FolderRow: View {
         .overlay(RoundedRectangle(cornerRadius: 8)
             .stroke(isDropTarget ? accent.opacity(0.65) : (hovering ? accent.opacity(0.18) : .clear),
                     lineWidth: isDropTarget ? 1.5 : 1))
+        .contentShape(Rectangle())
+        .onTapGesture { if !isRenaming { onToggle() } }
+        .focusable(!isRenaming).focused($rowFocused).focusEffectDisabled()
+        .overlay(RoundedRectangle(cornerRadius: 8).stroke(rowFocused ? accent : .clear, lineWidth: 2))
+        .onKeyPress(keys: [.space, .return]) { _ in onToggle(); return .handled }
+        .accessibilityElement(children: isRenaming ? .contain : .combine)
+        .accessibilityLabel("\(folder.name), \(requestCount) requests")
+        .accessibilityValue(expanded ? "Expanded" : "Collapsed")
+        .accessibilityAddTraits(.isButton)
+        .accessibilityAction { onToggle() }
+        .motion(Motion.control, value: expanded)
         .onHover { hovering = $0 }
         .dropDestination(for: String.self) { values, _ in
             guard let value = values.first, let requestID = UUID(uuidString: value) else {
@@ -530,13 +612,16 @@ private struct RequestRow: View {
     let selected: Bool
     let isRenaming: Bool
     let accent: Color
+    let onSelect: () -> Void
     let onRename: (String) -> Void
     let onCancelRename: () -> Void
 
+    @Environment(\.isEnabled) private var isEnabled
     @State private var hovering = false
     @State private var draftName = ""
     @State private var cancelled = false
     @FocusState private var nameFocused: Bool
+    @FocusState private var rowFocused: Bool
 
     var body: some View {
         HStack(spacing: 8) {
@@ -556,17 +641,38 @@ private struct RequestRow: View {
                     }
             } else {
                 Text(request.name.isEmpty ? "Untitled" : request.name)
-                    .font(.system(size: 13, weight: selected ? .semibold : .regular))
+                    .font(.system(size: 12, weight: selected ? .semibold : .regular))
                     .lineLimit(1)
-                    .truncationMode(.middle)
+                    .truncationMode(.tail)
             }
             Spacer(minLength: 0)
+            if request.isPinned {
+                Image(systemName: "star.fill").font(.system(size: 10)).foregroundStyle(accent)
+                    .accessibilityLabel("Pinned")
+            }
         }
         .padding(.leading, 10)
         .padding(.trailing, 10)
         .padding(.vertical, isRenaming ? 4 : 8)
-        .surface(selected ? Theme.card : (hovering ? Theme.field : .clear), cornerRadius: 8,
+        .surface(selected ? accent.opacity(0.10) : (hovering ? Theme.field : .clear), cornerRadius: 8,
                  border: selected ? accent.opacity(0.3) : .clear)
+        .overlay(alignment: .leading) {
+            if selected { Capsule().fill(accent).frame(width: 3, height: 17).accessibilityHidden(true) }
+        }
+        .contentShape(Rectangle())
+        .onTapGesture { if !isRenaming { onSelect() } }
+        .focusable(isEnabled && !isRenaming).focused($rowFocused).focusEffectDisabled()
+        .overlay(RoundedRectangle(cornerRadius: 8).stroke(rowFocused ? accent : .clear, lineWidth: 2))
+        .onKeyPress(keys: [.space, .return]) { _ in
+            guard isEnabled else { return .ignored }
+            onSelect()
+            return .handled
+        }
+        .accessibilityElement(children: isRenaming ? .contain : .combine)
+        .accessibilityAddTraits(selected ? [.isButton, .isSelected] : [.isButton])
+        .accessibilityAction { onSelect() }
+        .motion(Motion.control, value: selected)
+        .motion(Motion.hover, value: hovering)
         .onHover { hovering = $0 }
         .onAppear { prepareRename() }
         .onChange(of: isRenaming) { _, _ in prepareRename() }
@@ -593,7 +699,7 @@ private struct MethodTag: View {
         Text(method.rawValue)
             .font(.mono(9, .bold))
             .foregroundStyle(method.tint)
-            .frame(width: 42, alignment: .leading)
+            .frame(width: 34, alignment: .leading)
     }
 }
 
@@ -601,19 +707,24 @@ private struct MethodTag: View {
 
 private struct RequestDetail: View {
     @State private var draft: SavedRequest
-    @State private var tab = Tab.queryParams
     @State private var copiedCurl = false
+    @State private var copyReset: Task<Void, Never>?
+    @State private var renamingTitle = false
 
     @Environment(DispatchStore.self) private var store
     @Environment(DispatchRunner.self) private var runner
     @Environment(DispatchAuthStore.self) private var auth
     @Environment(DialogPresenter.self) private var dialogs
 
-    private enum Tab: String, CaseIterable, Identifiable {
-        case queryParams = "Query params", pathParams = "Path params"
-        case headers = "Headers", body = "Body", auth = "Auth"
-        var id: String { rawValue }
-    }
+    @Environment(MenuPresenter.self) private var menus
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @FocusState private var nameFocused: Bool
+    @FocusState private var urlFocused: Bool
+    @Namespace private var tabPanels
+    @State private var dragHeight: CGFloat?
+
+    private typealias Tab = DispatchWorkbenchState.RequestTab
+    private var tab: Tab { store.workbench.requestTab }
 
     init(request: SavedRequest) {
         _draft = State(initialValue: request)
@@ -622,10 +733,22 @@ private struct RequestDetail: View {
     private var environment: ApiEnvironment { auth.active }
     private var running: Bool { runner.isRunning(draft.id, in: environment) }
     private var result: HTTPResult? { runner.result(draft.id, in: environment) }
-    private var sendable: Bool { !draft.url.isEmpty }
+    private var sendable: Bool {
+        let resolved = DispatchRunner.resolve(draft, environment: environment, authorization: nil,
+                                              properties: auth.properties(for: environment))
+        return resolved.problems.isEmpty && DispatchRunner.isValidURL(resolved.url)
+    }
 
-    private var curlMenu: [MenuEntry] {
-        [.item("Copy as curl", icon: "terminal", action: copyAsCurl)]
+    private var requestMenu: [MenuEntry] {
+        [.item("Rename request") { renamingTitle = true; nameFocused = true },
+         .item("Duplicate request") {
+             if let copy = store.duplicate(draft.id) { auth.copyBasicPassword(from: draft.id, to: copy) }
+         },
+         .item("Copy as curl", icon: "terminal", subtitle: "Secrets masked", action: copyAsCurl),
+         .separator,
+         .item("Delete request", kind: .destructive) {
+             dialogs.show(deleteDialog(for: draft, store: store, auth: auth))
+         }]
     }
 
     var body: some View {
@@ -633,105 +756,145 @@ private struct RequestDetail: View {
             title
             urlBar
             resolvedLine
-            tabs
-            Divider().overlay(Theme.hairline)
-            editor
-            Divider().overlay(Theme.hairline)
-            ResponsePane(result: result, running: running)
+            GeometryReader { geometry in
+                let height = DispatchSplitLayout.responseHeight(dragHeight ?? store.responseHeight,
+                                                               available: geometry.size.height)
+                VStack(spacing: 0) {
+                    VStack(spacing: 0) {
+                        tabs
+                        ZStack {
+                            ForEach(Tab.allCases) { item in
+                                editor(for: item)
+                                    .opacity(tab == item ? 1 : 0)
+                                    .allowsHitTesting(tab == item && !store.workbench.responseExpanded)
+                                    .accessibilityHidden(tab != item || store.workbench.responseExpanded)
+                                    .disabled(tab != item || store.workbench.responseExpanded)
+                                    .accessibilityElement(children: .contain)
+                                    .accessibilityLabel(item.rawValue)
+                                    .accessibilityLabeledPair(role: .content, id: item, in: tabPanels)
+                            }
+                        }
+                        .clipped()
+                        .motion(Motion.reveal, value: tab)
+                    }
+                    .frame(height: store.workbench.responseExpanded ? 0
+                           : max(0, geometry.size.height - height - DispatchSplitLayout.handleHeight))
+                    .clipped()
+                    .allowsHitTesting(!store.workbench.responseExpanded)
+                    .disabled(store.workbench.responseExpanded)
+                    .accessibilityHidden(store.workbench.responseExpanded)
+                    if !store.workbench.responseExpanded {
+                        DispatchResponseGrip(height: height, availableHeight: geometry.size.height,
+                                             dragHeight: $dragHeight)
+                            .transition(.asymmetric(insertion: .opacity, removal: .identity))
+                    }
+                    DispatchResponsePane(result: result, running: running, environment: environment,
+                                         cancel: cancel, retry: send)
+                        .frame(maxHeight: .infinity)
+                }
+                .motion(Motion.control, value: store.workbench.responseExpanded)
+            }
         }
         .onChange(of: draft) { _, new in store.update(new) }
-        // The sidebar can rename this request too. Without this the old name in the
-        // draft would be written back on the next edit here.
-        .onChange(of: store.selected?.name) { _, name in
-            if let name, name != draft.name { draft.name = name }
+        .onChange(of: store.selected) { _, request in
+            if let request, request.id == draft.id, request != draft { draft = request }
+        }
+        .onChange(of: running) { wasRunning, running in
+            if wasRunning, !running, let result {
+                AccessibilityNotification.Announcement("\(environment.label): \(result.statusText)").post()
+            }
+        }
+        .onExitCommand {
+            if dialogs.current != nil { dialogs.dismiss() }
+            else if menus.isOpen { menus.dismiss() }
+            else if running { cancel() }
         }
     }
 
     private var title: some View {
         HStack(spacing: 10) {
-            TextField("Name", text: $draft.name)
-                .textFieldStyle(.plain)
-                .font(.serif(18))
-            Spacer(minLength: 8)
-            InlineLink(title: "Delete", tint: Theme.deletion) {
-                dialogs.show(deleteDialog(for: draft, store: store, auth: auth))
+            if let folder = store.folders.first(where: { $0.id == draft.folderID }) {
+                Text(folder.name).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1)
+                Image(systemName: "chevron.right").font(.system(size: 9)).foregroundStyle(.secondary)
             }
+            Group {
+                if renamingTitle {
+                    TextField("Request name", text: $draft.name)
+                        .textFieldStyle(.plain).focused($nameFocused)
+                        .padding(4).fieldSurface(cornerRadius: 5)
+                        .overlay(RoundedRectangle(cornerRadius: 5).stroke(environment.accent))
+                        .onSubmit { nameFocused = false }
+                        .onExitCommand { nameFocused = false }
+                        .onChange(of: nameFocused) { _, focused in if !focused { renamingTitle = false } }
+                } else {
+                    Text(draft.name.isEmpty ? "Untitled" : draft.name)
+                        .lineLimit(1).truncationMode(.tail)
+                        .contentShape(Rectangle())
+                        .onTapGesture { renamingTitle = true; nameFocused = true }
+                        .accessibilityAction(named: "Rename request") { renamingTitle = true; nameFocused = true }
+                }
+            }
+            .font(.serif(20))
+            .accessibilityLabel("Request name: \(draft.name)")
+            Spacer(minLength: 0)
+            if copiedCurl {
+                Label("Copied curl", systemImage: "checkmark").font(.system(size: 10)).foregroundStyle(environment.accent)
+            }
+            GlyphButton(icon: draft.isPinned ? "star.fill" : "star", side: 27, tint: environment.accent) {
+                store.togglePin(draft.id)
+            }
+            .accessibilityLabel(draft.isPinned ? "Unpin request" : "Pin to top of folder")
+            GlyphButton(icon: "ellipsis", side: 27)
+                .appMenu { requestMenu }
+                .accessibilityLabel("More request actions")
         }
-        .padding(.horizontal, 20)
-        .padding(.top, 18)
-        .padding(.bottom, 12)
+        .padding(.horizontal, 20).frame(height: 55)
     }
 
     private var urlBar: some View {
         HStack(spacing: 8) {
-            HStack(spacing: 6) {
-                Text(draft.method.rawValue)
-                    .font(.mono(12, .bold))
-                    .foregroundStyle(draft.method.tint)
-                Image(systemName: "chevron.down")
-                    .font(.system(size: 9, weight: .semibold))
-                    .foregroundStyle(.secondary)
-            }
-            .fixedSize()
-            .padding(.horizontal, 10)
-            .padding(.vertical, 9)
-            .cardSurface(cornerRadius: 9)
-            .appMenu {
-                HTTPMethod.allCases.map { method in
-                    .item(method.rawValue) { draft.method = method }
+            HStack(spacing: 10) {
+                HStack(spacing: 6) {
+                    Text(draft.method.rawValue).font(.mono(11, .bold)).foregroundStyle(draft.method.tint)
+                    MenuChevron(size: 9)
                 }
-            }
-
-            TextField("https://host/path - {{env}} resolves per environment", text: $draft.url)
-                .textFieldStyle(.plain)
-                .font(.mono(12))
-                .lineLimit(1)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 9)
-                .surface(Theme.card, cornerRadius: 9, border: environment.accent.opacity(0.35))
-                .onSubmit(send)
-
-            HStack(spacing: 0) {
-                Button {
-                    if running {
-                        cancel()
-                    } else {
-                        send()
+                .padding(.horizontal, 12).frame(height: 40)
+                .contentShape(Rectangle())
+                .appMenu {
+                    HTTPMethod.allCases.map { method in
+                        .item(method.rawValue, checked: method == draft.method) { draft.method = method }
                     }
-                } label: {
-                    Text(running ? "Cancel" : "Send")
-                        .font(.system(size: 13, weight: .semibold))
-                        .padding(.horizontal, 20)
-                        .padding(.vertical, 9)
-                        .contentShape(Rectangle())
-                        .opacity(sendable || running ? 1 : 0.45)
                 }
-                .buttonStyle(.plain)
-                .hoverLift()
-                .disabled(!running && !sendable)
-
-                Rectangle()
-                    .fill(.white.opacity(0.35))
-                    .frame(width: 1, height: 16)
-
-                // A tick in place of the chevron says the copy landed, since the menu
-                // closes on the click and takes the only other place to say so with it.
-                Image(systemName: copiedCurl ? "checkmark" : "chevron.down")
-                    .font(.system(size: 9, weight: .bold))
-                    .frame(width: 30)
-                    .frame(maxHeight: .infinity)
-                    .contentShape(Rectangle())
-                    .appMenu { curlMenu }
-                    .accessibilityLabel("More request actions")
+                .accessibilityLabel("Request method: \(draft.method.rawValue)")
+                Rectangle().fill(Theme.border).frame(width: 1)
+                TextField("https://host/path", text: $draft.url)
+                    .textFieldStyle(.plain).font(.mono(12)).lineLimit(1)
+                    .focused($urlFocused)
+                    .accessibilityLabel("Request URL")
+                    .onSubmit(send)
+                    .padding(.trailing, 10)
             }
-            .fixedSize(horizontal: false, vertical: true)
-            .foregroundStyle(.white)
-            .background(RoundedRectangle(cornerRadius: 9)
-                .fill(running ? Theme.deletion : environment.accentFill))
-            .clipShape(RoundedRectangle(cornerRadius: 9))
+            .frame(height: 40)
+            .surface(Theme.field, cornerRadius: 9,
+                     border: urlFocused ? environment.accent : Theme.border)
+            ActionButton(title: running ? "Cancel" : "Send request", tone: running ? .danger : .green,
+                         height: 40, size: 12, shortcut: running ? "Esc" : "⌘↵",
+                         keyboardShortcut: KeyboardShortcut(.return, modifiers: .command)) {
+                guard dialogs.current == nil, !menus.isOpen else { return }
+                if running { cancel() } else { send() }
+            }
+            .disabled(!running && !sendable)
+            .background {
+                Button("") {
+                    guard dialogs.current == nil, !menus.isOpen else { return }
+                    if running { cancel() } else { send() }
+                }
+                .buttonStyle(.plain).keyboardShortcut(.return, modifiers: .control)
+                .disabled(!running && !sendable).opacity(0).accessibilityHidden(true)
+            }
         }
-        .padding(.horizontal, 20)
-        .padding(.bottom, 6)
+        .padding(.horizontal, 20).padding(.bottom, 6)
+        .motion(Motion.control, value: draft.method)
     }
 
     // What the URL becomes on send, so the template stays editable above while the
@@ -757,59 +920,65 @@ private struct RequestDetail: View {
     }
 
     private var tabs: some View {
-        HStack(spacing: 6) {
-            ForEach(Tab.allCases) { item in
-                TabButton(title: item.rawValue, detail: detail(for: item), selected: tab == item) {
-                    tab = item
-                }
-            }
-            Spacer()
-        }
-        .padding(.horizontal, 20)
-        .padding(.bottom, 10)
+        DispatchTabs(items: Tab.allCases, selection: Binding(get: { tab }, set: { store.workbench.requestTab = $0 }),
+                     namespace: tabPanels, label: { $0.rawValue }, detail: detail)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 20)
+            .overlay(alignment: .bottom) { Theme.border.frame(height: 1) }
+            .accessibilityLabel("Request configuration tabs")
     }
 
-    // What each tab holds, so a send's shape can be read without opening any of them.
     private func detail(for tab: Tab) -> String? {
         switch tab {
-        case .queryParams: countDetail(draft.queryParams.count)
-        case .pathParams: countDetail(draft.pathParams.count)
+        case .parameters: countDetail(draft.queryParams.count + draft.pathParams.count)
         case .headers: countDetail(draft.headers.count)
         case .body: draft.bodyType == .none ? nil : draft.bodyType.label
-        case .auth:
-            switch draft.authMode {
-            case .none: "off"
-            case .environmentToken: "\(environment.name) token"
-            case .basic: "basic"
-            }
+        case .auth: draft.authMode == .none ? "off" : nil
         }
     }
 
-    private func countDetail(_ count: Int) -> String? {
-        count == 0 ? nil : "\(count)"
-    }
+    private func countDetail(_ count: Int) -> String? { count == 0 ? nil : "\(count)" }
 
-    @ViewBuilder private var editor: some View {
+    @ViewBuilder private func editor(for tab: Tab) -> some View {
         switch tab {
-        case .queryParams:
-            paramsEditor(title: "QUERY PARAMS",
-                         note: "Added to the URL as ?key=value on send.",
-                         keyPlaceholder: "key",
-                         addLabel: "+ Add query param",
-                         params: $draft.queryParams) {
-                draft.queryParams.append(HeaderField(key: "", value: ""))
+        case .parameters:
+            VStack(spacing: 0) {
+                HStack {
+                    Text(store.workbench.pathParameters ? "Path parameters" : "Query parameters")
+                        .font(.system(size: 11)).foregroundStyle(.secondary)
+                    Spacer()
+                    InlineLink(title: store.workbench.pathParameters ? "Query parameters" : "Path parameters",
+                               size: 11, tint: environment.accent, icon: "chevron.right") {
+                        store.workbench.pathParameters.toggle()
+                    }
+                }.padding(.horizontal, 20).padding(.top, 12)
+                ZStack {
+                    parameterEditor(paths: false)
+                        .opacity(store.workbench.pathParameters ? 0 : 1)
+                        .allowsHitTesting(!store.workbench.pathParameters)
+                        .accessibilityHidden(store.workbench.pathParameters)
+                        .disabled(store.workbench.pathParameters)
+                    parameterEditor(paths: true)
+                        .opacity(store.workbench.pathParameters ? 1 : 0)
+                        .allowsHitTesting(store.workbench.pathParameters)
+                        .accessibilityHidden(!store.workbench.pathParameters)
+                        .disabled(!store.workbench.pathParameters)
+                }
             }
-        case .pathParams:
-            paramsEditor(title: "PATH PARAMS",
-                         note: "Values fill the :name segments typed into the URL.",
-                         keyPlaceholder: "name",
-                         addLabel: "+ Add path param",
-                         params: $draft.pathParams) {
-                draft.pathParams.append(HeaderField(key: "", value: ""))
-            }
+            .motion(Motion.reveal, value: store.workbench.pathParameters)
         case .headers: headerEditor
         case .body: bodyEditor
         case .auth: authEditor
+        }
+    }
+
+    private func parameterEditor(paths: Bool) -> some View {
+        paramsEditor(title: paths ? "PATH" : "QUERY",
+                     note: paths ? "Values fill the :name segments in the URL." : "Added to the URL as ?key=value.",
+                     keyPlaceholder: "Name", addLabel: "+ Add parameter",
+                     params: paths ? $draft.pathParams : $draft.queryParams) {
+            if paths { draft.pathParams.append(HeaderField(key: "", value: "")) }
+            else { draft.queryParams.append(HeaderField(key: "", value: "")) }
         }
     }
 
@@ -823,19 +992,19 @@ private struct RequestDetail: View {
                              keyPlaceholder: keyPlaceholder,
                              params: params)
 
-                ActionButton(title: addLabel, tone: .outlined, height: 34, size: 12, action: add)
-                    .padding(.top, 14)
+                InlineLink(title: addLabel, size: 11, tint: environment.accent, action: add)
+                    .padding(.top, 8)
             }
-            .padding(20)
+            .padding(.horizontal, 20).padding(.vertical, 10)
         }
         .frame(maxHeight: .infinity)
+        .motion(Motion.control, value: params.wrappedValue.map(\.id))
     }
 
     private func paramSection(title: String, note: String, keyPlaceholder: String,
                               params: Binding<[HeaderField]>) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
-                SectionLabel(title)
                 Text(note)
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
@@ -848,6 +1017,7 @@ private struct RequestDetail: View {
                           valuePlaceholder: "value") {
                     params.wrappedValue.removeAll { $0.id == param.id }
                 }
+                .transition(.fadeIn)
             }
         }
     }
@@ -855,12 +1025,11 @@ private struct RequestDetail: View {
     private var authEditor: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 12) {
-                OptionMenu(caption: "AUTHORIZATION",
-                           value: draft.authMode.label,
-                           options: AuthMode.allCases.map { mode in
-                               (mode.label, mode == draft.authMode, { draft.authMode = mode })
-                           })
-                    .frame(width: 260)
+                HStack(spacing: 4) {
+                    ForEach(AuthMode.allCases) { mode in
+                        ChoicePill(title: mode.label, selected: draft.authMode == mode) { draft.authMode = mode }
+                    }
+                }
 
                 switch draft.authMode {
                 case .none:
@@ -936,6 +1105,7 @@ private struct RequestDetail: View {
             .padding(20)
         }
         .frame(maxHeight: .infinity)
+        .motion(Motion.control, value: draft.headers.map(\.id))
     }
 
     // The type picker lives in the pane rather than on the tab row, which has no room
@@ -996,6 +1166,7 @@ private struct RequestDetail: View {
     }
 
     private func send() {
+        guard sendable, !running, dialogs.current == nil, !menus.isOpen else { return }
         // The draft is what the user is looking at, and it may be a keystroke ahead of
         // the store, so the run is built from it rather than from the saved copy.
         let request = draft
@@ -1027,13 +1198,13 @@ private struct RequestDetail: View {
             message: consequence(of: request.method),
             content: AnyView(ResolvedRequestBox(request: request, environment: env, properties: properties)),
             actions: actions,
-            width: 400))
+            width: 440,
+            isModal: true))
     }
 
     private func fire(_ request: SavedRequest, in env: ApiEnvironment, properties: [EnvironmentProperty]) {
-        Task {
-            await runner.send(request, environment: env,
-                              authorization: authorization(for: request, in: env), properties: properties)
+        runner.start(request, environment: env, properties: properties) {
+            await authorization(for: request, in: env)
         }
     }
 
@@ -1066,12 +1237,15 @@ private struct RequestDetail: View {
             dialogs.show(.notice("Cannot export this request", message: resolved.problems.joined(separator: "\n")))
             return
         }
-        Task {
-            Pasteboard.copy(CurlCommand.text(for: request, environment: env,
-                                             authorization: request.authMode == .none ? nil : "REDACTED",
-                                             properties: properties))
-            copiedCurl = true
+        Pasteboard.copy(CurlCommand.text(for: request, environment: env,
+                                         authorization: request.authMode == .none ? nil : "REDACTED",
+                                         properties: properties))
+        copiedCurl = true
+        AccessibilityNotification.Announcement("Copied curl with secrets masked").post()
+        copyReset?.cancel()
+        copyReset = Task {
             try? await Task.sleep(for: .seconds(2))
+            guard !Task.isCancelled else { return }
             copiedCurl = false
         }
     }
@@ -1110,29 +1284,6 @@ private struct ResolvedRequestBox: View {
     }
 }
 
-// A tab with, when there is one, a count or a word after it saying what is behind it.
-private struct TabButton: View {
-    let title: String
-    var detail: String? = nil
-    let selected: Bool
-    let action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            Text(detail.map { "\(title) · \($0)" } ?? title)
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(selected ? .primary : .secondary)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 6)
-                .surface(selected ? Theme.card : .clear, cornerRadius: 7,
-                         border: selected ? Theme.border : .clear)
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .hoverLift()
-    }
-}
-
 // The one "+ Add" button under a list: a pill that unfolds into a menu of the kinds of
 // row it can add, each row saying where that kind lands.
 private struct AddPill: View {
@@ -1147,6 +1298,8 @@ private struct AddPill: View {
 
 private struct HeaderRow: View {
     @Binding var header: HeaderField
+    private enum Field: Hashable { case name, value }
+    @FocusState private var focused: Field?
     var keyPlaceholder = "Header"
     var valuePlaceholder = "value"
     // Only real headers are held to the header name rules. A query or path param is
@@ -1168,25 +1321,32 @@ private struct HeaderRow: View {
             HStack(spacing: 12) {
                 Toggle(isOn: $header.enabled) { EmptyView() }
                     .toggleStyle(.appCheckbox)
+                    .accessibilityLabel("Enable \(header.key.isEmpty ? keyPlaceholder : header.key)")
 
                 TextField(keyPlaceholder, text: $header.key)
                     .textFieldStyle(.plain)
+                    .focused($focused, equals: .name)
                     .font(.mono(12, .semibold))
                     .foregroundStyle(nameProblem == nil ? Color.primary : Theme.deletion)
-                    .frame(width: 200, alignment: .leading)
+                    .frame(minWidth: 80, idealWidth: 140, maxWidth: 180, alignment: .leading)
+                    .accessibilityLabel("\(keyPlaceholder) name")
                     .onChange(of: header.key) {
                         if isHeader { header.splitPastedName() }
                     }
 
                 TextField(valuePlaceholder, text: $header.value)
                     .textFieldStyle(.plain)
+                    .focused($focused, equals: .value)
                     .font(.mono(12))
                     .frame(maxWidth: .infinity, alignment: .leading)
+                    .accessibilityLabel("Value for \(header.key.isEmpty ? keyPlaceholder : header.key)")
 
                 Button(action: onDelete) {
-                    Image(systemName: "trash").font(.system(size: 11))
+                    Image(systemName: "xmark").font(.system(size: 11))
+                        .frame(width: 24, height: 24).contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+                .accessibilityLabel("Remove \(header.key.isEmpty ? keyPlaceholder : header.key)")
                 .hoverLift(amount: Motion.smallLift)
                 .foregroundStyle(.secondary)
             }
@@ -1199,189 +1359,11 @@ private struct HeaderRow: View {
             }
         }
         .opacity(header.enabled ? 1 : 0.45)
-        .padding(.horizontal, 14)
-        .padding(.vertical, 10)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
         .surface(Theme.card, cornerRadius: 10,
-                 border: nameProblem == nil ? Theme.border : Theme.deletion)
-    }
-}
-
-// MARK: - The answer
-
-private struct ResponsePane: View {
-    let result: HTTPResult?
-    let running: Bool
-
-    @Environment(DispatchStore.self) private var store
-
-    @State private var tab = ResponseTab.body
-    // Height while a drag is in flight; the store keeps it once the drag ends.
-    @State private var dragHeight: CGFloat?
-    // Height at the moment the drag began; the translation is measured from there.
-    @State private var dragStartHeight: CGFloat?
-
-    private enum ResponseTab: String, CaseIterable, Identifiable {
-        case body = "Body", headers = "Headers"
-        var id: String { rawValue }
-    }
-
-    private var height: CGFloat { dragHeight ?? store.responseHeight }
-
-    // The tabs are only worth showing once there is a choice to make: a failure never
-    // reaches the point of having headers, and neither does a body-only result.
-    private func tabbed(_ result: HTTPResult) -> Bool {
-        result.failure == nil && !result.headers.isEmpty
-    }
-
-    // The pane falls back to the body whenever the headers tab has nothing behind it,
-    // so a result with no headers cannot strand it on an empty list with the tab that
-    // would lead back out of it hidden.
-    private func shown(for result: HTTPResult) -> ResponseTab {
-        tabbed(result) ? tab : .body
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            status
-            Divider().overlay(Theme.hairline)
-            content
-        }
-        .frame(height: height)
-        .background(Theme.sidebar)
-    }
-
-    private var status: some View {
-        HStack(spacing: 10) {
-            SectionLabel("RESPONSE")
-
-            if let result {
-                Text(result.statusText)
-                    .font(.system(size: 11, weight: .bold))
-                    .foregroundStyle(result.tint)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 3)
-                    .background(Capsule().fill(result.tint.opacity(0.14)))
-
-                Text("\(Int(result.duration * 1000)) ms · \(byteText(result.byteCount))"
-                     + (result.isTruncated ? " · truncated" : ""))
-                    .font(.mono(11))
-                    .foregroundStyle(.secondary)
-
-                if tabbed(result) {
-                    HStack(spacing: 4) {
-                        ForEach(ResponseTab.allCases) { item in
-                            TabButton(title: item.rawValue,
-                                      detail: item == .headers ? "\(result.headers.count)" : nil,
-                                      selected: shown(for: result) == item) {
-                                tab = item
-                            }
-                        }
-                    }
-                    .padding(.leading, 2)
-                }
-            }
-
-            Spacer()
-
-            if running {
-                Text("Waiting…")
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
-            } else if let text = copyable, !text.isEmpty {
-                CopyButton(copyLabel) { text }
-            }
-        }
-        .padding(.horizontal, 20)
-        .padding(.vertical, 10)
-        .contentShape(Rectangle())
-        // The status bar doubles as the resize handle, which is where the hand
-        // naturally goes when the pane is the wrong size.
-        .gesture(
-            DragGesture(coordinateSpace: .global)
-                .onChanged { value in
-                    let start = dragStartHeight ?? height
-                    dragStartHeight = start
-                    dragHeight = max(DispatchStore.minimumResponseHeight, start - value.translation.height)
-                }
-                .onEnded { _ in
-                    if let dragHeight { store.responseHeight = dragHeight }
-                    dragHeight = nil
-                    dragStartHeight = nil
-                })
-        .cursorOnHover(.resizeUpDown)
-    }
-
-    @ViewBuilder private var content: some View {
-        if let result {
-            ScrollView {
-                if let failure = result.failure {
-                    Text(failure)
-                        .font(.system(size: 12))
-                        .foregroundStyle(ResponseStyle.failure)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(20)
-                } else if shown(for: result) == .headers {
-                    VStack(alignment: .leading, spacing: 4) {
-                        ForEach(result.headers) { header in
-                            HStack(alignment: .top, spacing: 8) {
-                                Text(header.key)
-                                    .font(.mono(11, .semibold))
-                                    .foregroundStyle(ResponseStyle.key)
-                                    .frame(width: 200, alignment: .leading)
-                                Text(header.value)
-                                    .font(.mono(11))
-                                    .foregroundStyle(ResponseStyle.base)
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                            }
-                        }
-                    }
-                    .textSelection(.enabled)
-                    .padding(20)
-                } else if result.body.isEmpty {
-                    Text("No body came back.")
-                        .font(.mono(11))
-                        .foregroundStyle(ResponseStyle.base.opacity(0.6))
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(20)
-                } else {
-                    Text(ResponseStyle.highlight(result.body))
-                        .font(.mono(11))
-                        .lineSpacing(4)
-                        .textSelection(.enabled)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(20)
-                }
-            }
-            .frame(maxWidth: .infinity)
-            .background(ResponseStyle.background)
-        } else {
-            Text(running ? "Sending…" : "Send the request to see what comes back.")
-                .font(.system(size: 12))
-                .foregroundStyle(.secondary)
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                .padding(20)
-        }
-    }
-
-    // The button sits beside the tabs, so it copies whichever of them is open rather
-    // than always reaching past the headers for the body.
-    private var copyable: String? {
-        guard let result else { return nil }
-        if let failure = result.failure { return failure }
-        guard shown(for: result) == .headers else { return result.body }
-        return result.headers.map { "\($0.key): \($0.value)" }.joined(separator: "\n")
-    }
-
-    private var copyLabel: String {
-        guard let result, shown(for: result) == .headers else { return "Copy response" }
-        return "Copy headers"
-    }
-
-    private func byteText(_ count: Int) -> String {
-        if count < 1024 { return "\(count) B" }
-        if count < 1024 * 1024 { return String(format: "%.1f kB", Double(count) / 1024) }
-        return String(format: "%.1f MB", Double(count) / Double(1024 * 1024))
+                 border: nameProblem != nil ? Theme.deletion : focused != nil ? Theme.accent : Theme.border)
+        .motion(Motion.hover, value: focused)
     }
 }
 

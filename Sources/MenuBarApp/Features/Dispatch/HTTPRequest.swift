@@ -116,6 +116,7 @@ struct RequestFolder: Identifiable, Codable, Equatable {
 struct SavedRequest: Identifiable, Codable, Equatable {
     var id = UUID()
     var name: String
+    var isPinned = false
     // This stays optional so collections saved before folders existed still decode.
     // The store assigns missing and unknown folders to Default as it loads them.
     var folderID: UUID?
@@ -144,6 +145,7 @@ struct SavedRequest: Identifiable, Codable, Equatable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         id = try container.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
         name = try container.decodeIfPresent(String.self, forKey: .name) ?? "Untitled"
+        isPinned = try container.decodeIfPresent(Bool.self, forKey: .isPinned) ?? false
         folderID = try container.decodeIfPresent(UUID.self, forKey: .folderID)
         method = try container.decodeIfPresent(HTTPMethod.self, forKey: .method) ?? .get
         url = try container.decodeIfPresent(String.self, forKey: .url) ?? ""
@@ -285,15 +287,18 @@ struct SavedRequestCollection: Codable, Equatable {
     // The folders the user has opened. A folder starts closed, so one that is missing
     // here stays closed the next time the tool opens.
     var expandedFolderIDs: [UUID]
+    var workbench: DispatchWorkbenchState
 
     init(folders: [RequestFolder] = [],
          requests: [SavedRequest] = [],
          importedSiteRequestIDs: [UUID] = [],
-         expandedFolderIDs: [UUID] = []) {
+         expandedFolderIDs: [UUID] = [],
+         workbench: DispatchWorkbenchState = .init()) {
         self.folders = folders
         self.requests = requests
         self.importedSiteRequestIDs = importedSiteRequestIDs
         self.expandedFolderIDs = expandedFolderIDs
+        self.workbench = workbench
     }
 
     init(from decoder: Decoder) throws {
@@ -304,6 +309,7 @@ struct SavedRequestCollection: Codable, Equatable {
             [UUID].self, forKey: .importedSiteRequestIDs) ?? []
         expandedFolderIDs = try container.decodeIfPresent([UUID].self,
                                                           forKey: .expandedFolderIDs) ?? []
+        workbench = try container.decodeIfPresent(DispatchWorkbenchState.self, forKey: .workbench) ?? .init()
     }
 }
 
@@ -320,7 +326,7 @@ struct HTTPResult: Equatable {
 
     var statusText: String {
         guard failure == nil else { return "Failed" }
-        return "\(status) \(HTTPURLResponse.localizedString(forStatusCode: status).capitalized)"
+        return "\(status) \(status == 200 ? "OK" : HTTPURLResponse.localizedString(forStatusCode: status).capitalized)"
     }
 
     var tint: Color {

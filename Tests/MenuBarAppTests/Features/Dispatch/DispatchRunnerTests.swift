@@ -130,6 +130,40 @@ struct DispatchRunnerTests {
         #expect(runner.result(request.id, in: testEnvironment)?.failure == nil)
     }
 
+    @MainActor
+    @Test func cancellationDuringAuthenticationNeverSendsAndKeepsEnvironmentsSeparate() async throws {
+        StubURLProtocol.prepare(body: Data("ok".utf8))
+        let runner = DispatchRunner(sessionConfiguration: stubConfiguration())
+        let request = SavedRequest(name: "auth wait", url: "https://example.test")
+        let other = ApiEnvironment(name: "other")
+        var resume: CheckedContinuation<String?, Never>?
+        runner.start(request, environment: testEnvironment) {
+            await withCheckedContinuation { resume = $0 }
+        }
+        while resume == nil { await Task.yield() }
+        #expect(runner.isRunning(request.id, in: testEnvironment))
+        #expect(!runner.isRunning(request.id, in: other))
+        runner.cancel(request.id, in: testEnvironment)
+        resume?.resume(returning: "Bearer cancelled")
+        await runner.send(request, environment: other)
+        #expect(runner.result(request.id, in: testEnvironment)?.failure == "Cancelled.")
+        #expect(runner.result(request.id, in: other)?.body == "ok")
+        #expect(StubURLProtocol.lastRequest?.value(forHTTPHeaderField: "Authorization") == nil)
+        #expect(!runner.isRunning(request.id, in: testEnvironment))
+    }
+
+    @MainActor
+    @Test func invalidDestinationsNeverReachTheTransport() async {
+        StubURLProtocol.prepare(body: Data("never sent".utf8))
+        let runner = DispatchRunner(sessionConfiguration: stubConfiguration())
+        for url in ["", "ftp://example.test", "https://example.test/:id"] {
+            let request = SavedRequest(name: "invalid", url: url)
+            await runner.send(request, environment: testEnvironment)
+            #expect(runner.result(request.id, in: testEnvironment)?.failure == "That URL is not valid.")
+        }
+        #expect(StubURLProtocol.lastRequest == nil)
+    }
+
     private func stubConfiguration() -> URLSessionConfiguration {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [StubURLProtocol.self]

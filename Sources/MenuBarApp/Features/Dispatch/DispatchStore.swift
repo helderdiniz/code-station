@@ -9,17 +9,27 @@ final class DispatchStore {
 
     private(set) var requests: [SavedRequest] = []
     private(set) var folders: [RequestFolder] = []
-    var selectedID: UUID?
+    var workbench = DispatchWorkbenchState() {
+        didSet { if workbench != oldValue { scheduleSave() } }
+    }
+    var selectedID: UUID? {
+        get { workbench.selectedID }
+        set { workbench.selectedID = newValue }
+    }
     private var expandedFolderIDs: Set<UUID> = []
     private var importedSiteRequestIDs: Set<UUID> = []
 
     // One height for the whole tool, so the pane keeps its size across requests.
     // It lives here rather than in the view, which is remade on every selection.
-    var responseHeight: CGFloat = 230
+    var responseHeight: CGFloat {
+        get { workbench.responseHeight }
+        set { workbench.responseHeight = newValue }
+    }
 
     let storeURL: URL
     private(set) var loadError: String?
     private(set) var saveError: String?
+    private(set) var hasPendingChanges = false
 
     // Editing a URL is one write per keystroke, so those are coalesced into one file
     // write the way the project store does it.
@@ -128,7 +138,7 @@ final class DispatchStore {
         guard let i = requests.firstIndex(where: { $0.id == request.id }) else { return }
         guard requests[i] != request else { return }
         requests[i] = request
-        saver.schedule()
+        scheduleSave()
     }
 
     func rename(_ id: UUID, to name: String) {
@@ -183,7 +193,7 @@ final class DispatchStore {
               let index = folders.firstIndex(where: { $0.id == id }) else { return }
         guard folders[index].name != name else { return }
         folders[index].name = name
-        saver.schedule()
+        scheduleSave()
     }
 
     func removeFolder(_ id: UUID) {
@@ -236,6 +246,21 @@ final class DispatchStore {
         requests.filter { $0.folderID == folderID }
     }
 
+    func visibleRequests(in folderID: UUID, matching query: String) -> [SavedRequest] {
+        let matches = requests(in: folderID).filter { request in
+            let query = query.trimmed
+            return query.isEmpty || "\(request.name) \(request.method.rawValue) \(request.url)"
+                .localizedStandardContains(query)
+        }
+        return matches.filter(\.isPinned) + matches.filter { !$0.isPinned }
+    }
+
+    func togglePin(_ id: UUID) {
+        guard let index = requests.firstIndex(where: { $0.id == id }) else { return }
+        requests[index].isPinned.toggle()
+        save()
+    }
+
     func requestCount(in folderID: UUID) -> Int {
         requests(in: folderID).count
     }
@@ -251,10 +276,15 @@ final class DispatchStore {
         } else {
             expandedFolderIDs.insert(folderID)
         }
-        saver.schedule()
+        scheduleSave()
     }
 
     // MARK: - Persistence
+
+    private func scheduleSave() {
+        hasPendingChanges = true
+        saver.schedule()
+    }
 
     @discardableResult
     func save() -> Bool {
@@ -273,9 +303,11 @@ final class DispatchStore {
             try PersistentFile.saveJSON(SavedRequestCollection(folders: folders,
                                                                requests: requests,
                                                                importedSiteRequestIDs: importedIDs,
-                                                               expandedFolderIDs: openFolderIDs),
+                                                               expandedFolderIDs: openFolderIDs,
+                                                               workbench: workbench),
                                         to: storeURL)
             saveError = nil
+            hasPendingChanges = false
             return true
         } catch {
             saveError = PersistentFile.saveMessage(for: storeURL, error: error)
@@ -308,6 +340,7 @@ final class DispatchStore {
             requests = saved.requests
             importedSiteRequestIDs = Set(saved.importedSiteRequestIDs)
             openFolderIDs = saved.expandedFolderIDs
+            workbench = saved.workbench
         } else if let saved = try? decoder.decode([SavedRequest].self, from: data) {
             // A file from before folders existed is a bare list of requests.
             folders = []
@@ -320,6 +353,7 @@ final class DispatchStore {
             return
         }
         loadError = nil
+        if !requests.contains(where: { $0.id == selectedID }) { selectedID = nil }
 
         if !folders.contains(where: \.isDefault) {
             folders.insert(.default, at: 0)

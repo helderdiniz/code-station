@@ -19,6 +19,8 @@ final class DispatchRunner {
     private(set) var inFlight: Set<Key> = []
     private(set) var results: [Key: HTTPResult] = [:]
 
+    private var preparations: [Key: Task<Void, Never>] = [:]
+
     @ObservationIgnored private let maxResponseBytes: Int
     @ObservationIgnored private let maxRetainedResultBytes: Int
     @ObservationIgnored private let session: URLSession
@@ -44,7 +46,8 @@ final class DispatchRunner {
     }
 
     func isRunning(_ id: UUID, in environment: ApiEnvironment) -> Bool {
-        inFlight.contains(Key(request: id, environment: environment))
+        let key = Key(request: id, environment: environment)
+        return inFlight.contains(key) || preparations[key] != nil
     }
 
     func result(_ id: UUID, in environment: ApiEnvironment) -> HTTPResult? {
@@ -52,7 +55,27 @@ final class DispatchRunner {
     }
 
     func cancel(_ id: UUID, in environment: ApiEnvironment) {
-        transfers[Key(request: id, environment: environment)]?.cancel()
+        let key = Key(request: id, environment: environment)
+        if let preparation = preparations.removeValue(forKey: key) {
+            preparation.cancel()
+            storeCancellation(for: key, started: Date())
+        }
+        transfers[key]?.cancel()
+    }
+
+    // Authentication is part of the cancellable wait and belongs to the same cache key
+    // as the transfer, even when the editor switches requests or environments.
+    func start(_ request: SavedRequest, environment: ApiEnvironment,
+               properties: [EnvironmentProperty] = [],
+               authorization: @escaping @MainActor () async -> String?) {
+        let key = Key(request: request.id, environment: environment)
+        guard !isRunning(request.id, in: environment) else { return }
+        preparations[key] = Task { [weak self] in
+            let header = await authorization()
+            guard !Task.isCancelled, let self else { return }
+            preparations[key] = nil
+            await send(request, environment: environment, authorization: header, properties: properties)
+        }
     }
 
     func send(_ request: SavedRequest, environment: ApiEnvironment,
@@ -238,11 +261,20 @@ final class DispatchRunner {
         }
     }
 
+    nonisolated static func isValidURL(_ text: String) -> Bool {
+        guard !text.isEmpty, !text.contains(where: { $0.isWhitespace }),
+              !text.contains("{{"), !text.contains("}}"),
+              let components = URLComponents(string: text),
+              let scheme = components.scheme?.lowercased(), ["http", "https"].contains(scheme),
+              let host = components.host, !host.isEmpty, components.url != nil else { return false }
+        return !components.percentEncodedPath.split(separator: "/").contains { $0.hasPrefix(":") }
+    }
+
     private static func build(_ request: SavedRequest, environment: ApiEnvironment,
                               authorization: String?, properties: [EnvironmentProperty]) -> Result<URLRequest, Problem> {
         let resolved = resolve(request, environment: environment, authorization: authorization, properties: properties)
         if !resolved.problems.isEmpty { return .failure(.properties(resolved.problems.joined(separator: "\n"))) }
-        guard let url = URL(string: resolved.url), url.scheme != nil, url.host != nil else {
+        guard isValidURL(resolved.url), let url = URL(string: resolved.url) else {
             return .failure(.url)
         }
 
