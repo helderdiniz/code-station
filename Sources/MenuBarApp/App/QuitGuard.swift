@@ -62,13 +62,14 @@ struct QuitConfirmation: View {
             action: "Quit",
             cancel: "Keep running",
             handler: quitGuard.quit)
-        dialog.content = AnyView(RunningSessionList(titles: running.map(\.title)))
+        dialog.content = AnyView(SessionTitleList(titles: running.map(\.title)))
         dialog.isModal = true
         dialogs.show(dialog)
     }
 }
 
-private struct RunningSessionList: View {
+// The sessions a dialog is about, listed by title.
+struct SessionTitleList: View {
     let titles: [String]
 
     private let shown = 4

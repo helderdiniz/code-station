@@ -70,6 +70,49 @@ private struct SnoozeChoices: View {
     }
 }
 
+// Says so when a timed snooze runs out, since nothing else about the session changes
+// when it does. It waits for any other dialog to be put away first, and every session
+// that came back while it waited is told of in one go.
+struct SnoozeReminder: View {
+    @Environment(ProjectStore.self) private var store
+    @Environment(DialogPresenter.self) private var dialogs
+
+    var body: some View {
+        Color.clear
+            .frame(width: 0, height: 0)
+            .accessibilityHidden(true)
+            .onChange(of: store.snoozeReminders.count, initial: true) { present() }
+            .onChange(of: dialogs.current?.id) { present() }
+    }
+
+    private func present() {
+        guard dialogs.current == nil, !store.snoozeReminders.isEmpty else { return }
+        let due = store.takeSnoozeReminders()
+        guard let first = due.first else { return }
+        if due.count == 1 {
+            dialogs.show(Dialog(
+                title: "\"\(first.session.title)\" is back",
+                message: "It was snoozed \(first.snooze.phrase()). It can notify you again.",
+                actions: [
+                    .init(label: "Open session", kind: .primary) {
+                        store.selectSession(first.session.id)
+                    },
+                    .init(label: "Snooze again") {
+                        dialogs.show(SessionSnoozeDialog.make(for: first.session, store: store))
+                    },
+                    .init(label: "OK", kind: .cancel),
+                ]))
+        } else {
+            var dialog = Dialog(
+                title: "\(due.count) sessions are back",
+                message: "Their snoozes have ended. They can notify you again.",
+                actions: [.init(label: "OK", kind: .cancel)])
+            dialog.content = AnyView(SessionTitleList(titles: due.map(\.session.title)))
+            dialogs.show(dialog)
+        }
+    }
+}
+
 // Over the composer while the session sleeps, with the way back.
 struct SessionSnoozeStrip: View {
     let snooze: SessionSnooze

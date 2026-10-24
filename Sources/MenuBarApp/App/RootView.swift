@@ -60,6 +60,7 @@ struct RootView: View {
             }
             .onPreferenceChange(PaneFindShortcutKey.self) { paneOwnsFindShortcut = $0 }
             ScheduledTaskConfirmation()
+            SnoozeReminder()
             AppUpdateRestartPrompt()
             QuitConfirmation(isFront: sheet == nil)
             VStack(spacing: 8) {

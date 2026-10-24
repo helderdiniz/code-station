@@ -64,6 +64,45 @@ struct SessionSnoozeTests {
         #expect(store.unreadCount(in: project.id) == 1)
     }
 
+    @Test func aTimedSnoozeRunningOutLeavesOneReminder() {
+        let sleeping = store.newSession(in: project.id)
+        let now = Date()
+        let snooze = SessionSnooze.until(now.addingTimeInterval(60))
+        store.snooze(sleeping.id, snooze)
+
+        store.expireSnoozes(now: now)
+        #expect(store.snoozeReminders.isEmpty)
+
+        store.expireSnoozes(now: now.addingTimeInterval(61))
+        let due = store.takeSnoozeReminders()
+        #expect(due.map(\.session.id) == [sleeping.id])
+        #expect(due.first?.snooze == snooze)
+        #expect(store.takeSnoozeReminders().isEmpty)
+    }
+
+    @Test func aSnoozeEndedByTheSessionOrThePersonLeavesNoReminder() {
+        let replied = store.newSession(in: project.id)
+        let woken = store.newSession(in: project.id)
+        store.snooze(replied.id, .untilReply)
+        store.snooze(woken.id, .until(Date().addingTimeInterval(3_600)))
+
+        store.noteTurnEnded(for: replied.id)
+        store.wake(woken.id)
+
+        #expect(store.snoozeReminders.isEmpty)
+    }
+
+    @Test func aSnoozeThatRanOutWhileTheAppWasClosedIsRemindedAtLaunch() throws {
+        let sleeping = store.newSession(in: project.id)
+        store.snooze(sleeping.id, .until(Date().addingTimeInterval(-60)))
+        #expect(store.save())
+
+        let reloaded = ProjectStore(preferences: testPreferences.store, storeURL: store.storeURL)
+
+        #expect(reloaded.session(sleeping.id)?.snooze == nil)
+        #expect(reloaded.takeSnoozeReminders().map(\.session.id) == [sleeping.id])
+    }
+
     @Test func theSnoozeSurvivesARelaunch() throws {
         let sleeping = store.newSession(in: project.id)
         store.snooze(sleeping.id, .untilWoken)

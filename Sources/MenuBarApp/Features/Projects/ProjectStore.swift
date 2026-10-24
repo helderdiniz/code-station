@@ -548,6 +548,20 @@ final class ProjectStore {
 
     @ObservationIgnored private var snoozeExpiry: Task<Void, Never>?
 
+    // Sessions whose timed snooze ran out on its own, with the snooze they had, waiting
+    // for the window to tell the person they are back. A snooze ended by a reply, a
+    // question or a click needs no reminder, since that already says so.
+    private(set) var snoozeReminders: [(sessionID: UUID, snooze: SessionSnooze)] = []
+
+    // Hands over the reminders still worth giving, so each one is shown once.
+    func takeSnoozeReminders() -> [(session: ChatSession, snooze: SessionSnooze)] {
+        let due = snoozeReminders.compactMap { reminder in
+            session(reminder.sessionID).map { (session: $0, snooze: reminder.snooze) }
+        }
+        snoozeReminders = []
+        return due
+    }
+
     // Read off the rail's copy, so a sidebar asking about every row observes the rows and
     // not the transcripts behind them.
     func snooze(of sessionID: UUID, now: Date = Date()) -> SessionSnooze? {
@@ -584,7 +598,9 @@ final class ProjectStore {
     // time passes rather than the next time something else redraws the rail.
     func expireSnoozes(now: Date = Date()) {
         var changed = false
-        for i in sessions.indices where sessions[i].snooze?.isActive(now: now) == false {
+        for i in sessions.indices {
+            guard let snooze = sessions[i].snooze, !snooze.isActive(now: now) else { continue }
+            snoozeReminders.append((sessions[i].id, snooze))
             sessions[i].snooze = nil
             changed = true
         }
@@ -2404,6 +2420,8 @@ final class ProjectStore {
         // Filled in after the selection is restored, so the session that was open when it
         // was marked does not count as opened again and lose its mark at launch.
         attention.markedUnread = Set(sessions.filter(\.isMarkedUnread).map(\.id))
+        // A snooze can run out while the app is closed, and is owed its reminder all the same.
+        expireSnoozes()
         scheduleSnoozeExpiry()
         navigation.recordVisit()
     }
