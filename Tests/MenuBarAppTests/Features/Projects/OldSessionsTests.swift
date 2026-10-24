@@ -41,6 +41,24 @@ struct OldSessionsTests {
         #expect(OldSessions.olderThan(1, in: [session(daysAgo: 24.01 / 24)], now: now).count == 1)
     }
 
+    // Putting a session aside for later is the opposite of being done with it, so the
+    // sweep leaves it alone until the snooze is over, and plans to look again then.
+    @Test func aSnoozedSessionIsNotOldUntilItWakes() {
+        var untilWoken = session(daysAgo: 30)
+        untilWoken.snooze = .untilWoken
+        var untilReply = session(daysAgo: 30)
+        untilReply.snooze = .untilReply
+        #expect(OldSessions.olderThan(7, in: [untilWoken, untilReply], now: now).isEmpty)
+
+        let wakes = now.addingTimeInterval(3_600)
+        var timed = session(daysAgo: 30)
+        timed.snooze = .until(wakes)
+        #expect(OldSessions.olderThan(7, in: [timed], now: now).isEmpty)
+        #expect(OldSessions.olderThan(7, in: [timed], now: wakes.addingTimeInterval(1)).count == 1)
+        #expect(OldSessions.nextOldAt(7, in: [timed], now: now) == wakes)
+        #expect(OldSessions.nextOldAt(7, in: [untilWoken], now: now) == nil)
+    }
+
     @Test func aPinnedSessionIsNeverOld() {
         var pinned = session(daysAgo: 30)
         pinned.isPinned = true

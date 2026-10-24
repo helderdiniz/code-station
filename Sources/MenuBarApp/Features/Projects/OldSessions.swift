@@ -16,17 +16,23 @@ enum OldSessions {
     // sheet can leave it out and keep showing what a snooze has taken from the count.
     typealias SnoozeDeadline = (ChatSession) -> Date?
 
-    // A pinned session is never old: pinning is how a session is kept for good, so the
-    // sheet, the sidebar count and the sweep all leave it out.
+    // A pinned session is never old: pinning is how a session is kept for good. A snoozed
+    // session is kept for as long as its snooze lasts, since putting it aside for later is
+    // the opposite of being done with it. The sheet, the sidebar count and the sweep all
+    // leave both out.
     static func olderThan(_ days: Int, in sessions: [ChatSession], now: Date = Date(),
                           snoozedUntil: SnoozeDeadline = { _ in nil }) -> [ChatSession] {
         let cutoff = now.addingTimeInterval(-Double(days) * 86_400)
         return sessions
             .filter {
-                !$0.isPinned && $0.lastActivity < cutoff
+                !isKept($0, now: now) && $0.lastActivity < cutoff
                     && !ProjectSnooze.isActive(snoozedUntil($0), now: now)
             }
             .sorted { $0.lastActivity < $1.lastActivity }
+    }
+
+    static func isKept(_ session: ChatSession, now: Date = Date()) -> Bool {
+        session.isPinned || session.snooze?.isActive(now: now) == true
     }
 
     // What the review sheet lists: old enough to offer, minus the ones in the middle of a
@@ -39,13 +45,13 @@ enum OldSessions {
     }
 
     // When the list changes next: either a session goes quiet for long enough, or a
-    // snooze runs out and hands its sessions back.
+    // snooze runs out and hands its sessions back, a project's or a session's own.
     static func nextOldAt(_ days: Int, in sessions: [ChatSession], now: Date = Date(),
                           snoozedUntil: SnoozeDeadline = { _ in nil }) -> Date? {
         let age = Double(days) * 86_400
-        let turningOld = sessions.filter { !$0.isPinned }
+        let turningOld = sessions.filter { !isKept($0, now: now) }
             .map { $0.lastActivity.addingTimeInterval(age) }
-        let waking = sessions.compactMap(snoozedUntil)
+        let waking = sessions.compactMap(snoozedUntil) + sessions.compactMap { $0.snooze?.deadline }
         return (turningOld + waking)
             .filter { $0 > now }
             .min()
