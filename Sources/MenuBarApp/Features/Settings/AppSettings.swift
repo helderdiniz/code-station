@@ -137,6 +137,13 @@ final class AppSettings {
         }
     }
 
+    // What Return does with a prompt typed while a turn runs.
+    var midTurnPromptDelivery: SessionRunner.PromptDelivery {
+        didSet {
+            Preferences.setMidTurnPromptDelivery(midTurnPromptDelivery, in: preferences)
+        }
+    }
+
     // The Design ambition a session follows until it picks its own.
     var designAmbition: DesignAmbition {
         didSet { Preferences.setDesignAmbition(designAmbition, in: preferences) }
@@ -180,6 +187,7 @@ final class AppSettings {
         sessionRecapsEnabled = Preferences.sessionRecapsEnabled(in: preferences)
         sessionTitlesEnabled = Preferences.sessionTitlesEnabled(in: preferences)
         promptSuggestionsEnabled = Preferences.promptSuggestionsEnabled(in: preferences)
+        midTurnPromptDelivery = Preferences.midTurnPromptDelivery(in: preferences)
         sessionFinishedSound = Preferences.sessionFinishedSound(in: preferences)
         designAmbition = Preferences.designAmbition(in: preferences)
         hasCompletedOnboarding = Preferences.hasCompletedOnboarding(in: preferences)

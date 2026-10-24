@@ -57,6 +57,36 @@ struct SteerTests {
         #expect(await waitUntil { !runner.state(id).isBusy })
     }
 
+    @Test func choosingTheQueueInSettingsMakesAPlainSendWait() async throws {
+        let harness = try RunnerHarness(agent: .claudeCode, script: Self.claude)
+        defer { harness.tearDown() }
+        let id = harness.session.id
+        let runner = harness.runner
+        let store = harness.store
+        Preferences.setMidTurnPromptDelivery(.afterTurn, in: harness.scratch.preferences.store)
+
+        runner.send("Start the work", sessionID: id, store: store)
+        #expect(await waitUntil {
+            store.transcript(of: id).contains { $0.role == .assistant && $0.text.contains("Working") }
+        })
+        #expect(runner.canSteer(id))
+
+        runner.send("Also check the tests", sessionID: id, store: store)
+        #expect(runner.queued(id).map(\.text) == ["Also check the tests"])
+        #expect(store.transcript(of: id).count == 2)
+
+        // Asking for it now still steers, whatever the setting says.
+        runner.send("And the docs", delivery: .now, sessionID: id, store: store)
+        let stdin = harness.scratch.path("stdin.txt")
+        #expect(await waitUntil {
+            (try? String(contentsOf: stdin, encoding: .utf8))?.contains("And the docs") == true
+        })
+        #expect(runner.queued(id).map(\.text) == ["Also check the tests"])
+
+        runner.stop(id)
+        #expect(await waitUntil { !runner.state(id).isBusy })
+    }
+
     @Test func copilotKeepsTheQueue() throws {
         #expect(AgentKind.copilot.canSteer == false)
         #expect(AgentKind.claudeCode.canSteer)

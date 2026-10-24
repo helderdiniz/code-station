@@ -12,6 +12,7 @@ import SwiftUI
 struct Composer<Above: View, Accessory: View>: View {
     @Environment(ProjectStore.self) private var store
     @Environment(SessionRunner.self) private var runner
+    @Environment(AppSettings.self) private var appSettings
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     // Optional so a pane hosted without them simply has no microphone.
     @Environment(Dictation.self) private var dictation: Dictation?
@@ -99,14 +100,14 @@ struct Composer<Above: View, Accessory: View>: View {
 
             HStack(alignment: .bottom, spacing: 10) {
                 // Typing during a turn is allowed. An agent that can take a prompt
-                // mid-turn gets it at its next step; otherwise what is written goes to
-                // the back of the queue. A turn parked on a background task always takes
-                // it straight away, since its pipe is open.
+                // mid-turn gets it at its next step when settings say to steer; otherwise
+                // what is written goes to the back of the queue. A turn parked on a
+                // background task always takes it straight away, since its pipe is open.
                 ComposerField(text: draft,
                               isFocused: $isFocused,
                               placeholder: placeholder,
                               isEnabled: !blocked,
-                              onSubmit: { send() },
+                              onSubmit: { send(delivery: appSettings.midTurnPromptDelivery) },
                               onOversizedPaste: onOversizedPaste,
                               onRecallUp: onRecallUp,
                               onRecallDown: onRecallDown,
@@ -137,10 +138,9 @@ struct Composer<Above: View, Accessory: View>: View {
                     }
                 }
 
-                // While a turn runs the prompt can still go now, and Return sends it that
-                // way when the agent can take it. The queue stays one click away for a
-                // prompt that should wait for the turn to end, and is the only way for an
-                // agent that cannot take a prompt mid-turn.
+                // While a turn runs the prompt can go now or wait for the turn to end.
+                // Return does the one chosen in settings, and the other stays one click
+                // away. An agent that cannot take a prompt mid-turn only has the queue.
                 if busy, canSend {
                     sideButtons
                 }
@@ -220,19 +220,15 @@ struct Composer<Above: View, Accessory: View>: View {
 
     @ViewBuilder private var sideButtons: some View {
         let steers = runner.canSteer(sessionID)
+        let returnSteers = appSettings.midTurnPromptDelivery == .now
+        sideButton(icon: "arrow.up.to.line", filled: !steers || !returnSteers,
+                   label: "Queue prompt", tooltip: "Queue this for when the turn ends") {
+            send(delivery: .afterTurn)
+        }
         if steers {
-            sideButton(icon: "arrow.up.to.line", filled: false, label: "Queue prompt",
-                       tooltip: "Queue this for when the turn ends") {
-                send(delivery: .afterTurn)
-            }
-            sideButton(icon: "arrow.up", filled: true, label: "Send now",
+            sideButton(icon: "arrow.up", filled: returnSteers, label: "Send now",
                        tooltip: "Send now - the agent takes it at its next step") {
-                send()
-            }
-        } else {
-            sideButton(icon: "arrow.up.to.line", filled: true, label: "Queue prompt",
-                       tooltip: "Queue this for when the turn ends") {
-                send()
+                send(delivery: .now)
             }
         }
     }
@@ -273,7 +269,7 @@ struct Composer<Above: View, Accessory: View>: View {
             : busy ? (asking ? Theme.attention : Theme.deletion)
             : Theme.accentFill.opacity(canSend ? 1 : 0.45)
         return Button {
-            if busy { runner.stop(sessionID) } else { send() }
+            if busy { runner.stop(sessionID) } else { send(delivery: appSettings.midTurnPromptDelivery) }
         } label: {
             ZStack {
                 Circle().fill(fill)
@@ -365,7 +361,7 @@ struct Composer<Above: View, Accessory: View>: View {
         isFocused = true
     }
 
-    private func send(delivery: SessionRunner.PromptDelivery = .now) {
+    private func send(delivery: SessionRunner.PromptDelivery) {
         let draft = runner.composer.draft(sessionID)
         guard !blocked, !draft.isEmpty else { return }
         guard dictationHere?.isListening(sessionID) != true,

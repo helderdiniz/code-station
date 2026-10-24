@@ -2431,7 +2431,8 @@ struct SessionView: View {
         switch state {
         case .waiting: "Say what to do next…"
         case _ where state.isBusy:
-            runner.canSteer(sessionID) ? "Say more while it works…" : "Queue what comes next…"
+            runner.canSteer(sessionID) && appSettings.midTurnPromptDelivery == .now
+                ? "Say more while it works…" : "Queue what comes next…"
         default: "Ask for a change"
         }
     }

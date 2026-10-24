@@ -271,6 +271,7 @@ struct SettingsView: View {
             VStack(alignment: .leading, spacing: 20) {
                 sidebar.id(SettingsSearchTarget.generalSidebar.id)
                 recaps.id(SettingsSearchTarget.generalRecaps.id)
+                midTurnPrompts.id(SettingsSearchTarget.generalMidTurnPrompts.id)
                 finishedSound.id(SettingsSearchTarget.generalSound.id)
                 oldSessions.id(SettingsSearchTarget.generalOldSessions.id)
                 orphanedWorktrees.id(SettingsSearchTarget.generalOrphanedWorktrees.id)
@@ -378,6 +379,30 @@ struct SettingsView: View {
                     .padding(.vertical, 13)
             }
             .id(SettingsSearchTarget.generalSuggestions.id)
+        }
+    }
+
+    // Only Return follows this. The composer keeps a button for the other choice while a
+    // turn runs, so either is one click away.
+    private var midTurnPrompts: some View {
+        ChoiceBlock("PROMPTS DURING A TURN") {
+            SettingsCard {
+                OptionRow(
+                    title: "Steer the running turn",
+                    detail: "The agent reads the prompt at its next step. Copilot cannot take a prompt mid-turn, so it always queues.",
+                    selected: settings.midTurnPromptDelivery == .now) {
+                        settings.midTurnPromptDelivery = .now
+                }
+
+                SettingsRowDivider()
+
+                OptionRow(
+                    title: "Queue it for when the turn ends",
+                    detail: "The prompt waits above the composer and runs as a turn of its own.",
+                    selected: settings.midTurnPromptDelivery == .afterTurn) {
+                        settings.midTurnPromptDelivery = .afterTurn
+                }
+            }
         }
     }
 
