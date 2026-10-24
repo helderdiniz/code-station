@@ -359,8 +359,8 @@ struct DockerView: View {
         return PaneMessage(icon: "power",
                            title: installed ? "Docker is not running" : "Docker is not installed",
                            detail: installed
-                               ? "Start Docker Desktop, OrbStack or Colima. This sheet connects on its own once the engine is up."
-                               : "Install Docker Desktop, OrbStack or Colima, then come back here.") {
+                               ? "Start Docker. This sheet connects on its own once the engine is up."
+                               : "Install Docker, then come back here.") {
             HStack(spacing: 8) {
                 if let desktop = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.docker.docker") {
                     ActionButton(title: "Open Docker Desktop", tone: .green, icon: "arrow.up.forward.app") {
