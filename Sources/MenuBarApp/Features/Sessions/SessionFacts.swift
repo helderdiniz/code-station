@@ -1015,12 +1015,13 @@ private struct BrandSweep: View {
 
     var body: some View {
         GeometryReader { geometry in
+            let width = geometry.size.width
             LinearGradient(colors: [.clear, Theme.brand.opacity(0.55), .clear],
                            startPoint: .leading, endPoint: .trailing)
-                .frame(width: geometry.size.width * 0.4)
+                .frame(width: width * 0.4)
                 .keyframeAnimator(initialValue: 1.0, trigger: trigger) { band, phase in
                     band
-                        .offset(x: geometry.size.width * (phase * 1.4 - 0.4))
+                        .offset(x: width * (phase * 1.4 - 0.4))
                         .opacity(phase >= 1 ? 0 : 1)
                 } keyframes: { _ in
                     MoveKeyframe(0)
