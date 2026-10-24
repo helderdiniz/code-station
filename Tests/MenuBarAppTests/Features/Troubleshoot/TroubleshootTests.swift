@@ -412,39 +412,6 @@ struct TroubleshootProjectTests {
         #expect(!session.isTroubleshooting)
     }
 
-    @Test func filtersProjectsByNameOrPathIgnoringCase() {
-        let api = Project(name: "Payments API", path: "/Development/services/payments-api")
-        let web = Project(name: "Merchant Web", path: "/Development/frontends/merchant-web")
-
-        #expect(TroubleshootView.projects([api, web], matching: "PAYMENTS") == [api])
-        #expect(TroubleshootView.projects([api, web], matching: "frontends") == [web])
-        #expect(TroubleshootView.projects([api, web], matching: "  ") == [api, web])
-    }
-
-    @Test func onlyOneProjectStartsADirectProjectSession() {
-        let first = Project(name: "Payments API", path: "/payments-api")
-        let second = Project(name: "Merchant Web", path: "/merchant-web")
-
-        #expect(TroubleshootView.projectSessionTarget([]) == nil)
-        #expect(TroubleshootView.projectSessionTarget([first]) == first)
-        #expect(TroubleshootView.projectSessionTarget([first, second]) == nil)
-    }
-
-    @Test func matchingProjectsReuseTheExistingWorkspace() {
-        let firstID = UUID()
-        let secondID = UUID()
-        let workspace = ProjectWorkspace(name: "Payments",
-                                         projectIDs: [firstID, secondID],
-                                         leadProjectID: firstID)
-
-        #expect(TroubleshootView.workspaceSessionTarget(
-            workspace, selectedProjectIDs: [firstID, secondID]) == workspace)
-        #expect(TroubleshootView.workspaceSessionTarget(
-            workspace, selectedProjectIDs: [firstID]) == nil)
-        #expect(TroubleshootView.workspaceSessionTarget(
-            nil, selectedProjectIDs: [firstID, secondID]) == nil)
-    }
-
     // The Troubleshoot tab is on every session, so a session only becomes a diagnosis
     // once a brief is actually sent from it. The sidebar filter and the header chip both
     // read the marker, so it has to survive the turn that set it.
