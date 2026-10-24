@@ -123,7 +123,7 @@ enum OldSessionSweep {
         // so this is asked again on the far side of every wait.
         let stillStale = { (sessionID: UUID) in
             guard let session = store.session(sessionID) else { return false }
-            return !session.isPinned
+            return !OldSessions.isKept(session, now: now)
                 && store.selection != .session(sessionID)
                 && !runner.isBusy(sessionID, store: store)
                 && !ProjectSnooze.isActive(store.snoozeDeadline(for: session), now: now)
