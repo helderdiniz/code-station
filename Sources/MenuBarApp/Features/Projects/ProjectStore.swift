@@ -440,6 +440,9 @@ final class ProjectStore {
     func noteTurnEnded(for sessionID: UUID) -> Bool {
         let visibleID = userFacingSessionID(for: sessionID)
         guard sessions.contains(where: { $0.id == visibleID }) else { return false }
+        // A snooze that was to last until the reply has had it, so the reply is told of
+        // like any other.
+        if snooze(of: visibleID)?.endsOnReply == true { wake(visibleID) }
         let isVisible = sessionID != visibleID
             ? holds[sessionID]?.contains(.open) == true
             : selection == .session(visibleID)
@@ -513,11 +516,12 @@ final class ProjectStore {
     func unreadCount(in projectID: UUID) -> Int {
         sidebarSessions.count {
             $0.projectID == projectID && $0.workspaceID == nil && isUnread($0.id)
+                && !isSnoozed($0.id)
         }
     }
 
     func unreadCount(inWorkspace workspaceID: UUID) -> Int {
-        sidebarSessions.count { $0.workspaceID == workspaceID && isUnread($0.id) }
+        sidebarSessions.count { $0.workspaceID == workspaceID && isUnread($0.id) && !isSnoozed($0.id) }
     }
 
     func setMarkedUnread(_ isMarked: Bool, for sessionID: UUID) {
@@ -538,6 +542,70 @@ final class ProjectStore {
     func markRead(_ sessionID: UUID) {
         clearFinished(sessionID)
         setMarkedUnread(false, for: sessionID)
+    }
+
+    // MARK: - Snoozing
+
+    @ObservationIgnored private var snoozeExpiry: Task<Void, Never>?
+
+    // Read off the rail's copy, so a sidebar asking about every row observes the rows and
+    // not the transcripts behind them.
+    func snooze(of sessionID: UUID, now: Date = Date()) -> SessionSnooze? {
+        guard let snooze = sidebarSession(userFacingSessionID(for: sessionID))?.snooze,
+              snooze.isActive(now: now) else { return nil }
+        return snooze
+    }
+
+    func isSnoozed(_ sessionID: UUID, now: Date = Date()) -> Bool {
+        snooze(of: sessionID, now: now) != nil
+    }
+
+    func snooze(_ sessionID: UUID, _ snooze: SessionSnooze) {
+        guard let i = index(userFacingSessionID(for: sessionID)),
+              sessions[i].snooze != snooze else { return }
+        sessions[i].snooze = snooze
+        publishSidebarSessions()
+        scheduleIndexSave()
+        scheduleSnoozeExpiry()
+    }
+
+    // Ends a snooze early. The agent asking for something is one reason; the person
+    // changing their mind is the other.
+    func wake(_ sessionID: UUID) {
+        guard let i = index(userFacingSessionID(for: sessionID)),
+              sessions[i].snooze != nil else { return }
+        sessions[i].snooze = nil
+        publishSidebarSessions()
+        scheduleIndexSave()
+        scheduleSnoozeExpiry()
+    }
+
+    // Lets go of the timed snoozes that have run out. The row comes back the moment the
+    // time passes rather than the next time something else redraws the rail.
+    func expireSnoozes(now: Date = Date()) {
+        var changed = false
+        for i in sessions.indices where sessions[i].snooze?.isActive(now: now) == false {
+            sessions[i].snooze = nil
+            changed = true
+        }
+        guard changed else { return }
+        publishSidebarSessions()
+        scheduleIndexSave()
+    }
+
+    private func scheduleSnoozeExpiry(now: Date = Date()) {
+        snoozeExpiry?.cancel()
+        guard let soonest = sessions.compactMap({ $0.snooze?.deadline })
+            .filter({ $0 > now }).min() else {
+            snoozeExpiry = nil
+            return
+        }
+        snoozeExpiry = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(soonest.timeIntervalSince(now) + 0.5))
+            guard !Task.isCancelled, let self else { return }
+            self.expireSnoozes()
+            self.scheduleSnoozeExpiry()
+        }
     }
 
     // MARK: - Projects
@@ -2336,6 +2404,7 @@ final class ProjectStore {
         // Filled in after the selection is restored, so the session that was open when it
         // was marked does not count as opened again and lose its mark at launch.
         attention.markedUnread = Set(sessions.filter(\.isMarkedUnread).map(\.id))
+        scheduleSnoozeExpiry()
         navigation.recordVisit()
     }
 

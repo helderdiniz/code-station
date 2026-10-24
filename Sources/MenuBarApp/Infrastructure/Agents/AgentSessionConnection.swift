@@ -8,6 +8,7 @@ final class AgentSessionConnection: @unchecked Sendable {
         case tasks(Int)
         case agentStatus(String, Int)
         case cancel, ignore
+        case steer
     }
 
     private let lock = NSLock()
@@ -60,6 +61,25 @@ final class AgentSessionConnection: @unchecked Sendable {
             sendPrompt(prompt)
             return !writeFailed
         }
+    }
+
+    // Puts a prompt into the turn that is running instead of waiting for it to end. The
+    // request id comes back so the reply can be matched to the prompt it carried; nil
+    // means there is no live turn to steer, and the prompt should wait in the queue.
+    func steer(_ prompt: String) -> Int? {
+        lock.withLock {
+            guard !closed, !ending, launch.agent == .codex,
+                  let sessionID, let activeTurnID else { return nil }
+            let id = requests.insert(.steer, at: Date())
+            emit(["jsonrpc": "2.0", "id": id, "method": "turn/steer",
+                  "params": ["threadId": sessionID, "expectedTurnId": activeTurnID,
+                             "input": [["type": "text", "text": prompt]]]])
+            return writeFailed ? nil : id
+        }
+    }
+
+    var hasActiveTurn: Bool {
+        lock.withLock { !closed && !ending && activeTurnID != nil }
     }
 
     func refreshTasks() -> Bool {
@@ -185,6 +205,14 @@ final class AgentSessionConnection: @unchecked Sendable {
             return []
         default: break
         }
+        // A steer that missed its turn is not the turn failing: the prompt is simply still
+        // to be sent, which the runner handles.
+        if case .steer = kind {
+            if let error = message.error {
+                return [.steerRejected(requestID: id, message: error.message)]
+            }
+            return [.steerAccepted(requestID: id)]
+        }
         if let error = message.error {
             return [.finished(isError: true, message: "\(launch.agent.title) session request failed: "
                               + error.message)]
@@ -251,7 +279,7 @@ final class AgentSessionConnection: @unchecked Sendable {
                 tasks = []
                 return [.backgroundTasks([]), .finished(isError: false, message: nil)]
             }
-        case .send, .ignore:
+        case .send, .ignore, .steer:
             break
         }
         return []
@@ -297,6 +325,7 @@ private extension AgentSessionConnection {
             return [.turnStarted]
         case "turn/completed":
             guard hasStartedTurn else { return [] }
+            activeTurnID = nil
             let turn = params["turn"] as? [String: Any] ?? [:]
             if turn["status"] as? String == "failed" || turn["status"] as? String == "interrupted" {
                 return [.finished(isError: true, message: (turn["error"] as? [String: Any])?["message"] as? String

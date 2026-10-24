@@ -107,6 +107,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             self?.projects.selectSession(sessionID)
             self?.showManager()
         }
+        AppNotifier.shared.isMuted = { [weak self] sessionID in
+            self?.projects.isSnoozed(sessionID) ?? false
+        }
         NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.willPowerOffNotification, object: nil, queue: .main
         ) { [quitGuard] _ in

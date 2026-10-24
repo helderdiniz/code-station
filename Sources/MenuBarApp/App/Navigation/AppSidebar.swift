@@ -35,6 +35,8 @@ struct AppSidebar: View {
     @State private var askingTask: Project?
     @State private var importingSessions: SessionImportRequest?
     @State private var sessionVisibility = SidebarSessionVisibility()
+    // The containers whose snoozed sessions are being shown under their rail.
+    @State private var showingSnoozed: Set<UUID> = []
     @State private var renderedSessionIDs: Set<UUID> = []
     @State private var scrollPosition = ScrollPosition(edge: .top)
     @State private var scrollOffset: CGFloat = 0
@@ -454,7 +456,8 @@ struct AppSidebar: View {
     private func workspaceSection(_ workspace: ProjectWorkspace,
                                   sessions: [ChatSession]) -> some View {
         let expanded = isExpanded(workspace)
-        let visible = visibleSessions(sessions, in: workspace.id)
+        let listed = awakeSessions(sessions, in: workspace.id)
+        let visible = visibleSessions(listed.shown, in: workspace.id)
         let running = sessions.count { runner.isBusy($0.id, store: store) }
         let projects = workspace.projectIDs.compactMap(store.project)
 
@@ -463,7 +466,7 @@ struct AppSidebar: View {
             projects: projects,
             selected: store.sidebarDestination?.containerID == workspace.id,
             activeSessionTitle: activeSessionTitle(in: workspace.id),
-            isExpanded: expanded && !visible.isEmpty,
+            isExpanded: expanded && (!visible.isEmpty || listed.snoozed > 0),
             sessionCount: sessions.count,
             runningCount: running,
             needsYouCount: needsYouCount(sessions),
@@ -495,8 +498,8 @@ struct AppSidebar: View {
         }
         .id(workspace.id)
 
-        if expanded, !visible.isEmpty {
-            sessionRail(sessions, visible: visible, in: workspace.id,
+        if expanded, !visible.isEmpty || listed.snoozed > 0 {
+            sessionRail(listed.shown, visible: visible, snoozed: listed.snoozed, in: workspace.id,
                         tint: sidebarRailTint(for: workspace.sidebarAvatar,
                                               name: workspace.name,
                                               monogramTint: Theme.workspaceTint),
@@ -524,14 +527,15 @@ struct AppSidebar: View {
     @ViewBuilder
     private func projectSection(_ project: Project, sessions: [ChatSession]) -> some View {
         let expanded = isExpanded(project)
-        let visible = visibleSessions(sessions, in: project.id)
+        let listed = awakeSessions(sessions, in: project.id)
+        let visible = visibleSessions(listed.shown, in: project.id)
         let running = sessions.count { runner.isBusy($0.id, store: store) }
 
         ProjectHeaderRow(
             project: project,
             selected: store.sidebarDestination?.containerID == project.id,
             activeSessionTitle: activeSessionTitle(in: project.id),
-            isExpanded: expanded && !visible.isEmpty,
+            isExpanded: expanded && (!visible.isEmpty || listed.snoozed > 0),
             isMissing: store.isMissing(project),
             sessionCount: sessions.count,
             runningCount: running,
@@ -564,8 +568,8 @@ struct AppSidebar: View {
 
         // An expanded project with nothing under it draws no cards at all: an empty rail
         // still carries its padding, which reads as the row shifting on every click.
-        if expanded, !visible.isEmpty {
-            sessionRail(sessions, visible: visible, in: project.id,
+        if expanded, !visible.isEmpty || listed.snoozed > 0 {
+            sessionRail(listed.shown, visible: visible, snoozed: listed.snoozed, in: project.id,
                         tint: sidebarRailTint(for: project.sidebarAvatar,
                                               name: project.name,
                                               monogramTint: Theme.projectTint(for: project.name)),
@@ -574,11 +578,21 @@ struct AppSidebar: View {
         }
     }
 
+    // A snoozed session is out of the way, so its card leaves the rail and a quiet row at
+    // the foot says how many are sleeping. Clicking it shows them, which is also where
+    // one is woken from.
+    private func awakeSessions(_ sessions: [ChatSession],
+                               in containerID: UUID) -> (shown: [ChatSession], snoozed: Int) {
+        let awake = sessions.filter { !store.isSnoozed($0.id) }
+        let snoozed = sessions.count - awake.count
+        return (showingSnoozed.contains(containerID) ? sessions : awake, snoozed)
+    }
+
     // The cards under an open row. A project and a workspace draw the same rail; they
     // differ only in what a card says about its branch and whether its folders hold
     // uncommitted work.
     @ViewBuilder
-    private func sessionRail(_ sessions: [ChatSession], visible: [ChatSession],
+    private func sessionRail(_ sessions: [ChatSession], visible: [ChatSession], snoozed: Int,
                              in containerID: UUID, tint: Theme.ProjectTint,
                              branch: @escaping (ChatSession) -> String?,
                              uncommitted: @escaping (ChatSession) -> Bool) -> some View {
@@ -587,6 +601,9 @@ struct AppSidebar: View {
         let hidden = isFiltering ? 0 : sessions.count - visible.count
         ForEach(visible) { session in
             let selected = isSelected(session)
+            let snooze = store.snooze(of: session.id)
+            // A sleeping session is not asking for anyone, however its last turn ended.
+            let finished = store.isUnread(session.id) && snooze == nil
             // Design has no card of its own, so while it is the side working, this
             // card is what says so: its light, its line and its time come from there.
             let live = LiveConversation.of(session.id, store: store, runner: runner)
@@ -597,7 +614,7 @@ struct AppSidebar: View {
                            selected: selected, pinned: session.isPinned,
                            thread: ThreadPhase(busy: busy,
                                                failed: state.isFailed,
-                                               finished: store.isUnread(session.id)),
+                                               finished: finished),
                            threadEndedCleanly: runner.lastTurnEnding(live.id)?.outcome == .finished) {
                 SessionCard(session: session,
                             worktrees: store.worktreeCoverage(for: session),
@@ -608,7 +625,8 @@ struct AppSidebar: View {
                             waitIsStale: runner.waitIsStale(live.id),
                             waitingSince: runner.waitingSince(live.id),
                             needsInput: runner.question(live.id) != nil,
-                            finished: store.isUnread(session.id),
+                            finished: finished,
+                            snoozed: snooze,
                             activity: { [runner, store] in
                                 Self.activity(live, runner: runner, store: store)
                             },
@@ -647,6 +665,7 @@ struct AppSidebar: View {
                      store.setPinned(!session.isPinned, forSession: session.id)
                  },
                  SessionUnread.menuEntry(for: session.id, store: store),
+                 SessionSnoozeMenu.entry(for: session, store: store, dialogs: dialogs),
                  .item("Rename…") { renamingID = session.id },
                  SessionTitle.menuEntry(for: session.id, runner: runner, store: store),
                  .separator,
@@ -656,7 +675,7 @@ struct AppSidebar: View {
             }
             .sidebarRailSegment(colour: tint.colour,
                                 isFirst: session.id == visible.first?.id,
-                                isLast: hidden == 0 && session.id == visible.last?.id,
+                                isLast: hidden == 0 && snoozed == 0 && session.id == visible.last?.id,
                                 stackSpacing: Self.listSpacing)
             .transition(.fold)
         }
@@ -666,8 +685,23 @@ struct AppSidebar: View {
                     sessionVisibility.showAll(containerID)
                 }
             }
-            .sidebarRailSegment(colour: tint.colour, isFirst: false, isLast: true,
+            .sidebarRailSegment(colour: tint.colour, isFirst: false, isLast: snoozed == 0,
                                 stackSpacing: Self.listSpacing)
+            .transition(.fold)
+        }
+        if snoozed > 0 {
+            let showing = showingSnoozed.contains(containerID)
+            SidebarRailRow(colour: tint.colour) {
+                SeeMoreCard(title: showing ? "Hide snoozed" : "\(counted(snoozed, "session")) snoozed…") {
+                    if showing {
+                        showingSnoozed.remove(containerID)
+                    } else {
+                        showingSnoozed.insert(containerID)
+                    }
+                }
+            }
+            .sidebarRailSegment(colour: tint.colour, isFirst: visible.isEmpty && hidden == 0,
+                                isLast: true, stackSpacing: Self.listSpacing)
             .transition(.fold)
         }
     }
@@ -680,7 +714,7 @@ struct AppSidebar: View {
             let state = runner.state(live.id)
             return SessionTone(busy: state.isBusy || runner.isAskingSecondOpinion(session.id),
                                needsInput: runner.question(live.id) != nil,
-                               finished: store.isUnread(session.id),
+                               finished: store.isUnread(session.id) && !store.isSnoozed(session.id),
                                waiting: state == .waiting,
                                waitIsStale: runner.waitIsStale(live.id)) == .needsYou
         }
@@ -1976,6 +2010,8 @@ private struct SessionCard: View {
     let waitingSince: Date?
     let needsInput: Bool
     let finished: Bool
+    // Set while the session is put out of the way, so the card can say so.
+    var snoozed: SessionSnooze? = nil
     // Worked out inside the card rather than handed in, because it reads the tool the
     // session is running. A tool starts and ends many times a turn, and only this card
     // has to be redrawn for it, not the whole rail.
@@ -2051,6 +2087,7 @@ private struct SessionCard: View {
         var labels = [word.capitalized]
         if selected { labels.append("Currently viewing") }
         if session.isPinned { labels.append("Pinned") }
+        if let snoozed { labels.append("Snoozed \(snoozed.phrase())") }
         if uncommitted { labels.append("Uncommitted changes") }
         if connected { labels.append("Phone connected") }
         if worktrees.isComplete { labels.append("In a worktree") }
@@ -2083,6 +2120,9 @@ private struct SessionCard: View {
                 }
                 if session.isTroubleshooting {
                     MonoChip(text: "TROUBLESHOOT", size: 8.5, tint: Theme.secret)
+                }
+                if snoozed != nil {
+                    MonoChip(text: "SNOOZED", size: 8.5)
                 }
                 if uncommitted { UncommittedMark() }
                 if connected { MobileConnectionMark() }
@@ -2148,6 +2188,9 @@ private struct SessionCard: View {
     // The hint carries the branch and full path because the compact card leaves both out.
     private var tooltip: Tooltip {
         var rows = [Tooltip.Row(label: "State", value: word.capitalized)]
+        if let snoozed {
+            rows.append(Tooltip.Row(label: "Snoozed", value: snoozed.phrase()))
+        }
         if let branch {
             rows.append(Tooltip.Row(label: "Branch", value: branch))
         }

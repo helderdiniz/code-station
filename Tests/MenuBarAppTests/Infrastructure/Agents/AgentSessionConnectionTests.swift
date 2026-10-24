@@ -209,6 +209,46 @@ struct AgentSessionConnectionTests {
         #expect((params["paths"] as? [String: Any])?["additionalDirectories"] as? [String] == ["/tmp/attached"])
     }
 
+    @Test func codexSteersTheActiveTurnAndReportsTheAnswer() throws {
+        let wire = try Wire(.codex)
+        try wire.boot()
+        #expect(wire.connection.hasActiveTurn)
+
+        let id = try #require(wire.connection.steer("Also check the tests"))
+        let request = try wire.lastRequest()
+        #expect(request["method"] as? String == "turn/steer")
+        let params = try #require(request["params"] as? [String: Any])
+        #expect(params["threadId"] as? String == "session")
+        #expect(params["expectedTurnId"] as? String == "turn")
+        let accepted = try wire.respond(request, ["turnId": "turn"])
+        #expect(accepted.events.contains {
+            if case .steerAccepted(let got) = $0 { return got == id }
+            return false
+        })
+
+        // A refusal is not the turn failing: the prompt is simply still to be sent.
+        let second = try #require(wire.connection.steer("One more"))
+        let rejected = wire.connection.receive(try wire.frame([
+            "id": second, "error": ["code": -1, "message": "no active turn to steer"]]))
+        #expect(rejected.contains {
+            if case .steerRejected(let got, _) = $0 { return got == second }
+            return false
+        })
+        #expect(!Wire.Events(events: rejected).finished)
+    }
+
+    @Test func onlyALiveCodexTurnCanBeSteered() throws {
+        let codex = try Wire(.codex)
+        try codex.boot()
+        _ = try codex.notify("turn/completed", ["threadId": "session", "turn": ["status": "completed"]])
+        #expect(codex.connection.hasActiveTurn == false)
+        #expect(codex.connection.steer("Too late") == nil)
+
+        let copilot = try Wire(.copilot)
+        try copilot.boot()
+        #expect(copilot.connection.steer("Not here") == nil)
+    }
+
     @Test func codexPreservesSandboxAndAutoReviewSettings() throws {
         let configuration = AgentLaunchConfiguration(
             agent: .codex,

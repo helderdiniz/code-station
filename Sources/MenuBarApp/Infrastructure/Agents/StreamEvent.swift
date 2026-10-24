@@ -51,6 +51,10 @@ enum StreamEvent: Sendable {
     // What the CLI thinks the next prompt will be. It comes after the result rather than
     // before it, since the turn has to be over before there is anything to predict.
     case promptSuggestion(String)
+    // The agent's answer to a prompt steered into its running turn: whether the turn took
+    // it. Only the agents that answer a steering request with a reply send these.
+    case steerAccepted(requestID: Int)
+    case steerRejected(requestID: Int, message: String)
 }
 
 // A command or agent the CLI started and left running behind the turn. The description is
@@ -162,6 +166,10 @@ extension StreamEvent {
             "finished error=\(isError) messageBytes=\(message?.utf8.count ?? 0)"
         case .promptSuggestion(let suggestion):
             "prompt suggestion bytes=\(suggestion.utf8.count)"
+        case .steerAccepted(let requestID):
+            "steer accepted id=\(requestID)"
+        case .steerRejected(let requestID, let message):
+            "steer rejected id=\(requestID) messageBytes=\(message.utf8.count)"
         }
     }
 

@@ -12,6 +12,9 @@ final class AppNotifier: NSObject {
 
     // How a clicked notification opens its session, handed in by the app delegate.
     var openSession: ((UUID) -> Void)?
+    // Whether a session has asked to be left alone, so nothing it does makes a sound or
+    // a banner until it is woken.
+    var isMuted: ((UUID) -> Bool)?
 
     // Only a real app bundle has a notification centre worth posting to, and asking for
     // the centre from a bare `swift run` binary or a test runner can bring the process
@@ -32,6 +35,7 @@ final class AppNotifier: NSObject {
     }
 
     func turnEnded(sessionID: UUID, sessionTitle: String, failure: String?) {
+        guard isMuted?(sessionID) != true else { return }
         // Played from here rather than left to the notification, so a turn finishing is
         // heard while the window is open on another session too, and so the chosen sound
         // is the only one: a notification carrying its own would double up on it. It
@@ -86,7 +90,7 @@ final class AppNotifier: NSObject {
     private func post(identifier: String, sessionID: UUID, title: String, body: String,
                       sound: UNNotificationSound? = .default) {
         // The window says all of this better while it is being looked at.
-        guard let center, !NSApp.isActive else { return }
+        guard let center, !NSApp.isActive, isMuted?(sessionID) != true else { return }
         let content = UNMutableNotificationContent()
         content.title = title
         content.body = body

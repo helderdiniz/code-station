@@ -98,15 +98,15 @@ struct Composer<Above: View, Accessory: View>: View {
             }
 
             HStack(alignment: .bottom, spacing: 10) {
-                // Typing during a turn is allowed: what is written goes to the back of the
-                // queue instead of waiting for the agent to be free. A turn parked on a
-                // background task is the one case where it does not queue at all - the
-                // pipe is open, so it goes straight to the agent.
+                // Typing during a turn is allowed. An agent that can take a prompt
+                // mid-turn gets it at its next step; otherwise what is written goes to
+                // the back of the queue. A turn parked on a background task always takes
+                // it straight away, since its pipe is open.
                 ComposerField(text: draft,
                               isFocused: $isFocused,
                               placeholder: placeholder,
                               isEnabled: !blocked,
-                              onSubmit: send,
+                              onSubmit: { send() },
                               onOversizedPaste: onOversizedPaste,
                               onRecallUp: onRecallUp,
                               onRecallDown: onRecallDown,
@@ -137,20 +137,12 @@ struct Composer<Above: View, Accessory: View>: View {
                     }
                 }
 
+                // While a turn runs the prompt can still go now, and Return sends it that
+                // way when the agent can take it. The queue stays one click away for a
+                // prompt that should wait for the turn to end, and is the only way for an
+                // agent that cannot take a prompt mid-turn.
                 if busy, canSend {
-                    Button(action: send) {
-                        Image(systemName: "arrow.up.to.line")
-                            .font(.system(size: 13, weight: .bold))
-                            .foregroundStyle(.white)
-                            .frame(width: 32, height: 32)
-                            .background(Circle().fill(Theme.accentFill))
-                            .contentShape(Circle())
-                    }
-                    .buttonStyle(.plain)
-                    .hoverLift(amount: Motion.smallLift)
-                    .accessibilityLabel("Queue prompt")
-                    .appTooltip("Queue this for when the turn ends")
-                    .transition(.fadeIn)
+                    sideButtons
                 }
 
                 // Send and Stop share one place, so a turn starting reads as the button
@@ -224,6 +216,45 @@ struct Composer<Above: View, Accessory: View>: View {
             attach(Attachments.fromDrop(urls))
             return true
         } isTargeted: { dropTargeted = $0 }
+    }
+
+    @ViewBuilder private var sideButtons: some View {
+        let steers = runner.canSteer(sessionID)
+        if steers {
+            sideButton(icon: "arrow.up.to.line", filled: false, label: "Queue prompt",
+                       tooltip: "Queue this for when the turn ends") {
+                send(delivery: .afterTurn)
+            }
+            sideButton(icon: "arrow.up", filled: true, label: "Send now",
+                       tooltip: "Send now - the agent takes it at its next step") {
+                send()
+            }
+        } else {
+            sideButton(icon: "arrow.up.to.line", filled: true, label: "Queue prompt",
+                       tooltip: "Queue this for when the turn ends") {
+                send()
+            }
+        }
+    }
+
+    // A circle beside the main button for what a prompt does while a turn runs. Filled
+    // for the one Return does, drawn as a card for the other.
+    private func sideButton(icon: String, filled: Bool, label: String, tooltip: String,
+                            action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: icon)
+                .font(.system(size: 13, weight: .bold))
+                .foregroundStyle(filled ? Color.white : Theme.accent)
+                .frame(width: 32, height: 32)
+                .background(Circle().fill(filled ? Theme.accentFill : Theme.card))
+                .overlay(Circle().stroke(filled ? Color.clear : Theme.border))
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .hoverLift(amount: Motion.smallLift)
+        .accessibilityLabel(label)
+        .appTooltip(tooltip)
+        .transition(.fadeIn)
     }
 
     // One button that sends, stops, or waits for a stop to land. It stays put while its
@@ -334,7 +365,7 @@ struct Composer<Above: View, Accessory: View>: View {
         isFocused = true
     }
 
-    private func send() {
+    private func send(delivery: SessionRunner.PromptDelivery = .now) {
         let draft = runner.composer.draft(sessionID)
         guard !blocked, !draft.isEmpty else { return }
         guard dictationHere?.isListening(sessionID) != true,
@@ -344,6 +375,7 @@ struct Composer<Above: View, Accessory: View>: View {
                     attachments: draft.attachments,
                     customInstructions: draft.customInstructions,
                     dictated: draft.dictated,
+                    delivery: delivery,
                     sessionID: sessionID,
                     store: store)
         runner.composer.clearDraft(sessionID)

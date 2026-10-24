@@ -91,6 +91,12 @@ enum AgentKind: String, CaseIterable, Codable, Sendable, Identifiable {
     // access policy chosen in settings, even though their servers accept follow-ups.
     var asksPermissions: Bool { self == .claudeCode }
 
+    // Whether a prompt sent during a turn can reach the agent before that turn ends.
+    // Claude Code takes a message written to its open input at its next step, and Codex
+    // has a request for steering its active turn. Copilot holds a second message until
+    // the turn is over, which is no better than the app's own queue.
+    var canSteer: Bool { self != .copilot }
+
     // Whether the CLI predicts the next prompt itself and reports it on its stream. The
     // others have to be asked in a run of their own, so a suggestion costs them far more.
     var predictsPrompts: Bool { self == .claudeCode }

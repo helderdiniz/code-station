@@ -973,11 +973,17 @@ final class SessionRunner {
         recordAddingIfMissing(sessionID).nudgeDismissed = true
     }
 
-    // Nothing is ever sent straight to the CLI: a prompt joins the queue and the queue is
-    // what runs. Typing during a turn therefore costs nothing, and the ones already waiting
-    // keep their order.
+    // When a prompt sent during a turn reaches the agent. Now means inside the turn that is
+    // running, if the agent can take it there; otherwise, and after the turn, the prompt
+    // waits its turn in the queue.
+    enum PromptDelivery { case now, afterTurn }
+
+    // A prompt joins the queue and the queue is what runs, unless a turn is running and can
+    // take the prompt now. Typing during a turn therefore costs nothing, and the ones
+    // already waiting keep their order.
     func send(_ prompt: String, attachments: [Attachment] = [],
               customInstructions: String? = nil, dictated: Bool = false,
+              delivery: PromptDelivery = .now,
               sessionID: UUID, store: ProjectStore) {
         guard !isBeingRemoved(sessionID), store.session(sessionID) != nil else { return }
         var text = prompt.trimmed
@@ -1003,13 +1009,78 @@ final class SessionRunner {
                     || instructions?.isEmpty == false else { return }
             text = planPrompt
         }
-        recordAddingIfMissing(sessionID).queue.append(QueuedPrompt(
+        let queued = QueuedPrompt(
             text: text,
             attachments: attachments,
             customInstructions: instructions?.isEmpty == false ? instructions : nil,
             expansion: expansion(of: text, sessionID: sessionID, store: store),
-            dictated: dictated))
+            dictated: dictated)
+        if delivery == .now, steer(queued, sessionID: sessionID, store: store) { return }
+        recordAddingIfMissing(sessionID).queue.append(queued)
         runQueue(sessionID, store: store)
+    }
+
+    // Whether a prompt sent now would reach the agent inside the turn that is running.
+    // Only a turn that is under way and still reading its input can take one; a turn
+    // starting up, stopping, or parked on a background task cannot, and neither can a
+    // summary run or a compaction.
+    func canSteer(_ sessionID: UUID) -> Bool {
+        guard let record = records[sessionID], let turn = record.turn, !record.isBeingRemoved,
+              turn.summary == nil, turn.agent.canSteer, !turn.stopRequested,
+              record.compactNoticeID == nil else { return false }
+        switch record.state {
+        case .streaming, .stalled: break
+        default: return false
+        }
+        return turn.connection?.hasActiveTurn ?? turn.acceptsInput
+    }
+
+    // Hands a prompt to the turn that is running, so the agent takes it at its next step
+    // instead of after everything it had planned. Claude Code reads it off its open input
+    // and Codex has a request for it. False when the turn cannot take it, and the prompt
+    // then waits in the queue like any other.
+    private func steer(_ prompt: QueuedPrompt, sessionID: UUID, store: ProjectStore) -> Bool {
+        guard canSteer(sessionID), let turn = records[sessionID]?.turn else { return false }
+        let text = Self.prompt(prompt.prompt, with: prompt.attachments)
+        let requestID: Int
+        if let connection = turn.connection {
+            guard let id = connection.steer(text) else { return false }
+            requestID = id
+        } else {
+            guard Self.userMessageLine(text).map(turn.write) ?? false else { return false }
+            // Claude Code sends no reply to a steer, so the prompt is tracked under a
+            // number of the turn's own until the agent is seen to move again.
+            requestID = turn.nextLocalSteerID
+            turn.nextLocalSteerID -= 1
+        }
+        SessionLog.note("prompt steered into the running turn", session: sessionID)
+        var messageIDs: [UUID] = []
+        for message in prompt.transcriptMessages {
+            store.append(message, to: sessionID)
+            messageIDs.append(message.id)
+        }
+        // The reply so far stays above the new prompt and what the agent says next goes
+        // under it, so the transcript reads in the order things happened.
+        let previousReplyID = turn.messageID
+        removeReplyIfEmpty(turn, sessionID: sessionID, store: store)
+        openFreshReply(turn, sessionID: sessionID, store: store)
+        turn.steersInFlight[requestID] = SteerInFlight(
+            prompt: prompt, messageIDs: messageIDs, replyID: turn.messageID,
+            previousReplyID: previousReplyID)
+        return true
+    }
+
+    // Undoes what a steer put in the transcript and queues its prompt to run as a turn of
+    // its own instead.
+    private func takeBack(_ steer: SteerInFlight, turn: Turn, sessionID: UUID,
+                          store: ProjectStore) {
+        for id in steer.messageIDs { store.removeMessage(id, from: sessionID) }
+        if turn.messageID == steer.replyID,
+           store.transcript(of: sessionID).first(where: { $0.id == steer.replyID })?.isEmpty ?? false {
+            store.removeMessage(steer.replyID, from: sessionID)
+            turn.messageID = steer.previousReplyID
+        }
+        records[sessionID]?.queue.insert(steer.prompt, at: 0)
     }
 
     func sendAppCommand(_ prompt: String, attachments: [Attachment] = [],
@@ -1856,7 +1927,12 @@ final class SessionRunner {
             setState(.streaming, for: sessionID)
         }
         for event in events {
-            if event.isAnswering { turn.answered = true }
+            if event.isAnswering {
+                turn.answered = true
+                // The agent moving on after a steer is the only word Claude Code gives
+                // that the prompt reached it.
+                for key in turn.steersInFlight.keys { turn.steersInFlight[key]?.answered = true }
+            }
             switch event {
             case .initialized(let claudeSessionID):
                 // Saved right away, before the turn can fail: this id is what resuming
@@ -1994,6 +2070,8 @@ final class SessionRunner {
             case .permissionRequest(let request):
                 setState(.streaming, for: sessionID)
                 records[sessionID]?.asked.append(request)
+                // A question wants an answer whatever the person asked for earlier.
+                store.wake(sessionID)
                 if let session = store.session(sessionID) {
                     AppNotifier.shared.needsInput(
                         sessionID: store.userFacingSessionID(for: sessionID),
@@ -2121,6 +2199,16 @@ final class SessionRunner {
             // Sent after the result, since the turn has to be over before there is
             // anything to predict. The preference is read again here because it can be
             // turned off while the turn that asked for one is still running.
+            case .steerAccepted(let requestID):
+                turn.steersInFlight[requestID] = nil
+
+            case .steerRejected(let requestID, let message):
+                // The turn moved on before the prompt reached it, so the prompt goes back to
+                // the front of the queue and runs when this turn is over.
+                guard let steer = turn.steersInFlight.removeValue(forKey: requestID) else { continue }
+                SessionLog.note("steer rejected: \(message)", session: sessionID)
+                takeBack(steer, turn: turn, sessionID: sessionID, store: store)
+
             case .promptSuggestion(let suggestion):
                 guard turn.summary == nil, followUps.promptSuggestionsEnabled() else { continue }
                 records[sessionID]?.suggestion = suggestion
@@ -2476,6 +2564,12 @@ final class SessionRunner {
             record.finishedAt = Date()
             recordAgentTask(record, turn: turn, sessionID: sessionID, store: store)
         }
+        // A steer the agent never got to has nowhere to go once the turn is over, so its
+        // prompt waits as the next turn instead of being lost with the one that died.
+        for steer in turn.steersInFlight.values where !steer.answered {
+            takeBack(steer, turn: turn, sessionID: sessionID, store: store)
+        }
+        turn.steersInFlight = [:]
         records[sessionID]?.turn = nil
         records[sessionID]?.runningTools = []
         records[sessionID]?.agentsAtWork = []
@@ -2753,6 +2847,18 @@ final class SessionRunner {
     }
 
     // One live turn. Only ever touched on the main actor.
+    // What a steer added to the transcript, kept until the agent says the turn took it so
+    // a refused one can be taken back out.
+    fileprivate struct SteerInFlight {
+        let prompt: QueuedPrompt
+        let messageIDs: [UUID]
+        let replyID: UUID
+        let previousReplyID: UUID
+        // Whether the agent has done anything since, which is taken as it having read the
+        // prompt. A turn that dies before that gives the prompt back to the queue.
+        var answered = false
+    }
+
     fileprivate final class Turn {
         let token = UUID()
         let processGroup: pid_t
@@ -2815,6 +2921,11 @@ final class SessionRunner {
         // True from a result that left tasks running until the CLI moves again or a
         // prompt is sent into the open pipe. This is what holds the input open.
         var waitingOnTasks = false
+        // Prompts steered into the turn that the agent has not yet been seen to take, by
+        // the request that carried them. Codex answers a steer with a reply; Claude Code's
+        // are numbered below zero here and judged by whether the agent moved afterwards.
+        var steersInFlight: [Int: SteerInFlight] = [:]
+        var nextLocalSteerID = -1
         var endingWait = false
         // Whether this turn replaced the conversation with a summary, which is what makes
         // the last reading of the window no longer describe anything.
@@ -2828,6 +2939,9 @@ final class SessionRunner {
         // while it runs. `lastActivity` cannot answer that: it moves all turn.
         let startedAt = Date()
         var startHeads: [String: String] = [:]
+
+        // Whether the CLI is still reading this turn's input.
+        var acceptsInput: Bool { inputOpen }
 
         // One line down the pipe the CLI is reading. False when it could not be sent: the
         // process is gone, or its end of the pipe is shut.

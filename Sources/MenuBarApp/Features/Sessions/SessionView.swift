@@ -2430,7 +2430,8 @@ struct SessionView: View {
     private func placeholder(state: SessionState) -> String {
         switch state {
         case .waiting: "Say what to do next…"
-        case _ where state.isBusy: "Queue what comes next…"
+        case _ where state.isBusy:
+            runner.canSteer(sessionID) ? "Say more while it works…" : "Queue what comes next…"
         default: "Ask for a change"
         }
     }
@@ -2453,6 +2454,7 @@ struct SessionView: View {
                         onSuggestionKey: { suggestionKey($0, blocked: blocked) },
                         dictates: true,
                         above: {
+                            snoozeStrip(session)
                             runChoices(session, project: project)
                             contextNudge(session)
                             promptSuggestion(busy: state.isBusy, blocked: blocked)
@@ -2464,6 +2466,7 @@ struct SessionView: View {
                                              sessionID: sessionID,
                                              size: 22)
                         })
+                        .motion(Motion.reveal, value: store.isSnoozed(sessionID))
     }
 
     // The choices the next turn will run on, on the line the eye is already on when
@@ -2663,6 +2666,14 @@ struct SessionView: View {
     // Prompts typed ahead, above the composer where what happens next belongs. A queue that
     // is not moving on its own - the last turn failed, or was stopped - gets a button,
     // since nothing else would ever start it.
+    // A snoozed session says so where the next prompt is typed, with the way back.
+    @ViewBuilder private func snoozeStrip(_ session: ChatSession) -> some View {
+        if let snooze = store.snooze(of: session.id) {
+            SessionSnoozeStrip(snooze: snooze) { store.wake(session.id) }
+                .transition(.fadeIn)
+        }
+    }
+
     @ViewBuilder private func queueStrip(busy: Bool, blocked: Bool) -> some View {
         let waiting = runner.queued(sessionID)
         if !waiting.isEmpty {
