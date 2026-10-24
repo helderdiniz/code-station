@@ -361,6 +361,24 @@ struct DockerView: View {
                            detail: installed
                                ? "Start Docker. This sheet connects on its own once the engine is up."
                                : "Install Docker, then come back here.") {
+            // An engine that is up but fails the list looks the same as one that is down,
+            // so what docker said is the only way to tell them apart.
+            if installed, let failure = docker.containers.failure {
+                Text(failure)
+                    .font(.mono(11))
+                    .foregroundStyle(Theme.secondaryText)
+                    .multilineTextAlignment(.leading)
+                    .lineLimit(6)
+                    .textSelection(.enabled)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 9)
+                    .frame(maxWidth: 460, alignment: .leading)
+                    .background(Theme.field, in: RoundedRectangle(cornerRadius: 8))
+                    .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.border))
+                    .contentTransition(.opacity)
+                    .motion(Motion.reveal, value: failure)
+                    .padding(.top, 6)
+            }
             HStack(spacing: 8) {
                 if let desktop = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.docker.docker") {
                     ActionButton(title: "Open Docker Desktop", tone: .green, icon: "arrow.up.forward.app") {

@@ -354,12 +354,16 @@ final class DockerService {
         // image being removed.
         var busy: Set<Item.ID> = []
         let list: [String]
+        // A plainer form of `list` to ask for when `list` fails, for an engine that is up
+        // but cannot answer the full question.
+        let fallback: [String]?
         let parse: @Sendable (String) -> Item?
         let sortKey: @Sendable (Item) -> String
 
-        init(list: [String], parse: @escaping @Sendable (String) -> Item?,
+        init(list: [String], fallback: [String]? = nil, parse: @escaping @Sendable (String) -> Item?,
              sortKey: @escaping @Sendable (Item) -> String) {
             self.list = list
+            self.fallback = fallback
             self.parse = parse
             self.sortKey = sortKey
         }
@@ -384,6 +388,9 @@ final class DockerService {
 
     private(set) var containers = Resource<DockerContainer>(
         list: ["ps", "--all", "--no-trunc", "--size", "--format", "{{json .}}"],
+        // Podman fails the whole list when it cannot measure one container's layers, so
+        // the list without sizes is still better than calling the engine stopped.
+        fallback: ["ps", "--all", "--no-trunc", "--format", "{{json .}}"],
         parse: DockerContainer.init(line:), sortKey: \.name)
     private(set) var images = Resource<DockerImage>(
         list: ["image", "ls", "--no-trunc", "--format", "{{json .}}"],
@@ -420,10 +427,10 @@ final class DockerService {
             return
         }
 
-        async let containerResult = runner(containers.list)
-        async let imageResult = runner(images.list)
-        async let networkResult = runner(networks.list)
-        async let volumeResult = runner(volumes.list)
+        async let containerResult = Self.read(containers, with: runner)
+        async let imageResult = Self.read(images, with: runner)
+        async let networkResult = Self.read(networks, with: runner)
+        async let volumeResult = Self.read(volumes, with: runner)
 
         let results = await (containerResult, imageResult, networkResult, volumeResult)
         containers.apply(results.0)
@@ -578,8 +585,15 @@ final class DockerService {
     }
 
     private func refresh<Item>(_ resource: ReferenceWritableKeyPath<DockerService, Resource<Item>>) async {
-        let result = await runner(self[keyPath: resource].list)
+        let result = await Self.read(self[keyPath: resource], with: runner)
         self[keyPath: resource].apply(result)
+    }
+
+    nonisolated private static func read<Item>(_ resource: Resource<Item>, with runner: Runner) async -> Output {
+        let result = await runner(resource.list)
+        guard !result.ok, let fallback = resource.fallback else { return result }
+        let plain = await runner(fallback)
+        return plain.ok ? plain : result
     }
 
     private func dockerUnavailable() {

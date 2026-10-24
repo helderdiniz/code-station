@@ -137,6 +137,36 @@ struct DockerServiceTests {
             disk
         ])
     }
+
+    @Test func listsContainersWithoutSizesWhenTheEngineCannotMeasureThem() async {
+        let service = DockerService(
+            runner: { arguments in
+                if arguments.first == "ps", arguments.contains("--size") {
+                    return DockerService.Output(errorText: "determining size of layer", status: 125)
+                }
+                let line = arguments.first == "ps" ? #"{"ID":"container-1","Names":"api","State":"exited"}"# : ""
+                return DockerService.Output(text: line, status: 0)
+            },
+            availability: { true })
+
+        await service.refresh()
+
+        #expect(service.containers.failure == nil)
+        #expect(service.containers.items.map(\.name) == ["api"])
+    }
+
+    @Test func keepsTheSizedErrorWhenThePlainListFailsToo() async {
+        let service = DockerService(
+            runner: { arguments in
+                let text = arguments.contains("--size") ? "Cannot connect to the Docker daemon" : "plain failed"
+                return DockerService.Output(errorText: text, status: 1)
+            },
+            availability: { true })
+
+        await service.refresh()
+
+        #expect(service.containers.failure == "Cannot connect to the Docker daemon")
+    }
 }
 
 private actor DockerCommandRecorder {
