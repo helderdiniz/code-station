@@ -49,21 +49,44 @@ struct ExplorerIcon: View {
     let symbol: String
     let label: String
     var selected = false
-    var action: () -> Void
+    // Left out when the icon opens a menu: `appMenu` brings a button of its own, and one
+    // nested inside another swallows the click before the menu ever sees it.
+    var action: (() -> Void)? = nil
+
+    @Environment(\.isEnabled) private var isEnabled
+    @State private var hovering = false
+    @State private var actOuts = 0
 
     var body: some View {
-        Button(action: action) {
-            Image(systemName: symbol)
-                .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(selected ? Theme.accent : Theme.secondaryText)
-                .frame(width: 28, height: 28)
-                .background(selected ? Theme.field : .clear, in: RoundedRectangle(cornerRadius: 6))
-                .contentShape(Rectangle())
+        Group {
+            if let action {
+                Button {
+                    actOuts += 1
+                    action()
+                } label: { glyph }
+                .buttonStyle(.plain)
+            } else {
+                glyph
+            }
         }
-        .buttonStyle(.plain)
-        .hoverFill(cornerRadius: 6)
+        .hoverLift(hovering, amount: Motion.smallLift)
+        .onPointerHover { hovering = $0 }
+        .motion(Motion.hover, value: hovering)
+        .motion(Motion.control, value: selected)
         .accessibilityLabel(label)
         .accessibilityAddTraits(selected ? .isSelected : [])
         .appTooltip(label)
+    }
+
+    private var glyph: some View {
+        Image(systemName: symbol)
+            .font(.system(size: 12, weight: .medium))
+            .foregroundStyle(selected ? Theme.accent : Theme.secondaryText)
+            .contentTransition(.symbolEffect(.replace))
+            .motion(Motion.control, value: symbol)
+            .actOut(symbol, trigger: actOuts)
+            .frame(width: 28, height: 28)
+            .background(selected || (hovering && isEnabled) ? Theme.field : .clear, in: RoundedRectangle(cornerRadius: 6))
+            .contentShape(Rectangle())
     }
 }

@@ -126,8 +126,7 @@ struct DispatchView: View {
                      border: environment.accent.opacity(0.25))
             .appMenu {
                 auth.environments.map { env in
-                    .item(env.label, checked: env == environment,
-                          subtitle: env.isDangerous ? "Live data" : nil) { auth.active = env }
+                    .item(env.label, checked: env == environment) { auth.active = env }
                 } + [.separator, .item("Environment settings") { showingEnvironments = true }]
             }
             .accessibilityLabel("Send destination: \(environment.label)")
