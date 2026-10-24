@@ -252,7 +252,7 @@ private final class SidebarHarness {
         let view = AppSidebar(
             skills: SkillsManager(cacheURL: scratch.path("skills.json"), preferences: preferences),
             tools: ToolsMenuActions(configureServers: {}, openSkills: {}, openDocker: {},
-                                    openDispatch: {}, openShortcuts: {}, openTroubleshoot: {},
+                                    openDispatch: {}, openShortcuts: {},
                                     openSettings: {}),
             oldSessionDeletion: nil, onReviewOldSessions: {}, paneOwnsFindShortcut: false)
             .environment(store)

@@ -1,10 +1,7 @@
 import SwiftUI
 
-// The parts a diagnosis is written on, shared by the sheet that starts one from scratch
-// and by the tab inside a session. Both ask the same four things - the problem, the
-// deployment, whether MCP servers are in play, and which skills to load - so they are
-// built once here and the two screens only differ in what they already know and in how
-// they lay the parts out.
+// The parts a diagnosis is written on: the skills to load, the problem with its evidence,
+// and whether the MCP servers it needs are ready.
 
 // MARK: - Skills
 
@@ -35,8 +32,7 @@ enum TroubleshootSkills {
     }
 
     // The menu that picks skills, one checked row per skill the agent has installed. A
-    // long list gets a filter field. The same menu hangs off the sheet's bar and the tab's
-    // pill, so the two screens offer the same choice.
+    // long list gets a filter field.
     static func menu(_ manager: SkillsManager, for agent: AgentKind,
                      selected: Binding<Set<String>>,
                      manage: @escaping () -> Void) -> [MenuEntry] {
@@ -63,126 +59,6 @@ enum TroubleshootSkills {
         if !entries.isEmpty { entries.append(.separator) }
         entries.append(.item("Manage skills…", icon: "sparkles", action: manage))
         return entries
-    }
-}
-
-// The skills the diagnosis is told to use, as a row of pills. The + adds one from what
-// the chosen agent has installed, and a right-click on a pill takes it off. With nothing
-// picked the bar turns amber, since an agent left to guess at Grafana or Postgres is
-// rarely what was wanted.
-struct TroubleshootSkillsBar: View {
-    let skills: SkillsManager
-    let agent: AgentKind
-    @Binding var selected: Set<String>
-    @Binding var showingSkills: Bool
-
-    var body: some View {
-        HStack(spacing: 9) {
-            Image(systemName: needsSkill ? "exclamationmark.triangle.fill" : "sparkles")
-                .font(.system(size: needsSkill ? 11 : 10.5, weight: .semibold))
-                .foregroundStyle(needsSkill ? AnyShapeStyle(Theme.attentionText)
-                                            : AnyShapeStyle(.tertiary))
-                .accessibilityLabel("Skills")
-
-            if chosenSkills.isEmpty {
-                Text(emptySkillsMessage)
-                    .font(.system(size: 11.5, weight: needsSkill ? .medium : .regular))
-                    .foregroundStyle(needsSkill ? AnyShapeStyle(Theme.attentionText)
-                                                : AnyShapeStyle(.secondary))
-                    .fixedSize(horizontal: false, vertical: true)
-                Spacer(minLength: 8)
-                addSkillButton
-            } else {
-                ScrollView(.horizontal) {
-                    HStack(spacing: 7) {
-                        ForEach(chosenSkills, id: \.self) { name in
-                            skillPill(name)
-                        }
-                        addSkillButton
-                    }
-                    .padding(.vertical, 1)
-                }
-                .scrollIndicators(.hidden)
-            }
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 9)
-        .surface(needsSkill ? Theme.attention.opacity(0.10) : Theme.field, cornerRadius: 10,
-                 border: needsSkill ? Theme.attention.opacity(0.45) : Theme.border)
-    }
-
-    private func skillPill(_ name: String) -> some View {
-        Text(name)
-            .font(.system(size: 12, weight: .semibold))
-            .lineLimit(1)
-            .padding(.horizontal, 9)
-            .frame(height: 22)
-            .cardSurface(cornerRadius: 7)
-            .contentShape(RoundedRectangle(cornerRadius: 7))
-            .appContextMenu {
-                [
-                    .item("Remove", kind: .destructive) { selected.remove(name) },
-                    .separator,
-                    .item("Manage skills…") { showingSkills = true },
-                ]
-            }
-            .appTooltip { Tooltip(title: name, subtitle: description(of: name)) }
-    }
-
-    // Dashed rather than filled, so the control that adds a skill does not read as a
-    // skill of its own. The whole pill opens the menu, not just the sign.
-    private var addSkillButton: some View {
-        HStack(spacing: 5) {
-            Image(systemName: "plus")
-                .font(.system(size: 9, weight: .bold))
-            Text("Add")
-                .font(.system(size: 12, weight: .semibold))
-        }
-        .foregroundStyle(.secondary)
-        .padding(.horizontal, 9)
-        .frame(height: 22)
-        .overlay(RoundedRectangle(cornerRadius: 7)
-            .strokeBorder(Theme.border, style: StrokeStyle(lineWidth: 1, dash: [3, 3])))
-        .contentShape(RoundedRectangle(cornerRadius: 7))
-        .appMenu {
-            TroubleshootSkills.menu(skills, for: agent, selected: $selected) {
-                showingSkills = true
-            }
-        }
-        .appTooltip("Add a skill to the diagnosis")
-        .accessibilityLabel("Add skill")
-    }
-
-    // Amber is for something to put right: no skill is installed, or none of the ones
-    // that are has been picked. While the installed set is still being read there is
-    // nothing to put right yet.
-    private var needsSkill: Bool {
-        chosenSkills.isEmpty && skills.hasLoaded && !skills.isRefreshing
-    }
-
-    private var emptySkillsMessage: String {
-        guard skills.hasLoaded, !skills.isRefreshing else {
-            return "Reading the skills \(agent.title) has installed…"
-        }
-        if skills.hostFailure(TroubleshootSkills.host(for: agent)) != nil {
-            return "The \(agent.title) plugin status could not be read, so no skill can be offered."
-        }
-        if availableSkills.isEmpty {
-            return "No skill is installed for \(agent.title). The diagnosis runs without one."
-        }
-        return "No skill picked. The agent diagnoses without any of them."
-    }
-
-    private var availableSkills: [SkillMarketplace.Plugin] {
-        TroubleshootSkills.available(skills, for: agent)
-    }
-
-    private var chosenSkills: [String] {
-        TroubleshootSkills.chosen(skills, for: agent, selected: selected)
-    }
-
-    private func description(of skill: String) -> String? {
-        availableSkills.first { $0.name == skill }?.description
     }
 }
 
@@ -470,29 +346,6 @@ struct TroubleshootProblemEditor: View {
     }
 }
 
-// MARK: - Environment
-
-// The deployments the site file names. A dangerous one leads with an amber dot, so the
-// consequence is on the option rather than only in the notice it brings with it.
-struct TroubleshootEnvironmentPills: View {
-    @Binding var environment: TroubleshootEnvironment
-
-    var body: some View {
-        HStack(spacing: 6) {
-            ForEach(TroubleshootEnvironment.all()) { option in
-                ChoicePill(title: option.title,
-                           selected: environment == option,
-                           dot: option.isDangerous ? Theme.attention : nil) {
-                    environment = option
-                }
-                .accessibilityHint(option.isDangerous
-                                   ? "Live deployment. The diagnosis stays read-only."
-                                   : "")
-            }
-        }
-    }
-}
-
 // MARK: - MCP servers
 
 enum TroubleshootMCPState: Equatable {
@@ -567,68 +420,5 @@ enum TroubleshootMCPState: Equatable {
         }
         messages.append("Sync the listed servers in MCP Servers before diagnosing.")
         return messages.joined(separator: " ")
-    }
-}
-
-// Client registration describes configuration, not live connectivity. Only servers
-// included in the chosen environment are offered here.
-struct TroubleshootMCPOptions: View {
-    let agent: AgentKind
-    let environment: TroubleshootEnvironment
-    let managedServers: [Server]
-    let environmentServers: [Server]
-    let state: TroubleshootMCPState
-    @Binding var enabled: Bool
-
-    private var helper: String {
-        if !enabled { return "Use project files and attached evidence." }
-        if managedServers.isEmpty { return "Use any servers configured for the selected agent." }
-        return "\(counted(environmentServers.count, "managed server")) available for \(environment.title)."
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("MCP servers").font(.system(size: 13, weight: .semibold))
-            Toggle(isOn: $enabled) {
-                Text(enabled ? "Enabled for this diagnosis" : "Disabled for this diagnosis")
-                    .font(.system(size: 13))
-            }
-            .toggleStyle(.appSwitch)
-            .frame(height: 39, alignment: .leading)
-            .accessibilityLabel("Enable MCP servers")
-            .accessibilityHint(helper)
-            Text(helper)
-                .font(.system(size: 11))
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-
-            switch state {
-            case .ready:
-                EmptyView()
-            case .checking:
-                HStack(spacing: 6) {
-                    ProgressView().controlSize(.small)
-                    Text("Checking \(agent.title) MCP configuration...")
-                }
-                .font(.system(size: 11))
-                .foregroundStyle(.secondary)
-            case .unavailable:
-                HStack(alignment: .top, spacing: 6) {
-                    Image(systemName: "exclamationmark.triangle.fill")
-                        .padding(.top, 1)
-                    Text(state.message(for: agent) ?? "")
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                .font(.system(size: 11, weight: .medium))
-                .foregroundStyle(Theme.deletion)
-            }
-        }
-        .onChange(of: state) { _, state in
-            guard let message = state.message(for: agent),
-                  let window = NSApp?.keyWindow else { return }
-            NSAccessibility.post(element: window, notification: .announcementRequested,
-                                 userInfo: [.announcement: message,
-                                            .priority: NSAccessibilityPriorityLevel.high.rawValue])
-        }
     }
 }

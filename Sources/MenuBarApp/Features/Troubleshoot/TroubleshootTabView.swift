@@ -1,10 +1,9 @@
 import SwiftUI
 
-// Framing a problem for the agent this session already has. Everything the sheet asks a
-// new diagnosis for - which projects, which agent, which model - is settled the moment a
-// session exists, so the tab asks one question and keeps the setup on the card's bottom
-// edge: the deployment, the time window, the servers and the skills, each a pill with a
-// menu behind it. One line under the card says whether the brief can go.
+// Framing a problem for the agent this session already has. Which projects, which agent
+// and which model are settled the moment a session exists, so the tab asks one question
+// and keeps the setup on the card's bottom edge: the deployment, the time window, the
+// servers and the skills, each a pill with a menu behind it. One line under the card says whether the brief can go.
 //
 // The brief lands in Chat as an ordinary first message, which is what makes a second run
 // from here a follow-up rather than a new session.
