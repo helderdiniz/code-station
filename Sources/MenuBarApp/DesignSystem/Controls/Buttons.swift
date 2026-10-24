@@ -62,7 +62,7 @@ struct ActionButton: View {
         }
         .opacity(isEnabled ? 1 : 0.4)
         .hoverLift(hovering)
-        .onHover { hovering = $0 }
+        .onPointerHover { hovering = $0 }
     }
 
     private var lit: Bool { hovering && isEnabled }
@@ -163,7 +163,7 @@ struct InlineLink: View {
         }
         .buttonStyle(.plain)
         .hoverLift(hovering)
-        .onHover { hovering = $0 }
+        .onPointerHover { hovering = $0 }
     }
 }
 
@@ -191,7 +191,7 @@ struct GlyphButton: View {
             }
         }
         .hoverLift(hovering, amount: Motion.smallLift)
-        .onHover { hovering = $0 }
+        .onPointerHover { hovering = $0 }
     }
 
     private var shape: some View {
@@ -270,7 +270,7 @@ private struct OptionMenuPill: View {
                  border: open ? Theme.accent.opacity(0.5) : Theme.border)
         .contentShape(Rectangle())
         .hoverLift(hovering)
-        .onHover { hovering = $0 }
+        .onPointerHover { hovering = $0 }
         .motion(Motion.hover, value: hovering)
         .motion(Motion.reveal, value: open)
     }

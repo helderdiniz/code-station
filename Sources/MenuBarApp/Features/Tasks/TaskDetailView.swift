@@ -17,6 +17,7 @@ struct TaskDetailView: View {
 
     private enum Tab: Hashable { case task, explorer }
 
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var tab: Tab = .task
     @State private var prompt = ""
     @State private var promptLoaded = false
@@ -34,7 +35,10 @@ struct TaskDetailView: View {
                 header(task)
                 statusStrip(task)
                 if store.isMissing(task) { missingFolder(task) }
-                content(task)
+                // The group hands the transition to each page, so whichever one is chosen
+                // lifts in under the tab that chose it.
+                Group { content(task) }
+                    .transition(.headerPage(reduceMotion: reduceMotion))
                 if terminals.isOpen(terminalScope) {
                     TerminalDrawer(scope: terminalScope,
                                    directory: task.path,

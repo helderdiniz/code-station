@@ -71,21 +71,7 @@ private struct AppCheckbox: View {
             configuration.isOn.toggle()
         } label: {
             HStack(alignment: .top, spacing: 8) {
-                RoundedRectangle(cornerRadius: 5)
-                    .fill(configuration.isOn ? Theme.accentFill : Theme.card)
-                    .frame(width: 16, height: 16)
-                    .overlay(RoundedRectangle(cornerRadius: 5)
-                        .stroke(configuration.isOn ? .clear : Theme.border, lineWidth: 1.5))
-                    .overlay {
-                        // The tick is always there and grows into the filled box, so
-                        // ticking a line is one movement rather than a mark appearing on
-                        // top of a box that has already changed colour.
-                        Image(systemName: "checkmark")
-                            .font(.system(size: 9, weight: .bold))
-                            .foregroundStyle(.white)
-                            .scaleEffect(configuration.isOn ? 1 : 0.4)
-                            .opacity(configuration.isOn ? 1 : 0)
-                    }
+                CheckboxMark(isOn: configuration.isOn)
                     .hoverLift(hovering, amount: Motion.smallLift)
                 configuration.label
             }
@@ -94,6 +80,30 @@ private struct AppCheckbox: View {
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
         .motion(Motion.control, value: configuration.isOn)
+    }
+}
+
+// The box alone, for a row that is itself the thing being ticked and has no toggle of
+// its own to put it in.
+struct CheckboxMark: View {
+    let isOn: Bool
+
+    var body: some View {
+        RoundedRectangle(cornerRadius: 5)
+            .fill(isOn ? Theme.accentFill : Theme.card)
+            .frame(width: 16, height: 16)
+            .overlay(RoundedRectangle(cornerRadius: 5)
+                .stroke(isOn ? .clear : Theme.border, lineWidth: 1.5))
+            .overlay {
+                // The tick is always there and grows into the filled box, so ticking a
+                // line is one movement rather than a mark appearing on top of a box that
+                // has already changed colour.
+                Image(systemName: "checkmark")
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundStyle(.white)
+                    .scaleEffect(isOn ? 1 : 0.4)
+                    .opacity(isOn ? 1 : 0)
+            }
     }
 }
 

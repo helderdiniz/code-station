@@ -109,6 +109,14 @@ struct ExplorerView: View {
     @State private var focusEditor = false
     @State private var narrowNavigator = false
     @State private var detailsPresented = false
+    // Where the details button sits, so the panel grows out of it and goes back into it.
+    @State private var detailsOrigin: CGPoint?
+    @Namespace private var tabUnderline
+    // A click whose work happens outside the window, such as opening Finder, moves
+    // nothing in it, so a short note is all the window shows of it.
+    @State private var note: String?
+    @State private var noteIcon = "arrow.up.forward.app"
+    @State private var notes = 0
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @FocusState private var treeFocused: Bool
     // The row being renamed, by path. The name is edited in place, the way Finder does it.
@@ -180,6 +188,7 @@ struct ExplorerView: View {
             HStack(spacing: 0) {
                 if showsTree && sideBySide {
                     tree.frame(width: width).clipped()
+                        .transition(AnyTransition.fadeIn.animation(Motion.reveal))
                     Rectangle().fill(Theme.hairline).frame(width: ExplorerSplitLayout.dividerWidth)
                 }
                 detail(navigatorVisible: showsTree)
@@ -192,16 +201,31 @@ struct ExplorerView: View {
                     splitHandle(treeWidth: width, availableWidth: geometry.size.width)
                         .offset(x: width + (ExplorerSplitLayout.dividerWidth - ExplorerSplitLayout.handleWidth) / 2)
                 }
-                if showsTree && !sideBySide {
-                    ZStack(alignment: .leading) {
+                // The ZStack stays put so each layer inside it can take its own transition.
+                ZStack(alignment: .leading) {
+                    if showsTree && !sideBySide {
                         Theme.background.opacity(0.6).onTapGesture { narrowNavigator = false; focusEditor = true }
+                            .transition(scrim)
                         tree.frame(width: width).background(Theme.background)
                             .overlay(alignment: .trailing) { Rectangle().fill(Theme.border).frame(width: 1) }
+                            .transition(.drawer(from: .leading, reduceMotion: reduceMotion))
                     }
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+                .clipped()
             }
         }
         .background(Theme.background)
+        .overlay(alignment: .topTrailing) {
+            ZStack {
+                if let note {
+                    HeaderNote(icon: noteIcon, text: note)
+                        .padding(.top, 50).padding(.trailing, 14)
+                        .transition(reduceMotion ? .opacity : .opacity.combined(with: .offset(y: -6)))
+                }
+            }
+            .motion(Motion.reveal, value: note)
+        }
         .background(ExplorerSearchShortcut { showFinder(.names) })
         .background(ExplorerFileShortcuts(
             enabled: treeFocused && projectCursor == nil && dialogs.current == nil && !pastingFiles,
@@ -281,6 +305,46 @@ struct ExplorerView: View {
         }
     }
 
+    // The dimmed layer behind a panel that covers the pane.
+    private var scrim: AnyTransition {
+        .asymmetric(insertion: .opacity.animation(Motion.reveal), removal: .opacity.animation(Motion.leave))
+    }
+
+    // A small mark landing on a row or a tab, such as the dot for unsaved edits.
+    private var markLands: AnyTransition {
+        reduceMotion
+            ? .opacity.animation(Motion.reveal)
+            : .scale(scale: 0.5).combined(with: .opacity).animation(Motion.pop)
+    }
+
+    // A second click keeps the note up rather than letting the first one's timer take it
+    // down early.
+    private func showNote(_ text: String, icon: String = "arrow.up.forward.app") {
+        notes += 1
+        let shown = notes
+        noteIcon = icon
+        note = text
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(1.9))
+            if notes == shown { note = nil }
+        }
+    }
+
+    private func copyPath(_ node: FileNode) {
+        Pasteboard.copy(node.path)
+        showNote("Copied the path", icon: "doc.on.doc")
+    }
+
+    private func revealInFinder(_ node: FileNode) {
+        NSWorkspace.shared.activateFileViewerSelecting([node.url])
+        showNote("Showed \(node.name) in Finder")
+    }
+
+    private func openExternally(_ node: FileNode) {
+        NSWorkspace.shared.open(node.url)
+        showNote("Opened \(node.name)")
+    }
+
     private func splitHandle(treeWidth: CGFloat, availableWidth: CGFloat) -> some View {
         WorkspaceSplitHandle(width: $treeWidth, displayedWidth: treeWidth, availableWidth: availableWidth,
                              label: "Resize file navigator", keyboardResizing: true, keepsDetailMinimum: true)
@@ -346,7 +410,9 @@ struct ExplorerView: View {
                             showsCursor: treeFocused && treeCursorVisible && projectCursor == project.root,
                             hasChildren: children[project.root]?.isEmpty == false,
                             collapsed: collapsedProjects.contains(project.root)) {
-            if !collapsedProjects.insert(project.root).inserted { collapsedProjects.remove(project.root) }
+            withAnimation(treeMotion(opening: collapsedProjects.contains(project.root))) {
+                if !collapsedProjects.insert(project.root).inserted { collapsedProjects.remove(project.root) }
+            }
         } select: {
             projectCursor = project.root
             treeCursorVisible = false
@@ -386,7 +452,7 @@ struct ExplorerView: View {
                                 if !repositories.isEmpty { projectRow(project).id(project.root) }
                                 if !collapsedProjects.contains(project.root) {
                                     ForEach(rows(in: project.root)) { row in
-                                        treeRow(row).id(row.id)
+                                        treeRow(row).id(row.id).transition(.fold)
                                         if let error = folderErrors[row.node.path], expanded.contains(row.node.path) {
                                             Text(error).font(.system(size: 11)).foregroundStyle(Theme.attention).padding(8)
                                             InlineLink(title: "Try again") { Task { await load(row.node.path) } }
@@ -398,7 +464,7 @@ struct ExplorerView: View {
                     }
                     .onChange(of: selected?.path) {
                         if let path = selected?.path {
-                            withAnimation(reduceMotion ? nil : .easeOut(duration: 0.12)) { proxy.scrollTo(path, anchor: .center) }
+                            withAnimation(reduceMotion ? nil : Motion.hover) { proxy.scrollTo(path, anchor: .center) }
                         }
                     }
                     .onChange(of: projectCursor) { _, path in
@@ -467,7 +533,7 @@ struct ExplorerView: View {
                     .opacity(node.isDirectory ? 1 : 0)
 
                 if loadingFolders.contains(node.path) {
-                    ProgressView().controlSize(.mini).scaleEffect(0.6).frame(width: 14)
+                    ProgressView().controlSize(.mini).frame(width: 14, height: 14)
                 } else {
                     Image(systemName: icon(node))
                         .font(.system(size: 11))
@@ -486,9 +552,11 @@ struct ExplorerView: View {
                 if !node.isDirectory {
                     if hasUnsavedEdit(node) {
                         Text("●").font(.system(size: 9)).foregroundStyle(Theme.attention).accessibilityLabel("Unsaved edits")
+                            .transition(markLands)
                     }
                     if isPinned(node) {
                         Image(systemName: "pin").font(.system(size: 10)).foregroundStyle(.secondary).accessibilityLabel("Pinned")
+                            .transition(markLands)
                     }
                     if let status = git.statuses[node.path] { ExplorerStatusMark(status: status) }
                 }
@@ -528,10 +596,10 @@ struct ExplorerView: View {
                     .item("Copy", detail: "⌘C", action: { copy(node) })]
                 + paste
                 + (node.isDirectory ? [] : [.item(isPinned(node) ? "Unpin file" : "Pin file", icon: "pin") { togglePin(node) }])
-                + [.item("Copy Path") { Pasteboard.copy(node.path) },
+                + [.item("Copy Path") { copyPath(node) },
                    .separator,
-                   .item("Reveal in Finder") { NSWorkspace.shared.activateFileViewerSelecting([node.url]) },
-                   .item("Open with default app") { NSWorkspace.shared.open(node.url) },
+                   .item("Reveal in Finder") { revealInFinder(node) },
+                   .item("Open with default app") { openExternally(node) },
                    .separator,
                    .item("Rename…", detail: "↩", action: { startRename(node) }),
                    .item("Move to Trash", kind: .destructive, detail: "⌘⌫",
@@ -607,7 +675,9 @@ struct ExplorerView: View {
                             }
                         }
                         .padding(.horizontal, 14).padding(.vertical, 10)
-                        if findPresented { findBar }
+                        if findPresented {
+                            findBar.transition(reduceMotion ? AnyTransition.opacity.animation(Motion.reveal) : .fold)
+                        }
                         fileBody(node)
                         if isEditable { editStatus }
                     } else {
@@ -618,16 +688,23 @@ struct ExplorerView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                 if detailsPresented, let node = selected, inlineDetails {
                     fileDetails(node).frame(width: ExplorerSplitLayout.detailsWidth)
+                        .transition(.grow(from: detailsOrigin, reduceMotion: reduceMotion))
                 }
             }
             .overlay(alignment: .trailing) {
-                if detailsPresented, let node = selected, !inlineDetails {
-                    ZStack(alignment: .trailing) {
+                let overlaid = detailsPresented && selected != nil && !inlineDetails
+                ZStack(alignment: .trailing) {
+                    if overlaid {
                         Color.black.opacity(0.12).onTapGesture { detailsPresented = false }
+                            .transition(scrim)
+                    }
+                    if overlaid, let node = selected {
                         fileDetails(node).frame(width: min(ExplorerSplitLayout.detailsWidth, geometry.size.width))
                             .shadow(color: .black.opacity(0.08), radius: 12, x: -4)
+                            .transition(.grow(from: detailsOrigin, reduceMotion: reduceMotion))
                     }
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .trailing)
             }
         }
         .background(Theme.card)
@@ -650,8 +727,10 @@ struct ExplorerView: View {
                                         Text(node.name).lineLimit(1).truncationMode(.middle)
                                         if hasUnsavedEdit(node) {
                                             Text("●").foregroundStyle(Theme.attention).accessibilityLabel("Unsaved edits")
+                                                .transition(markLands)
                                         } else if isPinned(node) {
                                             Image(systemName: "pin").foregroundStyle(.secondary).accessibilityLabel("Pinned")
+                                                .transition(markLands)
                                         }
                                     }
                                     .font(.system(size: 11, weight: node.path == selected?.path ? .semibold : .regular))
@@ -663,13 +742,19 @@ struct ExplorerView: View {
                             }
                             .frame(maxWidth: 230)
                             .background(node.path == selected?.path ? Theme.card : .clear)
+                            .hoverFill(cornerRadius: 0)
                             .overlay(alignment: .bottom) {
-                                Rectangle().fill(node.path == selected?.path ? Theme.accent : .clear).frame(height: 2)
+                                if node.path == selected?.path {
+                                    Rectangle().fill(Theme.accent).frame(height: 2)
+                                        .matchedGeometryEffect(id: "underline", in: tabUnderline)
+                                }
                             }
                             .appTooltip(relativePath(node))
                             .id(node.path)
+                            .transition(.asymmetric(insertion: .opacity.animation(Motion.reveal), removal: .opacity))
                         }
                     }
+                    .motion(Motion.draw, value: selected?.path)
                 }.scrollIndicators(.hidden)
                 .onChange(of: selected?.path) { _, path in if let path { proxy.scrollTo(path) } }
             }
@@ -719,11 +804,12 @@ struct ExplorerView: View {
             ExplorerIcon(symbol: "magnifyingglass", label: "Find in file (Cmd+F or Ctrl+F)", action: showFind)
                 .disabled(!canFind)
             if !node.isDirectory {
-                ExplorerIcon(symbol: "pin", label: isPinned(node) ? "Unpin file" : "Pin file", selected: isPinned(node)) { togglePin(node) }
+                ExplorerIcon(symbol: isPinned(node) ? "pin.fill" : "pin", label: isPinned(node) ? "Unpin file" : "Pin file",
+                             selected: isPinned(node)) { togglePin(node) }
             }
             ExplorerIcon(symbol: "info.circle", label: "File details", selected: detailsPresented) { detailsPresented.toggle() }
-            Image(systemName: "ellipsis").font(.system(size: 13, weight: .semibold))
-                .frame(width: 28, height: 28).contentShape(Rectangle())
+                .onCentreChange { detailsOrigin = $0 }
+            ExplorerIcon(symbol: "ellipsis", label: "File actions")
                 .appMenu {
                     var items: [MenuEntry] = []
                     if node.supportsMarkdownPreview {
@@ -731,24 +817,26 @@ struct ExplorerView: View {
                             resetFind(); renderingMarkdown.toggle()
                         })
                     }
-                    return items + [.item("Copy path") { Pasteboard.copy(node.path) },
-                                    .item("Open externally") { NSWorkspace.shared.open(node.url) },
-                                    .item("Reveal in Finder") { NSWorkspace.shared.activateFileViewerSelecting([node.url]) }]
+                    return items + [.item("Copy path") { copyPath(node) },
+                                    .item("Open externally") { openExternally(node) },
+                                    .item("Reveal in Finder") { revealInFinder(node) }]
                 }
-                .accessibilityLabel("File actions")
-                .appTooltip("File actions")
         }.fixedSize()
     }
 
     private var editStatus: some View {
         HStack(spacing: 6) {
             Image(systemName: dirty ? "info.circle" : "checkmark.circle").accessibilityHidden(true)
+                .contentTransition(.symbolEffect(.replace))
             Text(dirty ? "Your edits are kept here until you save." : "Changes are written only when you save.")
                 .lineLimit(2)
+                .contentTransition(.interpolate)
             Spacer(minLength: 0)
-            if saving { ProgressView().controlSize(.mini) }
+            if saving { ProgressView().controlSize(.mini).transition(.fadeIn) }
             Text("⌘ S").font(.mono(10))
         }
+        .motion(Motion.reveal, value: dirty)
+        .motion(Motion.reveal, value: saving)
         .font(.system(size: 11)).foregroundStyle(Theme.accent)
         .padding(9).background(Theme.accent.opacity(0.06), in: RoundedRectangle(cornerRadius: 6))
         .padding(12)
@@ -757,7 +845,11 @@ struct ExplorerView: View {
     private func fileDetails(_ node: FileNode) -> some View {
         let current = children[node.url.deletingLastPathComponent().path]?.first { $0.path == node.path } ?? node
         return ExplorerFileDetails(node: current, path: relativePath(node), status: git.statuses[node.path],
-                            text: isEditable ? draft : nil) { detailsPresented = false }
+                                   text: isEditable ? draft : nil,
+                                   copyPath: { copyPath(node) },
+                                   openExternally: { openExternally(node) },
+                                   revealInFinder: { revealInFinder(node) },
+                                   close: { detailsPresented = false })
     }
 
     private func hasUnsavedEdit(_ node: FileNode) -> Bool {
@@ -784,7 +876,7 @@ struct ExplorerView: View {
 
     private func closeTab(_ node: FileNode) {
         let close = {
-            documents.close(node.path)
+            withAnimation(reduceMotion ? nil : Motion.leave) { documents.close(node.path) }
             if selected?.path == node.path {
                 if let next = documents.tabs.last { select(next) }
                 else { selected = nil; preview = nil; draft = ""; original = ""; resetFind() }
@@ -902,13 +994,13 @@ struct ExplorerView: View {
 
     private func showFind() {
         guard canFind else { return }
-        findPresented = true
+        withAnimation(reduceMotion ? nil : Motion.reveal) { findPresented = true }
         refreshFind()
         $findFocused.request()
     }
 
     private func closeFind() {
-        findPresented = false
+        withAnimation(reduceMotion ? nil : Motion.leave) { findPresented = false }
         findFocused = false
     }
 
@@ -1017,6 +1109,7 @@ struct ExplorerView: View {
 
     private func copy(_ node: FileNode) {
         Pasteboard.copy(node.url)
+        showNote("Copied \(node.name)", icon: "doc.on.doc")
     }
 
     // Into the given item when it is a folder, beside it when it is a file, and at the top
@@ -1349,14 +1442,18 @@ struct ExplorerView: View {
         renderingMarkdown = place.renderingMarkdown && node.supportsMarkdownPreview
     }
 
-    private func load(_ path: String) async {
+    // `unfolding` is set when the folder is being opened by hand, so rows read for the
+    // first time fold in, while a refresh changes the list without moving anything.
+    private func load(_ path: String, unfolding: Bool = false) async {
         loadingFolders.insert(path)
         let listing = await FileTree.listing(of: URL(fileURLWithPath: path), includeHidden: showHidden)
         loadingFolders.remove(path)
         guard !Task.isCancelled else { return }
         folderErrors[path] = listing.error
         guard listing.error == nil else { return }
-        children[path] = listing.nodes
+        withAnimation(unfolding && children[path] == nil ? treeMotion(opening: true) : nil) {
+            children[path] = listing.nodes
+        }
         for entry in listing.nodes where entry.isDirectory && !entry.isLink {
             var node = entry
             var chain: [String] = []
@@ -1388,13 +1485,19 @@ struct ExplorerView: View {
         if expanded.contains(node.path) {
             collapseFolder(node.path)
         } else {
-            expanded.insert(node.path)
-            Task { await load(node.path) }
+            withAnimation(treeMotion(opening: true)) { _ = expanded.insert(node.path) }
+            Task { await load(node.path, unfolding: true) }
         }
     }
 
+    private func treeMotion(opening: Bool) -> Animation? {
+        reduceMotion ? nil : opening ? Motion.reveal : Motion.leave
+    }
+
     private func collapseFolder(_ path: String) {
-        expanded.subtract(rows.first(where: { $0.id == path })?.compactPaths ?? [path])
+        withAnimation(treeMotion(opening: false)) {
+            expanded.subtract(rows.first(where: { $0.id == path })?.compactPaths ?? [path])
+        }
     }
 
     private var openFolderCount: Int {

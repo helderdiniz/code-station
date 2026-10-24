@@ -225,6 +225,36 @@ struct SidebarNavigationTests {
         #expect(harness.store.selection == .session(session.id))
         #expect(Preferences.sidebarExpansion()[workspace.id] == true)
     }
+
+    // Holding a card down opens the selection. From then on a click ticks a row rather
+    // than opening it, and Done puts the rail back the way it was.
+    @Test func holdingACardPicksRowsInsteadOfOpeningThem() async throws {
+        let expansion = Preferences.sidebarExpansion()
+        defer { Preferences.setSidebarExpansion(expansion) }
+        let harness = try SidebarHarness()
+        defer { harness.close() }
+        let project = try TestStore.project(in: harness.store, named: "japan")
+        harness.store.renameProject(project.id, to: "japan")
+        let first = harness.store.newSession(in: project.id)
+        harness.store.renameSession(first.id, to: "First conversation")
+        let second = harness.store.newSession(in: project.id)
+        harness.store.renameSession(second.id, to: "Second conversation")
+        harness.store.selectProject(project.id)
+        Preferences.setSidebarExpansion([project.id: true])
+        harness.mount()
+        await harness.settle()
+        try harness.snapshot("hold-before")
+
+        try await harness.hold(x: 200, yFromTop: 240)
+        await harness.settle()
+        try harness.snapshot("hold-after")
+        #expect(harness.store.selection == nil)
+
+        try harness.click(x: 200, yFromTop: 300)
+        await harness.settle()
+        try harness.snapshot("hold-second")
+        #expect(harness.store.selection == nil)
+    }
 }
 
 @MainActor
@@ -312,6 +342,22 @@ private final class SidebarHarness {
                 clickCount: 1, pressure: type == .leftMouseDown ? 1 : 0))
             window.sendEvent(event)
         }
+    }
+
+    // Sent through the app rather than the window, so the event monitors that watch for
+    // a hold see the press.
+    func hold(x: CGFloat, yFromTop: CGFloat) async throws {
+        let window = try #require(window)
+        let point = NSPoint(x: x, y: 820 - yFromTop)
+        func send(_ type: NSEvent.EventType) throws {
+            NSApp.sendEvent(try #require(NSEvent.mouseEvent(
+                with: type, location: point, modifierFlags: [], timestamp: 0,
+                windowNumber: window.windowNumber, context: nil, eventNumber: 0,
+                clickCount: 1, pressure: type == .leftMouseDown ? 1 : 0)))
+        }
+        try send(.leftMouseDown)
+        try? await Task.sleep(for: .seconds(PressAndHold.duration + 0.3))
+        try send(.leftMouseUp)
     }
 
     func openFilter() throws {
