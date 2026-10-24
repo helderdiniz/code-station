@@ -25,12 +25,14 @@ struct ExplorerReveal: Equatable {
     let line: Int?
 }
 
-// One of the header's actions, asked for by a header that lives outside the pane.
-enum ExplorerCommand {
-    case findFile
-    case findInFiles
+// One of the header's actions, asked for by a header that lives outside the pane. Find
+// without a mode opens in the mode used last.
+enum ExplorerCommand: Equatable {
+    case find(ExplorerSearchMode?)
     case newFile
     case newFolder
+    case toggleHidden
+    case collapseFolders
     case refresh
 }
 
@@ -43,6 +45,10 @@ struct ExplorerView: View {
     // Commands from the session header are taken and cleared once done, like `reveal`.
     var command: Binding<ExplorerCommand?>?
     private let sharedShowHidden: Binding<Bool>?
+    // Handed up so the header's menu can say how many folders are open.
+    private let openFolders: Binding<Int>?
+    // Called with the number of items listed once a refresh has read the folders again.
+    private let refreshed: (Int) -> Void
 
     var repositories: [ChangesRepository] = []
     var designFilesRoot: String?
@@ -57,6 +63,7 @@ struct ExplorerView: View {
 
     init(root: String, reveal: Binding<ExplorerReveal?> = .constant(nil),
          command: Binding<ExplorerCommand?>? = nil, showHidden: Binding<Bool>? = nil,
+         openFolders: Binding<Int>? = nil, refreshed: @escaping (Int) -> Void = { _ in },
          repositories: [ChangesRepository] = [], designFilesRoot: String? = nil,
          collapsedProjects: Binding<Set<String>> = .constant([]),
          selectRoot: @escaping (String) -> Void = { _ in }) {
@@ -64,6 +71,8 @@ struct ExplorerView: View {
         self.reveal = reveal
         self.command = command
         self.sharedShowHidden = showHidden
+        self.openFolders = openFolders
+        self.refreshed = refreshed
         self.repositories = repositories
         self.designFilesRoot = designFilesRoot
         self._collapsedProjects = collapsedProjects
@@ -94,13 +103,12 @@ struct ExplorerView: View {
     @State private var pastingFiles = false
     @State private var treeWidth = ExplorerSplitLayout.defaultTreeWidth
     @State private var documents = ExplorerDocuments()
-    @State private var navigator = ExplorerNavigator()
+    @State private var git = ExplorerGitStatus()
     @State private var statusRevision = 0
     @State private var folderErrors: [String: String] = [:]
     @State private var focusEditor = false
     @State private var narrowNavigator = false
     @State private var detailsPresented = false
-    @FocusState private var searchFocused: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @FocusState private var treeFocused: Bool
     // The row being renamed, by path. The name is edited in place, the way Finder does it.
@@ -142,6 +150,12 @@ struct ExplorerView: View {
     // The query marked on the line a find in files result opened at. It goes once the
     // text is edited, since the marks would no longer sit on the words they were for.
     @State private var revealedMatches: [NSRange] = []
+    // The Find dialog while it is open, and what it held when it was last closed, so the
+    // next opening starts from the same mode and query.
+    @State private var finder: ExplorerFindModel?
+    @State private var finderDialog: UUID?
+    @State private var finderMode = ExplorerSearchMode.names
+    @State private var finderQuery = ""
 
     private var rootURL: URL { URL(fileURLWithPath: root) }
 
@@ -185,9 +199,9 @@ struct ExplorerView: View {
             }
         }
         .background(Theme.background)
-        .background(ExplorerSearchShortcut { showFileSearch() })
+        .background(ExplorerSearchShortcut { showFinder(.names) })
         .background(ExplorerFileShortcuts(
-            enabled: treeFocused && !searchFocused && !navigator.isFiltering && projectCursor == nil && dialogs.current == nil && !pastingFiles,
+            enabled: treeFocused && projectCursor == nil && dialogs.current == nil && !pastingFiles,
             onCopy: copySelected,
             onPaste: { pasteFiles(at: selected) },
             onTrash: trashSelected,
@@ -201,7 +215,6 @@ struct ExplorerView: View {
                 guard dialogs.current == nil, renaming == nil else { return false }
                 if detailsPresented { detailsPresented = false; return true }
                 if findPresented { closeFind(); return true }
-                if searchFocused { navigator.query = ""; searchFocused = false; treeFocused = true; return true }
                 if focusEditor || narrowNavigator { focusEditor = false; narrowNavigator = false; return true }
                 return false
             }
@@ -216,10 +229,11 @@ struct ExplorerView: View {
                 }
             }
         }
-        .onChange(of: dialogs.current == nil, initial: true) { _, free in
+        // Left running while the Find dialog is open, so the stroke switches its mode.
+        .onChange(of: dialogs.current == nil || finderIsOpen, initial: true) { _, free in
             guard free else { findInFilesMonitor.stop(); return }
             findInFilesMonitor.start {
-                showFindInFiles()
+                showFinder(.contents)
                 return true
             }
         }
@@ -240,11 +254,9 @@ struct ExplorerView: View {
             if draft != original { revealedMatches = [] }
         }
         .onChange(of: showHidden) { Task { await reopenFolders() } }
-        .task(id: searchRequest) {
-            await navigator.search(root: root, includeHidden: showHidden, pinned: documents.pinned)
-        }
+        .onChange(of: openFolderCount, initial: true) { _, count in openFolders?.wrappedValue = count }
         .task(id: projectRoots.map(\.root) + [String(statusRevision)]) {
-            await navigator.refreshStatus(roots: projectRoots.map(\.root))
+            await git.refresh(roots: projectRoots.map(\.root))
         }
         .onChange(of: command?.wrappedValue) { _, requested in
             guard let requested else { return }
@@ -262,116 +274,26 @@ struct ExplorerView: View {
                              label: "Resize file navigator", keyboardResizing: true, keepsDetailMinimum: true)
     }
 
-    private struct SearchRequest: Equatable {
-        let root: String
-        let query: String
-        let mode: ExplorerSearchMode
-        let filter: ExplorerFileFilter
-        let hidden: Bool
-        let pins: [String]
-        let statuses: [String: GitStatusKind]
-        let revision: Int
-    }
-
-    private var searchRequest: SearchRequest {
-        SearchRequest(root: root, query: navigator.query, mode: navigator.mode,
-                      filter: navigator.filter, hidden: showHidden, pins: documents.pinned.map(\.path),
-                      statuses: navigator.statuses, revision: navigator.revision)
-    }
-
     private func perform(_ command: ExplorerCommand) {
         switch command {
-        case .findFile: showFileSearch()
-        case .findInFiles: showFindInFiles()
+        case .find(let mode): showFinder(mode)
         case .newFile: create(folder: false, in: newItemDestination())
         case .newFolder: create(folder: true, in: newItemDestination())
-        case .refresh: Task { await reopenFolders() }
-        }
-    }
-
-    private var navigatorHeader: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                Text("Files").font(.system(size: 13, weight: .semibold))
-                Spacer(minLength: 4)
-                HStack(spacing: 5) {
-                    Image(systemName: "plus")
-                    Text("New")
-                }
-                .font(.system(size: 11, weight: .semibold))
-                .padding(.horizontal, 11).frame(height: 29)
-                .background(Theme.card, in: Capsule())
-                .overlay(Capsule().stroke(Theme.border))
-                .contentShape(Capsule())
-                .appMenu {
-                    [.item("New file", icon: "doc.badge.plus") { perform(.newFile) },
-                     .item("New folder", icon: "folder.badge.plus") { perform(.newFolder) }]
-                }
-                .accessibilityLabel("New file or folder")
-                Image(systemName: "ellipsis").font(.system(size: 13, weight: .semibold))
-                    .frame(width: 28, height: 28).contentShape(Rectangle())
-                    .appMenu { navigatorOptions }
-                    .accessibilityLabel("Explorer options")
-                    .appTooltip("Explorer options")
+        case .toggleHidden: showHidden.toggle()
+        case .collapseFolders: collapseAllFolders()
+        case .refresh:
+            Task {
+                await reopenFolders()
+                refreshed(projectRoots.reduce(0) { $0 + (children[$1.root]?.count ?? 0) })
             }
-            HStack(spacing: 7) {
-                Image(systemName: "magnifyingglass").foregroundStyle(.secondary).accessibilityHidden(true)
-                TextField(navigator.mode == .names ? "Find a file…" : "Find in file contents…", text: $navigator.query)
-                    .textFieldStyle(.plain)
-                    .focused($searchFocused)
-                    .onSubmit { openSearchHit() }
-                    .onMoveCommand { direction in
-                        if direction == .up { navigator.moveCursor(by: -1) }
-                        if direction == .down { navigator.moveCursor(by: 1) }
-                    }
-                    .onExitCommand { navigator.query = ""; searchFocused = false; treeFocused = true }
-                    .accessibilityLabel(navigator.mode == .names ? "Find a file" : "Find in file contents")
-                if !navigator.query.isEmpty {
-                    ExplorerIcon(symbol: "xmark", label: "Clear search") { navigator.query = "" }
-                }
-            }
-            .font(.system(size: 12))
-            .padding(.horizontal, 9).frame(height: 34)
-            .fieldSurface(cornerRadius: 8)
-            .overlay(RoundedRectangle(cornerRadius: 8).stroke(searchFocused ? Theme.accent : .clear))
-            ScrollView(.horizontal) {
-                HStack(spacing: 4) {
-                    ForEach(ExplorerSearchMode.allCases, id: \.self) { mode in
-                        ChoicePill(title: mode.rawValue, selected: navigator.mode == mode) { navigator.mode = mode }
-                            .accessibilityAddTraits(navigator.mode == mode ? .isSelected : [])
-                    }
-                }
-            }.scrollIndicators(.hidden)
-            ScrollView(.horizontal) {
-                HStack(spacing: 4) {
-                    ForEach(ExplorerFileFilter.allCases, id: \.self) { filter in
-                        ChoicePill(title: filter == .changed ? "Changed \(changedFileCount)" : filter.rawValue,
-                                   selected: navigator.filter == filter) { navigator.filter = filter }
-                            .accessibilityAddTraits(navigator.filter == filter ? .isSelected : [])
-                    }
-                }
-            }.scrollIndicators(.hidden)
         }
-        .padding(12)
-    }
-
-    private var navigatorOptions: [MenuEntry] {
-        [.item(showHidden ? "Hide hidden files" : "Show hidden files", icon: "eye", checked: showHidden) { showHidden.toggle() },
-         .item("Collapse folders", icon: "rectangle.compress.vertical") { expanded = [] },
-         .item("Refresh files", icon: "arrow.clockwise") { perform(.refresh) },
-         .separator,
-         .item("Find in file contents", detail: "Ctrl+H") { showFindInFiles() }]
-    }
-
-    private var changedFileCount: Int {
-        navigator.statuses.keys.filter { $0.pathRelative(to: root) != nil }.count
     }
 
     private var navigatorFooter: some View {
         HStack(spacing: 6) {
             Image(systemName: "folder").accessibilityHidden(true)
             Text("In \(rootURL.lastPathComponent)").lineLimit(1).truncationMode(.middle)
-                .appTooltip("Search and filters use \(root)")
+                .appTooltip("Find searches \(root)")
             Spacer(minLength: 0)
         }
         .font(.system(size: 10)).foregroundStyle(.secondary)
@@ -382,76 +304,6 @@ struct ExplorerView: View {
     private func sectionLabel(_ title: String) -> some View {
         Text(title).font(.system(size: 10, weight: .semibold)).foregroundStyle(.secondary)
             .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 7).padding(.vertical, 9)
-    }
-
-    private func openSearchHit() {
-        guard let hit = navigator.hits.first(where: { $0.id == navigator.cursor }) else { return }
-        revealAndSelect(hit.file, line: hit.line?.number, marking: hit.line == nil ? nil : navigator.query)
-    }
-
-    private var searchResults: some View {
-        ScrollViewReader { proxy in
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 3) {
-                    if navigator.loading {
-                        HStack { ProgressView().controlSize(.small); Text("Reading files…").font(.system(size: 12)) }.padding(12)
-                    } else if navigator.hits.isEmpty {
-                        VStack(spacing: 10) {
-                            Text(navigator.filter == .pinned && navigator.query.isBlank ? "No pinned files" : "No matching files")
-                                .font(.system(size: 13, weight: .semibold))
-                            Text(navigator.filter == .pinned ? "Pin a file from its action row or menu." : "Try a shorter search or show all files.")
-                                .font(.system(size: 12)).foregroundStyle(.secondary)
-                            InlineLink(title: "Show all files") { navigator.query = ""; navigator.filter = .all }
-                        }.padding(18).frame(maxWidth: .infinity)
-                    } else {
-                        sectionLabel(counted(navigator.hits.count, "result"))
-                        ForEach(navigator.hits) { hit in
-                            Button {
-                                navigator.cursor = hit.id
-                                openSearchHit()
-                            } label: {
-                                VStack(alignment: .leading, spacing: 4) {
-                                    HStack(spacing: 6) {
-                                        Image(systemName: icon(hit.file)).foregroundStyle(Theme.accent)
-                                        Text(hit.file.name).lineLimit(1).truncationMode(.middle)
-                                        Spacer(minLength: 0)
-                                        if let status = navigator.statuses[hit.file.path] { ExplorerStatusMark(status: status) }
-                                    }.font(.system(size: 12))
-                                    Text(relativePath(hit.file)).font(.mono(10)).foregroundStyle(.secondary)
-                                        .lineLimit(1).truncationMode(.head)
-                                    if let line = hit.line {
-                                        (Text("\(line.number): ") + Text(line.highlighted))
-                                            .font(.mono(10)).foregroundStyle(.secondary).lineLimit(2)
-                                    }
-                                }
-                                .padding(8).frame(maxWidth: .infinity, alignment: .leading)
-                                .background(selected?.path == hit.file.path ? Theme.accent.opacity(0.1) : .clear,
-                                            in: RoundedRectangle(cornerRadius: 6))
-                                .overlay(RoundedRectangle(cornerRadius: 6)
-                                    .stroke(navigator.cursor == hit.id ? Theme.accent : .clear))
-                                .contentShape(Rectangle())
-                            }
-                            .buttonStyle(.plain).hoverFill(cornerRadius: 6)
-                            .accessibilityAddTraits(selected?.path == hit.file.path ? .isSelected : [])
-                            .id(hit.id)
-                        }
-                        if navigator.hasMore {
-                            InlineLink(title: navigator.loadingMore ? "Finding more…" : "Show more matches") {
-                                Task { await navigator.loadMore() }
-                            }.disabled(navigator.loadingMore).padding(8)
-                        }
-                    }
-                    if navigator.limited {
-                        Text(navigator.mode == .names ? "Showing the first 200 files. Refine your search." : "Some files exceed the search size limit.")
-                            .font(.system(size: 11)).foregroundStyle(.secondary).padding(8)
-                    }
-                    if let note = navigator.statusNote, navigator.filter == .changed {
-                        Text(note).font(.system(size: 11)).foregroundStyle(Theme.attention).padding(8)
-                    }
-                }.padding(8)
-            }
-            .onChange(of: navigator.cursor) { _, cursor in if let cursor { proxy.scrollTo(cursor) } }
-        }
     }
 
     // MARK: - Tree
@@ -491,8 +343,7 @@ struct ExplorerView: View {
 
     @ViewBuilder private var tree: some View {
         VStack(spacing: 0) {
-            navigatorHeader
-            if !repositories.isEmpty && !navigator.isFiltering {
+            if !repositories.isEmpty {
                 HStack {
                     Text("Workspace").font(.system(size: 13, weight: .semibold))
                     Spacer()
@@ -507,23 +358,15 @@ struct ExplorerView: View {
                     PaneMessage(icon: "exclamationmark.triangle", title: "Folder unavailable", detail: error)
                     ActionButton(title: "Try again", tone: .outlined, height: 28, size: 12) { Task { await reopenFolders() } }
                 }.padding(12)
-            } else if navigator.isFiltering {
-                searchResults
             } else if loadingFolders.contains(root) && children[root] == nil {
                 ProgressView("Reading files…").controlSize(.small).frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if repositories.isEmpty && children[root]?.isEmpty == true {
                 PaneMessage(icon: "folder", title: "Empty folder", detail: showHidden ? "" : "Hidden files are off.")
             }
-            if !navigator.isFiltering && folderErrors[root] == nil && (!repositories.isEmpty || children[root]?.isEmpty != true) {
+            if folderErrors[root] == nil && (!repositories.isEmpty || children[root]?.isEmpty != true) {
                 ScrollViewReader { proxy in
                     ScrollView {
                         LazyVStack(spacing: repositories.isEmpty ? 1 : 3) {
-                            if !documents.pinned.isEmpty {
-                                sectionLabel("Pinned")
-                                ForEach(documents.pinned) { node in
-                                    treeRow(Row(node: node, depth: 0)).id("pinned:" + node.path)
-                                }
-                            }
                             sectionLabel("Project files")
                             ForEach(projectRoots) { project in
                                 if !repositories.isEmpty { projectRow(project).id(project.root) }
@@ -541,7 +384,7 @@ struct ExplorerView: View {
                     }
                     .onChange(of: selected?.path) {
                         if let path = selected?.path {
-                            withAnimation(reduceMotion ? nil : .easeOut(duration: 0.12)) { proxy.scrollTo(rows.contains(where: { $0.id == path }) ? path : "pinned:" + path, anchor: .center) }
+                            withAnimation(reduceMotion ? nil : .easeOut(duration: 0.12)) { proxy.scrollTo(path, anchor: .center) }
                         }
                     }
                     .onChange(of: projectCursor) { _, path in
@@ -572,7 +415,6 @@ struct ExplorerView: View {
         .focusEffectDisabled()
         .onMoveCommand(perform: moveTreeSelection)
         .onKeyPress(.return) {
-            if navigator.isFiltering { openSearchHit(); return .handled }
             if let projectCursor { selectRoot(projectCursor); return .handled }
             if let selected, selected.isDirectory { toggle(selected); return .handled }
             return .ignored
@@ -606,6 +448,7 @@ struct ExplorerView: View {
                     .font(.system(size: 8, weight: .bold))
                     .foregroundStyle(.secondary)
                     .rotationEffect(.degrees(isOpen ? 90 : 0))
+                    .motion(Motion.control, value: isOpen)
                     .frame(width: 10)
                     .opacity(node.isDirectory ? 1 : 0)
 
@@ -633,7 +476,7 @@ struct ExplorerView: View {
                     if isPinned(node) {
                         Image(systemName: "pin").font(.system(size: 10)).foregroundStyle(.secondary).accessibilityLabel("Pinned")
                     }
-                    if let status = navigator.statuses[node.path] { ExplorerStatusMark(status: status) }
+                    if let status = git.statuses[node.path] { ExplorerStatusMark(status: status) }
                 }
             }
             .padding(.vertical, 6)
@@ -653,7 +496,7 @@ struct ExplorerView: View {
         .hoverFill(cornerRadius: 6)
         .accessibilityAddTraits(isSelected ? .isSelected : [])
         .accessibilityLabel(row.name)
-        .accessibilityValue(node.isDirectory ? (isOpen ? "Expanded" : "Collapsed") : (navigator.statuses[node.path]?.label ?? "Unchanged"))
+        .accessibilityValue(node.isDirectory ? (isOpen ? "Expanded" : "Collapsed") : (git.statuses[node.path]?.label ?? "Unchanged"))
         .appTooltip(node.path)
         .draggable(node.url)
         .dropDestination(for: URL.self) { urls, _ in
@@ -755,7 +598,7 @@ struct ExplorerView: View {
                         if isEditable { editStatus }
                     } else {
                         PaneMessage(icon: "sidebar.left", title: "Pick a file",
-                                    detail: "Find a file above, or tap Shift twice to search.")
+                                    detail: "Choose one from the list, or press Shift twice to find it.")
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -848,7 +691,7 @@ struct ExplorerView: View {
         HStack(spacing: 8) {
             Image(systemName: icon(node)).foregroundStyle(Theme.accent)
             Text(node.name).font(.serif(16, .semibold)).lineLimit(1).truncationMode(.middle)
-            if let status = navigator.statuses[node.path] {
+            if let status = git.statuses[node.path] {
                 ExplorerStatusMark(status: status, spelledOut: true)
                     .padding(.horizontal, 7).padding(.vertical, 4)
                     .background(Theme.field, in: RoundedRectangle(cornerRadius: 6))
@@ -899,7 +742,7 @@ struct ExplorerView: View {
 
     private func fileDetails(_ node: FileNode) -> some View {
         let current = children[node.url.deletingLastPathComponent().path]?.first { $0.path == node.path } ?? node
-        return ExplorerFileDetails(node: current, path: relativePath(node), status: navigator.statuses[node.path],
+        return ExplorerFileDetails(node: current, path: relativePath(node), status: git.statuses[node.path],
                             text: isEditable ? draft : nil) { detailsPresented = false }
     }
 
@@ -1077,22 +920,49 @@ struct ExplorerView: View {
         revealedMatches = []
     }
 
-    // MARK: - File search
+    // MARK: - Find dialog
 
-    private func showFileSearch() {
-        guard dialogs.current == nil else { return }
-        focusEditor = false
-        narrowNavigator = true
-        navigator.mode = .names
-        $searchFocused.request()
+    private var finderIsOpen: Bool {
+        finderDialog != nil && dialogs.current?.id == finderDialog
     }
 
-    private func showFindInFiles() {
+    // The keys pick a mode, and the header's button passes none to reopen the last one.
+    // Pressed again while the dialog is open, they switch it to their mode.
+    private func showFinder(_ requested: ExplorerSearchMode?) {
+        if finderIsOpen, let finder {
+            if let requested { finder.show(requested) }
+            return
+        }
         guard dialogs.current == nil else { return }
+        let model = ExplorerFindModel(root: root, includeHidden: showHidden,
+                                      mode: requested ?? finderMode, query: finderQuery)
+        let dialog = Dialog(
+            title: "Find files or text",
+            content: AnyView(ExplorerFindDialog(model: model,
+                                                open: { openFound($0, query: model.query) },
+                                                close: { dialogs.dismiss() })
+                .onDisappear { dialogs.restoreFocus() }),
+            actions: [],
+            onCancel: {
+                finderMode = model.mode
+                finderQuery = model.query
+                finder = nil
+                finderDialog = nil
+            },
+            width: 500, isModal: true, framesItself: true)
+        finder = model
+        finderDialog = dialog.id
+        dialogs.show(dialog)
+    }
+
+    private func openFound(_ result: ExplorerFindModel.Result, query: String) {
+        dialogs.dismiss()
         focusEditor = false
-        narrowNavigator = true
-        navigator.mode = .contents
-        $searchFocused.request()
+        collapsedProjects.remove(root)
+        switch result {
+        case .file(let node): revealAndSelect(node)
+        case .line(let match): revealAndSelect(match.file, line: match.line.number, marking: query)
+        }
     }
 
     private func revealAndSelect(_ node: FileNode, line: Int? = nil, marking query: String? = nil) {
@@ -1233,11 +1103,9 @@ struct ExplorerView: View {
                 }
                 await load(directory.path)
                 guard let node = children[directory.path]?.first(where: { $0.path == url.path }) else { return }
-                navigator.query = ""
-                navigator.filter = .all
                 requestSelect(node)
                 if folder { expanded.insert(node.path); await load(node.path) }
-                await navigator.refreshStatus(roots: projectRoots.map(\.root))
+                await git.refresh(roots: projectRoots.map(\.root))
             }
         }), actions: [], width: 460, isModal: true))
     }
@@ -1389,7 +1257,6 @@ struct ExplorerView: View {
         let place = memory.place(for: root) ?? ExplorerMemory.Place()
         documents = place.documents
         if let edit = place.unsaved { documents.edits[edit.path] = edit }
-        navigator.invalidate()
         if children.isEmpty {
             for project in projectRoots {
                 expanded.formUnion(memory.place(for: project.root)?.expanded ?? [])
@@ -1494,7 +1361,6 @@ struct ExplorerView: View {
             }
             if chain.contains(where: expanded.contains) { expanded.insert(node.path) }
         }
-        navigator.invalidate()
     }
 
     private func reopenFolders() async {
@@ -1517,18 +1383,32 @@ struct ExplorerView: View {
         expanded.subtract(rows.first(where: { $0.id == path })?.compactPaths ?? [path])
     }
 
+    private var openFolderCount: Int {
+        rows.filter { $0.node.isDirectory && expanded.contains($0.node.path) }.count
+    }
+
+    // The deepest open level shuts first and each level above follows a beat later, so
+    // the tree folds up rather than snapping shut. Folders left open inside closed ones
+    // are shut at the end too, so nothing springs open again later.
+    private func collapseAllFolders() {
+        guard !reduceMotion else { expanded = []; return }
+        let open = rows.filter { $0.node.isDirectory && expanded.contains($0.node.path) }
+        let levels = Dictionary(grouping: open, by: \.depth).sorted { $0.key > $1.key }.map(\.value)
+        Task {
+            for (index, level) in levels.enumerated() {
+                if index > 0 { try? await Task.sleep(for: .milliseconds(110)) }
+                withAnimation(Motion.leave) { expanded.subtract(level.flatMap(\.compactPaths)) }
+            }
+            expanded = []
+        }
+    }
+
     private func moveTreeSelection(_ direction: MoveCommandDirection) {
         guard dialogs.current == nil else { return }
         treeCursorVisible = true
-        if navigator.isFiltering {
-            if direction == .up { navigator.moveCursor(by: -1) }
-            if direction == .down { navigator.moveCursor(by: 1) }
-            return
-        }
-        let pinnedPaths = documents.pinned.map(\.path)
-        let items = pinnedPaths + projectRoots.flatMap { project in
+        let items = projectRoots.flatMap { project in
             (repositories.isEmpty ? [] : [project.root])
-                + (collapsedProjects.contains(project.root) ? [] : rows(in: project.root).map(\.id).filter { !pinnedPaths.contains($0) })
+                + (collapsedProjects.contains(project.root) ? [] : rows(in: project.root).map(\.id))
         }
         if direction == .up || direction == .down {
             let cursor = projectCursor ?? selected?.path
@@ -1537,7 +1417,7 @@ struct ExplorerView: View {
             let path = items[next]
             if projectRoots.contains(where: { $0.root == path }) {
                 projectCursor = path
-            } else if let node = documents.pinned.first(where: { $0.path == path }) ?? rows.first(where: { $0.id == path })?.node {
+            } else if let node = rows.first(where: { $0.id == path })?.node {
                 projectCursor = nil
                 requestSelect(node)
             }

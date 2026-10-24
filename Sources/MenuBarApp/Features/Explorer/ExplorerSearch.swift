@@ -46,7 +46,7 @@ final class ExplorerSearchModel {
     let includeHidden: Bool
 
     var query = "" {
-        didSet { refreshMatches() }
+        didSet { if query != oldValue { refreshMatches() } }
     }
     private(set) var matches: [FileNode] = []
     private(set) var selectedIndex: Int?
@@ -78,9 +78,10 @@ final class ExplorerSearchModel {
         selectedIndex = index
     }
 
+    // Wraps at both ends, so the last result is one step up from the first.
     func moveSelection(by offset: Int) {
         guard !matches.isEmpty else { return }
-        selectedIndex = min(max((selectedIndex ?? 0) + offset, 0), matches.count - 1)
+        selectedIndex = ((selectedIndex ?? 0) + offset % matches.count + matches.count) % matches.count
     }
 
     private func refreshMatches() {
@@ -171,146 +172,5 @@ struct ExplorerSearchShortcut: NSViewRepresentable {
             token = nil
             detector.reset()
         }
-    }
-}
-
-struct ExplorerSearchDialog: View {
-    private enum ResultsState: Equatable {
-        case prompt
-        case loading
-        case empty
-        case matches
-    }
-
-    @Bindable var model: ExplorerSearchModel
-    let onOpen: (FileNode) -> Void
-
-    @FocusState private var searchFocused: Bool
-
-    var body: some View {
-        VStack(spacing: 12) {
-            HStack(spacing: 8) {
-                Image(systemName: "magnifyingglass")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(.secondary)
-                TextField("Search files", text: $model.query)
-                    .textFieldStyle(.plain)
-                    .font(.system(size: 13))
-                    .focused($searchFocused)
-                    .onMoveCommand { direction in
-                        switch direction {
-                        case .up: model.moveSelection(by: -1)
-                        case .down: model.moveSelection(by: 1)
-                        default: break
-                        }
-                    }
-            }
-            .padding(.horizontal, 11)
-            .frame(height: 34)
-            .background(RoundedRectangle(cornerRadius: 8).fill(Theme.field))
-            .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.border))
-
-            results
-        }
-        .smoothlyResizes(when: resultsState)
-        .task {
-            searchFocused = true
-            await model.load()
-        }
-    }
-
-    @ViewBuilder private var results: some View {
-        switch resultsState {
-        case .prompt:
-            searchMessage("Start typing to find a file")
-                .transition(.fadeIn)
-        case .loading:
-            HStack(spacing: 8) {
-                ProgressView().controlSize(.small)
-                Text("Reading files...")
-            }
-            .font(.system(size: 12))
-            .foregroundStyle(.secondary)
-            .frame(maxWidth: .infinity, minHeight: 180)
-            .transition(.fadeIn)
-        case .empty:
-            searchMessage("No matching files")
-                .transition(.fadeIn)
-        case .matches:
-            ScrollViewReader { proxy in
-                ScrollView {
-                    LazyVStack(spacing: 2) {
-                        ForEach(Array(model.matches.enumerated()), id: \.element.path) { index, node in
-                            resultRow(node, index: index)
-                                .id(node.path)
-                        }
-                    }
-                    .padding(5)
-                }
-                .frame(height: 240)
-                .background(RoundedRectangle(cornerRadius: 8).fill(Theme.field.opacity(0.55)))
-                .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.border))
-                .onChange(of: model.selectedIndex) {
-                    if let path = model.selected?.path {
-                        withAnimation(.easeOut(duration: 0.1)) {
-                            proxy.scrollTo(path, anchor: .center)
-                        }
-                    }
-                }
-            }
-            .transition(.fadeIn)
-        }
-    }
-
-    private var resultsState: ResultsState {
-        if model.query.isBlank { return .prompt }
-        if model.loading { return .loading }
-        return model.matches.isEmpty ? .empty : .matches
-    }
-
-    private func resultRow(_ node: FileNode, index: Int) -> some View {
-        let selected = model.selectedIndex == index
-        let path = node.path.pathRelative(to: model.root) ?? node.path
-        let directory = (path as NSString).deletingLastPathComponent
-
-        return Button {
-            model.select(index)
-        } label: {
-            HStack(spacing: 9) {
-                Image(systemName: "doc")
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
-                    .frame(width: 14)
-                Text(node.name)
-                    .font(.system(size: 12, weight: .medium))
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                if directory != "." {
-                    Text(directory)
-                        .font(.mono(10))
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .truncationMode(.head)
-                }
-                Spacer(minLength: 8)
-            }
-            .padding(.horizontal, 9)
-            .frame(height: 30)
-            .background(RoundedRectangle(cornerRadius: 6)
-                .fill(selected ? Theme.card : .clear))
-            .overlay(RoundedRectangle(cornerRadius: 6)
-                .stroke(selected ? Theme.border : .clear))
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .hoverFill(cornerRadius: 6)
-        .simultaneousGesture(TapGesture(count: 2).onEnded { onOpen(node) })
-    }
-
-    private func searchMessage(_ text: String) -> some View {
-        Text(text)
-            .font(.system(size: 12))
-            .foregroundStyle(.secondary)
-            .frame(maxWidth: .infinity, minHeight: 180)
     }
 }

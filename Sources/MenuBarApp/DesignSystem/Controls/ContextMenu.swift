@@ -33,6 +33,7 @@ enum MenuEntry {
                      monospacedSubtitle: Bool = false,
                      detail: String? = nil,
                      detailColour: Color? = nil,
+                     disabled: Bool = false,
                      action: @escaping () -> Void) -> MenuEntry {
         .item(MenuItem(label: label, kind: kind, projectTint: projectTint,
                        icon: icon, iconTint: iconTint, meter: meter, image: image,
@@ -41,7 +42,8 @@ enum MenuEntry {
                        badge: badge, badgeTint: badgeTint, subtitle: subtitle,
                        monospacedSubtitle: monospacedSubtitle,
                        detail: detail, detailColour: detailColour,
-                       handler: action))
+                       isDisabled: disabled,
+                       handler: disabled ? nil : action))
     }
 
     static func item(_ label: String,
@@ -139,6 +141,9 @@ struct MenuItem {
     var detail: String?
     var detailColour: Color?
     var detailHandler: (() -> Void)? = nil
+    // Kept in the menu but faded and inert, so the rows around it do not move when the
+    // action has nothing to act on.
+    var isDisabled = false
     var handler: (() -> Void)? = nil
 
     func matches(_ filter: String) -> Bool {
@@ -938,6 +943,7 @@ private struct MenuItemRow: View {
         .background(RoundedRectangle(cornerRadius: 6)
             .fill(action != nil && hovering ? Color.black.opacity(0.05) : .clear)
             .padding(.horizontal, 5))
+        .opacity(item.isDisabled ? 0.38 : 1)
         .contentShape(Rectangle())
     }
 

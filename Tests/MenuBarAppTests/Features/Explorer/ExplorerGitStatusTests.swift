@@ -3,83 +3,20 @@ import Testing
 @testable import MenuBarApp
 
 @MainActor
-struct ExplorerNavigatorTests {
-    @Test func filtersAndSearchStayInsideTheActiveProject() async throws {
-        let first = ScratchDirectory(prefix: "explorer-search")
-        let second = ScratchDirectory(prefix: "explorer-search-other")
-        try "first needle".write(to: first.path("same.swift"), atomically: true, encoding: .utf8)
-        try "second needle".write(to: second.path("same.swift"), atomically: true, encoding: .utf8)
-        let model = ExplorerNavigator()
-        model.query = "same"
-        await model.search(root: first.url.path, includeHidden: false, pinned: [])
-        #expect(model.hits.map(\.file.path) == [first.path("same.swift").resolvingSymlinksInPath().path])
-        model.mode = .contents
-        model.query = "needle"
-        await model.search(root: second.url.path, includeHidden: false, pinned: [])
-        #expect(model.hits.map(\.file.path) == [second.path("same.swift").resolvingSymlinksInPath().path])
-        #expect(model.hits.first?.line?.number == 1)
-        #expect(model.hits.first?.line?.text == "second needle")
-    }
-
-    @Test func pinnedFilterAlsoAppliesToContentMatches() async throws {
-        let scratch = ScratchDirectory(prefix: "explorer-pinned-search")
-        for name in ["one.swift", "two.swift", ".hidden.swift"] {
-            try "needle".write(to: scratch.path(name), atomically: true, encoding: .utf8)
-        }
-        let files = await FileTree.files(beneath: scratch.url, includeHidden: true)
-        let pinned = files.filter { $0.name == "two.swift" || $0.name == ".hidden.swift" }
-        let model = ExplorerNavigator()
-        model.filter = .pinned
-        model.mode = .contents
-        model.query = "needle"
-        await model.search(root: scratch.url.path, includeHidden: false, pinned: pinned)
-        #expect(model.hits.map(\.file.name) == ["two.swift"])
-        await model.search(root: scratch.url.path, includeHidden: true, pinned: pinned)
-        #expect(Set(model.hits.map(\.file.name)) == ["two.swift", ".hidden.swift"])
-    }
-
-    @Test func changedFilterIncludesDeletedFilesAndRealGitStatus() async throws {
+struct ExplorerGitStatusTests {
+    @Test func statusesIncludeDeletedFilesAndRealGitStatus() async throws {
         let repo = try GitRepo()
         try repo.write("removed.swift", "old")
         try repo.commit("Add fixture")
         try repo.write("README.md", "edited")
         try repo.write("added.swift", "new")
         try FileManager.default.removeItem(at: repo.url.appendingPathComponent("removed.swift"))
-        let model = ExplorerNavigator()
-        await model.refreshStatus(roots: [repo.path])
-        model.filter = .changed
-        await model.search(root: repo.path, includeHidden: false, pinned: [])
-        #expect(Set(model.hits.map(\.file.name)) == ["README.md", "added.swift", "removed.swift"])
-        #expect(model.statuses[repo.url.appendingPathComponent("removed.swift").resolvingSymlinksInPath().path] == .deleted)
-        #expect(model.statuses[repo.url.appendingPathComponent("README.md").resolvingSymlinksInPath().path] == .modified)
-    }
-
-    @Test func contentResultsCanLoadAnotherPage() async throws {
-        let scratch = ScratchDirectory(prefix: "explorer-search-pages")
-        let contents = Array(repeating: "needle", count: 205).joined(separator: "\n")
-        try contents.write(to: scratch.path("many.txt"), atomically: true, encoding: .utf8)
-        let model = ExplorerNavigator()
-        model.mode = .contents
-        model.query = "needle"
-        await model.search(root: scratch.url.path, includeHidden: false, pinned: [])
-        #expect(model.hits.count == 200)
-        #expect(model.hasMore)
-        await model.loadMore()
-        #expect(model.hits.count == 205)
-        #expect(!model.hasMore)
-        #expect(Set(model.hits.map(\.id)).count == 205)
-    }
-
-    @Test func invalidatingSearchFindsNewFiles() async throws {
-        let scratch = ScratchDirectory(prefix: "explorer-search-refresh")
-        let model = ExplorerNavigator()
-        model.query = "new"
-        await model.search(root: scratch.url.path, includeHidden: false, pinned: [])
-        #expect(model.hits.isEmpty)
-        try "new".write(to: scratch.path("new.txt"), atomically: true, encoding: .utf8)
-        model.invalidate()
-        await model.search(root: scratch.url.path, includeHidden: false, pinned: [])
-        #expect(model.hits.map(\.file.name) == ["new.txt"])
+        let model = ExplorerGitStatus()
+        await model.refresh(roots: [repo.path])
+        let path = { (name: String) in repo.url.appendingPathComponent(name).resolvingSymlinksInPath().path }
+        #expect(model.statuses[path("removed.swift")] == .deleted)
+        #expect(model.statuses[path("README.md")] == .modified)
+        #expect(model.statuses[path("added.swift")] != nil)
     }
 }
 

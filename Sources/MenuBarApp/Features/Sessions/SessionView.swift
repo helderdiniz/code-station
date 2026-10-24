@@ -77,6 +77,7 @@ struct SessionView: View {
     @State private var explorerReveal: ExplorerReveal?
     @State private var explorerCommand: ExplorerCommand?
     @State private var explorerShowsHidden = true
+    @State private var explorerOpenFolders = 0
     @State private var previews = LocalServerPreviewTabs()
     @State private var previewFocused = false
     @State private var previewAddressFocused = false
@@ -105,6 +106,7 @@ struct SessionView: View {
     @State private var recapOrigin: CGPoint?
     @State private var railNotes = 0
     @State private var railNote: String?
+    @State private var railNoteIcon = "arrow.up.forward.app"
 
     private let bottomAnchor = "transcript-bottom"
     private var terminalScope: TerminalScope { .session(sessionID) }
@@ -236,6 +238,8 @@ struct SessionView: View {
                         ExplorerView(root: explorerDirectory, reveal: $explorerReveal,
                                      command: $explorerCommand,
                                      showHidden: $explorerShowsHidden,
+                                     openFolders: $explorerOpenFolders,
+                                     refreshed: { showRailNote("Refreshed \(counted($0, "item"))", icon: "checkmark") },
                                      repositories: workspaceRepositories(session) + (designFilesURL.map {
                                          [ChangesRepository(root: $0.path, name: "Design files")]
                                      } ?? []),
@@ -629,7 +633,7 @@ struct SessionView: View {
         .motion(Motion.reveal, value: tab)
         .overlay(alignment: .topTrailing) {
             if let railNote {
-                HeaderNote(icon: "arrow.up.forward.app", text: railNote)
+                HeaderNote(icon: railNoteIcon, text: railNote)
                     .offset(y: Self.destinationDeckHeight + 2)
                     .transition(reduceMotion
                                 ? .opacity
@@ -688,10 +692,31 @@ struct SessionView: View {
             }
     }
 
+    // Find stays one click away. Everything else done to the tree sits behind the menu,
+    // which is the only place those actions live.
     private var explorerActions: some View {
-        HeaderRailButton(icon: "magnifyingglass", label: "Find a file", hint: "Tap Shift twice") {
-            explorerCommand = .findFile
+        HStack(spacing: 2) {
+            HeaderRailButton(icon: "magnifyingglass", label: "Find files or text",
+                             hint: "Shift twice for files, Ctrl+H for text") {
+                explorerCommand = .find(nil)
+            }
+            HeaderRailMenuButton(icon: "ellipsis", label: "File actions",
+                                 hint: "New, hidden files, collapse, refresh")
+                .appMenu { explorerMenu }
         }
+    }
+
+    private var explorerMenu: [MenuEntry] {
+        let open = explorerOpenFolders
+        return [.item("New file", icon: "doc.badge.plus") { explorerCommand = .newFile },
+                .item("New folder", icon: "folder.badge.plus") { explorerCommand = .newFolder },
+                .separator,
+                .item("Show hidden files", icon: explorerShowsHidden ? "eye" : "eye.slash",
+                      checked: explorerShowsHidden) { explorerCommand = .toggleHidden },
+                .item("Collapse folders", icon: "rectangle.compress.vertical",
+                      detail: open == 0 ? "All closed" : "\(open) open",
+                      disabled: open == 0) { explorerCommand = .collapseFolders },
+                .item("Refresh files", icon: "arrow.clockwise") { explorerCommand = .refresh }]
     }
 
     private func terminalOptions(isOpen: Bool, directory: String) -> [MenuEntry] {
@@ -1443,9 +1468,10 @@ struct SessionView: View {
     // The app a folder opens in comes up over the window, and a copy shows nothing at
     // all, so the note is all the window itself shows of the click. A second click keeps
     // the note up rather than letting the first one's timer take it down early.
-    private func showRailNote(_ text: String) {
+    private func showRailNote(_ text: String, icon: String = "arrow.up.forward.app") {
         railNotes += 1
         let note = railNotes
+        railNoteIcon = icon
         railNote = text
         Task { @MainActor in
             try? await Task.sleep(for: .seconds(1.9))
