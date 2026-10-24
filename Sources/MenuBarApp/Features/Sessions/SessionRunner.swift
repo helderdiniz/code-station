@@ -133,6 +133,7 @@ final class SessionRunner {
     // the same as the Codex context refreshes.
     @ObservationIgnored private var waitWatchdogs: [UUID: Task<Void, Never>] = [:]
     @ObservationIgnored private let memoryLimit: () -> UInt64
+    @ObservationIgnored private let midTurnPromptDelivery: () -> PromptDelivery
     let followUps: SessionFollowUps
     // Called once for every turn that ends, however it ended.
     @ObservationIgnored var onTurnEnded: (UUID) -> Void = { _ in }
@@ -182,7 +183,8 @@ final class SessionRunner {
          memoryLimit: (() -> UInt64)? = nil,
          automaticRecapsEnabled: (() -> Bool)? = nil,
          automaticTitlesEnabled: (() -> Bool)? = nil,
-         promptSuggestionsEnabled: (() -> Bool)? = nil) {
+         promptSuggestionsEnabled: (() -> Bool)? = nil,
+         midTurnPromptDelivery: (() -> PromptDelivery)? = nil) {
         self.configs = configs
         self.persistentAgentSessions = persistentAgentSessions
         // A runner that keeps nothing between launches, as tests make, keeps no review either.
@@ -193,6 +195,8 @@ final class SessionRunner {
         self.stallCheckInterval = stallCheckInterval
         self.waitingStaleAfter = waitingStaleAfter
         self.memoryLimit = memoryLimit ?? { Preferences.sessionMemoryLimit(in: preferences).bytes() }
+        self.midTurnPromptDelivery = midTurnPromptDelivery
+            ?? { Preferences.midTurnPromptDelivery(in: preferences) }
         followUps = SessionFollowUps(
             automaticRecapsEnabled: automaticRecapsEnabled ?? { Preferences.sessionRecapsEnabled(in: preferences) },
             automaticTitlesEnabled: automaticTitlesEnabled ?? { Preferences.sessionTitlesEnabled(in: preferences) },
@@ -976,14 +980,14 @@ final class SessionRunner {
     // When a prompt sent during a turn reaches the agent. Now means inside the turn that is
     // running, if the agent can take it there; otherwise, and after the turn, the prompt
     // waits its turn in the queue.
-    enum PromptDelivery { case now, afterTurn }
+    enum PromptDelivery: String { case now, afterTurn }
 
     // A prompt joins the queue and the queue is what runs, unless a turn is running and can
     // take the prompt now. Typing during a turn therefore costs nothing, and the ones
-    // already waiting keep their order.
+    // already waiting keep their order. Without a delivery the one chosen in settings is used.
     func send(_ prompt: String, attachments: [Attachment] = [],
               customInstructions: String? = nil, dictated: Bool = false,
-              delivery: PromptDelivery = .now,
+              delivery: PromptDelivery? = nil,
               sessionID: UUID, store: ProjectStore) {
         guard !isBeingRemoved(sessionID), store.session(sessionID) != nil else { return }
         var text = prompt.trimmed
@@ -1015,7 +1019,8 @@ final class SessionRunner {
             customInstructions: instructions?.isEmpty == false ? instructions : nil,
             expansion: expansion(of: text, sessionID: sessionID, store: store),
             dictated: dictated)
-        if delivery == .now, steer(queued, sessionID: sessionID, store: store) { return }
+        if (delivery ?? midTurnPromptDelivery()) == .now,
+           steer(queued, sessionID: sessionID, store: store) { return }
         recordAddingIfMissing(sessionID).queue.append(queued)
         runQueue(sessionID, store: store)
     }

@@ -506,6 +506,21 @@ enum Preferences {
         store.set(enabled, forKey: "promptSuggestionsEnabled")
     }
 
+    // Steering is the default: an agent that can take a prompt mid-turn uses it at its
+    // next step, which is what someone typing while it works usually wants.
+    static func midTurnPromptDelivery(
+        in store: UserDefaults = .standard
+    ) -> SessionRunner.PromptDelivery {
+        store.string(forKey: "midTurnPromptDelivery")
+            .flatMap(SessionRunner.PromptDelivery.init(rawValue:)) ?? .now
+    }
+
+    static func setMidTurnPromptDelivery(
+        _ delivery: SessionRunner.PromptDelivery, in store: UserDefaults = .standard
+    ) {
+        store.set(delivery.rawValue, forKey: "midTurnPromptDelivery")
+    }
+
     static func sessionTitlesEnabled(in store: UserDefaults = .standard) -> Bool {
         store.bool(forKey: "sessionTitlesEnabled")
     }

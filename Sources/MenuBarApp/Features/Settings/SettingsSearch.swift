@@ -5,6 +5,7 @@ enum SettingsSearchTarget: String, Hashable {
     case generalRecaps
     case generalTitles
     case generalSuggestions
+    case generalMidTurnPrompts
     case generalSound
     case generalOldSessions
     case generalOrphanedWorktrees
@@ -55,6 +56,8 @@ enum SettingsSearchIndex {
                "title name rename regenerate summarise sentence first turn right click manual toggle"),
         result("Suggest the next prompt", .general, .generalSuggestions,
                "suggestion suggest next prompt predict composer follow up autocomplete toggle"),
+        result("Prompts sent during a turn", .general, .generalMidTurnPrompts,
+               "steer queue send now wait mid turn running busy return enter interrupt"),
         result("Session finished sound", .general, .generalSound,
                "sound alert audio chime beep play finish turn ends notification silent off"),
         result("Old sessions", .general, .generalOldSessions,
