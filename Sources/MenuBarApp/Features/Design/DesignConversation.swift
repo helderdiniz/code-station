@@ -281,7 +281,8 @@ struct DesignConversation: View {
             }))
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.26), value: conversationExpanded)
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.26), value: conversationMinimized)
-        .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: minimizedWidth)
+        // The minimized tab hugs its working word, which changes on its own every few
+        // seconds, so its width follows the word without any motion.
     }
 
     // Expand and collapse live in the corner, out of the transcript's way. The button only

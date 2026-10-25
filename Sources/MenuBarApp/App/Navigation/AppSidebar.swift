@@ -343,11 +343,20 @@ struct AppSidebar: View {
         appSettings.projectGrouping.sections(of: orderedItems)
     }
 
-    // Stable identities make SwiftUI move the existing rows to their sorted positions.
-    // The order itself must be the animation value because pinning changes neither sort
-    // preference, and pinning a session may leave the order inside its container unchanged.
-    private var itemOrderKey: [UUID] {
-        sections.flatMap(\.items).map(\.id)
+    // Stable identities make SwiftUI move the existing rows to their sorted positions. The
+    // move is only animated when the person caused it: a pin, a drag, a row added or
+    // taken away. Under "Last used" an agent at work also reorders the rows, and a list
+    // gliding under the pointer while nobody touched it moves the row about to be clicked,
+    // so the key leaves activity out and that reorder lands at once.
+    private var itemOrderKey: [SidebarArrangement] {
+        let items = sections.flatMap(\.items)
+        guard appSettings.projectSort == .lastUsed else {
+            return items.map { SidebarArrangement(id: $0.id) }
+        }
+        let pinned = ProjectSort.pinnedIDs(of: items, sessions: store.sidebarSessions)
+        return items
+            .map { SidebarArrangement(id: $0.id, pinned: pinned.contains($0.id), placement: $0.sidebarPlacement) }
+            .sorted { $0.id.uuidString < $1.id.uuidString }
     }
 
     private var filter: SidebarFilter { filterBox.filter }
@@ -854,10 +863,18 @@ struct AppSidebar: View {
         return key
     }
 
+    // Cards are ordered by when their sessions were last active, so this leaves activity
+    // out for the same reason the rows' key does: a card that moves because its agent
+    // spoke lands at once, and one the person pinned or dragged glides to its place.
     private func sessionOrderKey(_ grouped: [UUID: [ChatSession]],
-                                 workspaceGroups: [UUID: [ChatSession]]) -> [UUID] {
-        store.workspaces.flatMap { workspaceGroups[$0.id, default: []].map(\.id) }
-            + store.projects.flatMap { grouped[$0.id, default: []].map(\.id) }
+                                 workspaceGroups: [UUID: [ChatSession]]) -> [[SidebarArrangement]] {
+        let containers = store.workspaces.map { workspaceGroups[$0.id, default: []] }
+            + store.projects.map { grouped[$0.id, default: []] }
+        return containers.map { sessions in
+            sessions
+                .map { SidebarArrangement(id: $0.id, pinned: $0.isPinned, placement: $0.sidebarPlacement) }
+                .sorted { $0.id.uuidString < $1.id.uuidString }
+        }
     }
 
     // Brings the selected card on screen, and only as far as that takes: a card already
@@ -2367,9 +2384,10 @@ private struct SeeMoreCard: View {
 
 // What the session is doing right now, under its title. Most tool calls finish in a
 // few milliseconds, so the line holds for a moment before it gives way: long enough
-// to read, and only ever replaced by the next call rather than by an empty gap.
+// to read, and only ever replaced by the next call rather than by an empty gap. It is
+// the agent that changes it, so the words are swapped where they stand: a fade on each
+// one would keep the rail flickering while nobody is looking at it.
 private struct ActivityLine: View {
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let activity: String?
 
     private static let minimumDwell: TimeInterval = 1
@@ -2386,11 +2404,8 @@ private struct ActivityLine: View {
                     .lineLimit(1)
                     .truncationMode(.tail)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    // Replacements leave at once, then the current activity fades in.
-                    .transition(.fadeIn)
             }
         }
-        .animation(reduceMotion ? nil : .easeOut(duration: 0.3), value: shown)
         // A newer value cancels the wait for the older one, which is what keeps the
         // hold from delaying anything the user would rather see.
         .task(id: activity) { await settle(on: activity) }
@@ -2460,4 +2475,11 @@ private struct SidebarCheckbox: View {
             .transition(reduceMotion ? .opacity : .opacity.combined(with: .move(edge: .leading)))
             .accessibilityHidden(true)
     }
+}
+
+// What decides a row's or a card's place in the rail that the person set themselves.
+struct SidebarArrangement: Equatable {
+    let id: UUID
+    var pinned = false
+    var placement: SidebarPlacement?
 }

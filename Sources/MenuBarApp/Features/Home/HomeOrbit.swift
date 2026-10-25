@@ -308,26 +308,32 @@ struct OrbitLayout {
 // the ring from the top down both sides, then the wires out to each project and its tile,
 // then the wires on to each session and its pill, and only then the moving dashes.
 struct OrbitOpening {
+    // The pills are what Home is opened to click, so the whole order is played at this
+    // share of its natural pace. Each part still moves at its own speed; it only starts
+    // sooner, and a map of a dozen sessions is ready in well under two seconds.
+    static let pace = 0.6
+
     let ringDone: Double
     private let pillCount: Int
 
     init(layout: OrbitLayout) {
-        ringDone = Double(layout.steps) * 0.055 + 0.45
+        ringDone = (Double(layout.steps) * 0.055 + 0.45) * Self.pace
         pillCount = layout.pills.count
     }
 
-    func arc(_ step: Int) -> Double { Double(step) * 0.055 }
-    func projectRing(_ index: Int) -> Double { max(0, ringDone - 0.3) + Double(index) * 0.04 }
-    func tile(_ index: Int) -> Double { ringDone + 0.38 + Double(index) * 0.07 }
-    func pill(_ index: Int) -> Double { leaves + 0.2 + Double(index) * 0.045 }
-    var more: Double { leaves + 0.4 }
-    var flow: Double { pill(pillCount) + 0.3 }
+    func arc(_ step: Int) -> Double { Double(step) * 0.055 * Self.pace }
+    func projectRing(_ index: Int) -> Double { max(0, ringDone - 0.3 * Self.pace) + Double(index) * 0.04 * Self.pace }
+    func tile(_ index: Int) -> Double { ringDone + (0.38 + Double(index) * 0.07) * Self.pace }
+    func pill(_ index: Int) -> Double { leaves + (0.2 + Double(index) * 0.045) * Self.pace }
+    var more: Double { leaves + 0.4 * Self.pace }
+    var flow: Double { pill(pillCount) + 0.3 * Self.pace }
 
     func wire(_ wire: OrbitLayout.Wire) -> Double {
-        wire.trunk ? ringDone + Double(wire.order) * 0.07 : leaves + Double(wire.order) * 0.045
+        wire.trunk ? ringDone + Double(wire.order) * 0.07 * Self.pace
+            : leaves + Double(wire.order) * 0.045 * Self.pace
     }
 
-    private var leaves: Double { ringDone + 0.6 }
+    private var leaves: Double { ringDone + 0.6 * Self.pace }
 
     static let draw = Animation.timingCurve(0.3, 0.7, 0.2, 1, duration: 0.6)
     static let slide = Animation.timingCurve(0.2, 0.8, 0.2, 1, duration: 0.5)

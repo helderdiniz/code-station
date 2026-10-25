@@ -139,7 +139,9 @@ struct TranscriptAgentGroup: View {
         }
         .cardSurface(cornerRadius: 10)
         .id(anchor)
-        .smoothlyResizes(when: isExpanded)
+        // Keyed on the person's own choice, not on the agents: a group that opens because
+        // a subagent started, or closes because the last one finished, does so in place.
+        .smoothlyResizes(when: expanded)
         .onChange(of: focus, initial: true) {
             if focus?.anchor == anchor { expanded = true }
         }

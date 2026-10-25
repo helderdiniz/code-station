@@ -154,6 +154,11 @@ struct DayRibbonSection: View {
         .contentShape(Rectangle())
         .gesture(TapGesture().onEnded { skip() },
                  including: moment.play == nil ? .subviews : .all)
+        // The bars cannot be read while the entrance plays, so a pointer that comes to
+        // read them ends it rather than waiting it out.
+        .onPointerHover { inside in
+            if inside, case .playing = entrance { skip() }
+        }
     }
 
     // MARK: - Entrance

@@ -72,6 +72,11 @@ struct SessionView: View {
     @State private var agentFocus: AgentTranscriptFocus?
     @State private var recapOpen = false
     @State private var recapNeedsAttention = false
+    // Whether the person asked for the recap that is on its way. One they asked for grows
+    // out of its button; one written on its own appears where it hangs without moving, since
+    // nobody clicked anything for it.
+    @State private var recapRequested = false
+    @State private var recapArrivesUnasked = false
     @State private var workingSetVisible: Bool
     @State private var requestedChange: RequestedChange?
     @State private var explorerReveal: ExplorerReveal?
@@ -380,9 +385,15 @@ struct SessionView: View {
                     recapOpen = false
                     recapNeedsAttention = false
                 } else {
-                    withAnimation(reduceMotion ? nil : .easeOut(duration: 0.14)) {
+                    if recapRequested || recapOpen {
+                        withAnimation(reduceMotion ? nil : .easeOut(duration: 0.14)) {
+                            recapOpen = true
+                        }
+                    } else {
+                        recapArrivesUnasked = true
                         recapOpen = true
                     }
+                    recapRequested = false
                     recapNeedsAttention = store.hasFinished(sessionID)
                 }
             }
@@ -1024,7 +1035,9 @@ struct SessionView: View {
                 close: closeRecap)
                 .padding(.trailing, 20)
                 .offset(y: Self.destinationDeckHeight + 7)
-                .transition(.grow(from: recapOrigin, reduceMotion: reduceMotion))
+                .transition(recapArrivesUnasked ? .identity : .grow(from: recapOrigin, reduceMotion: reduceMotion))
+                // Once it is in place, closing it goes back into the button like any other.
+                .onAppear { recapArrivesUnasked = false }
         }
     }
 
@@ -1564,7 +1577,7 @@ struct SessionView: View {
     }
 
     private func generateRecap() {
-        _ = runner.recap(visibleConversationID, store: store)
+        recapRequested = runner.recap(visibleConversationID, store: store)
     }
 
     private func toggleRecap() {

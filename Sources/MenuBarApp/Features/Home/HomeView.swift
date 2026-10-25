@@ -11,8 +11,7 @@ struct HomeView: View {
     @Environment(WorkingTreeWatch.self) private var workingTrees
     @Environment(SessionTimeWatch.self) private var sessionTimes
 
-    // The map builds itself up the first time it is shown each time Home opens, and then
-    // only follows the work.
+    // The map builds itself up when Home opens, and then only follows the work.
     @State private var mapOpened = false
 
     // Recomputed once per redraw and handed down, because every section below counts over
@@ -93,11 +92,14 @@ struct HomeView: View {
                                     onOpened: { mapOpened = true })
                         // A session card on the map can hang below it, over the next section.
                         .zIndex(1)
+                        // The opening belongs to opening Home. Whatever the map first
+                        // shows has had its chance, so an orbit that only appears later,
+                        // when work starts in the background, arrives already built.
+                        .onAppear { mapOpened = true }
                     timeSpent(standing)
                     dailyTotals(standing)
                     resume(standing)
                 }
-                .motion(HomeWorkMapView.reflow, value: map.shape)
                 .padding(24)
             }
         }

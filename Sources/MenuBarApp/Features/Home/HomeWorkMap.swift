@@ -168,7 +168,8 @@ struct HomeWorkMapView: View {
         let layout = map.layout(width: width)
         VStack(alignment: .leading, spacing: 14) {
             heading
-            // A new layout fades in over the old one while the card resizes around it.
+            // Only the work or the window's width changes the layout, never a click, so a
+            // new layout takes its place without any motion.
             ZStack(alignment: .topLeading) {
                 switch layout {
                 case .quiet:
@@ -183,7 +184,6 @@ struct HomeWorkMapView: View {
                 }
             }
             .id(layout)
-            .transition(.opacity)
         }
         .padding(20)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -199,7 +199,6 @@ struct HomeWorkMapView: View {
             .accessibilityHidden(true)
         }
         .cardSurface(cornerRadius: 16)
-        .motion(Self.reflow, value: layout)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Work map")
     }
