@@ -389,8 +389,11 @@ final class DockerService {
     private(set) var containers = Resource<DockerContainer>(
         list: ["ps", "--all", "--no-trunc", "--size", "--format", "{{json .}}"],
         // Podman fails the whole list when it cannot measure one container's layers, so
-        // the list without sizes is still better than calling the engine stopped.
-        fallback: ["ps", "--all", "--no-trunc", "--format", "{{json .}}"],
+        // the list without sizes is still better than calling the engine stopped. The fields
+        // are named one by one because `{{json .}}` touches `.Size`, and the docker CLI then
+        // asks for sizes even without `--size`.
+        fallback: ["ps", "--all", "--no-trunc", "--format",
+                   #"{"ID":{{json .ID}},"Names":{{json .Names}},"Image":{{json .Image}},"Status":{{json .Status}},"State":{{json .State}},"Ports":{{json .Ports}},"Networks":{{json .Networks}},"Mounts":{{json .Mounts}},"Labels":{{json .Labels}}}"#],
         parse: DockerContainer.init(line:), sortKey: \.name)
     private(set) var images = Resource<DockerImage>(
         list: ["image", "ls", "--no-trunc", "--format", "{{json .}}"],

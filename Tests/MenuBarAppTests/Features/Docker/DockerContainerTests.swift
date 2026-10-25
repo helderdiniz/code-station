@@ -141,7 +141,8 @@ struct DockerServiceTests {
     @Test func listsContainersWithoutSizesWhenTheEngineCannotMeasureThem() async {
         let service = DockerService(
             runner: { arguments in
-                if arguments.first == "ps", arguments.contains("--size") {
+                // The docker CLI sizes containers for `{{json .}}` too, since it reads `.Size`.
+                if arguments.first == "ps", arguments.contains("--size") || arguments.contains("{{json .}}") {
                     return DockerService.Output(errorText: "determining size of layer", status: 125)
                 }
                 let line = arguments.first == "ps" ? #"{"ID":"container-1","Names":"api","State":"exited"}"# : ""
