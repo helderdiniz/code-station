@@ -43,7 +43,7 @@ struct DockerView: View {
                 Rectangle().fill(Theme.hairline).frame(width: 1)
                 pane
             }
-            SheetFooter(title: "Refreshes every 4 seconds while open. Shift-click picks a range, ⌘A picks everything shown.") {
+            SheetFooter(title: "Shift-click picks a range, ⌘A picks everything shown.") {
                 dismiss()
             }
         }
@@ -62,17 +62,7 @@ struct DockerView: View {
         .background(WindowKeyAnchor(handler: keys))
         .onAppear { keys.start { handleKey($0) } }
         .onDisappear { keys.stop() }
-        .task {
-            await docker.refresh(sizes: true)
-            while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(4))
-                guard !Task.isCancelled else { return }
-                // A container list read while a dialog is asking about it would move the
-                // rows the question is about.
-                guard dialogs.current == nil else { continue }
-                await docker.refreshContainers()
-            }
-        }
+        .task { await docker.refresh(sizes: true) }
         .onChange(of: kind) { selection = []; anchor = nil }
         .onChange(of: allIDs) { selection.formIntersection($1) }
     }
