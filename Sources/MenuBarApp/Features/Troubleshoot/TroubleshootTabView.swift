@@ -123,19 +123,16 @@ struct TroubleshootTabView: View {
 
     // MARK: - Setup bar
 
-    // The pills and the start button share the card's bottom edge while there is room,
-    // and the button drops under them when there is not.
+    // The pills and the start button always share the card's bottom edge. When room runs
+    // short the longest pill titles truncate, so a long skill or server name never pushes
+    // the button onto a line of its own.
     private func setupBar(_ session: ChatSession) -> some View {
-        ViewThatFits(in: .horizontal) {
-            HStack(spacing: 6) {
-                pills(session)
-                Spacer(minLength: 12)
-                startButton(session)
-            }
-            VStack(alignment: .leading, spacing: 8) {
-                HStack(spacing: 6) { pills(session) }
-                startButton(session)
-            }
+        HStack(spacing: 6) {
+            pills(session)
+            Spacer(minLength: 12)
+            startButton(session)
+                .fixedSize()
+                .layoutPriority(1)
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
@@ -567,10 +564,12 @@ private struct SetupPill: View {
             Text(title)
                 .font(.system(size: 12, weight: .semibold))
                 .lineLimit(1)
+                .truncationMode(.middle)
             if let extra {
                 Text(extra)
                     .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(.secondary)
+                    .fixedSize()
             }
             MenuChevron(size: 8)
         }
