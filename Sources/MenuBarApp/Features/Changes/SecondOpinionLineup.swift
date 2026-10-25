@@ -385,7 +385,7 @@ struct SecondOpinionLineupButton: View {
         .onHover { hovering = $0 }
         .appTooltip {
             Tooltip(title: "Ask for a second opinion",
-                    subtitle: canAsk ? "Other agents review these changes" : SecondOpinionLineup.installHint(author: author))
+                    subtitle: canAsk ? "\(SecondOpinionLineup.names(lineup)) review these changes" : SecondOpinionLineup.installHint(author: author))
         }
         .accessibilityElement(children: .ignore)
         .accessibilityAddTraits(.isButton)
@@ -435,9 +435,7 @@ struct SecondOpinionLineupButton: View {
         switch status {
         case .ask,
              _ where shown == .rest:
-            if hovering && canAsk {
-                Text("Ask \(SecondOpinionLineup.names(lineup))").transition(wordsTransition)
-            }
+            EmptyView()
         case .reviewing(_, let started, let pending):
             HStack(spacing: 7) {
                 Text(SecondOpinionLineup.readingWords(runs: runs))
