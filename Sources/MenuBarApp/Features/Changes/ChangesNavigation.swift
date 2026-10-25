@@ -121,14 +121,104 @@ final class ChangesNavigationMemory {
     // outside the screen that opens the dialogs.
     var secondOpinionAsks = 0
     var secondOpinionOpens = 0
-    // The box for a question about the whole change is opened from the session header.
-    var askingWholeChange = false
+    // The card for questions about the whole change is opened from the session header and
+    // drawn by the screen under it, so both read its state from here. It does not hang on
+    // the list's mode, so the card and its button cannot drift apart.
+    private(set) var askingWholeChange = false
+    // When the card was last open. An answer that lands after it is waiting to be read.
+    private(set) var wholeChangeSeen = Date()
+    // The middle of the header button in window coordinates, so the card grows out of it.
+    var askOrigin: CGPoint?
+    var askDraft = ""
+    // The thread the next question goes into, instead of starting a new one.
+    var askFollowing: UUID?
+    // The one thread the card shows open. Nil opens the newest.
+    var askExpanded: UUID?
+    var askShowsResolved = false
+    // The file and lines an answer pointed at, lit in the diff under the card.
+    var citation: ChangeCitation?
+
+    func setAskingWholeChange(_ open: Bool) {
+        guard open != askingWholeChange else { return }
+        askingWholeChange = open
+        wholeChangeSeen = Date()
+        if !open { askFollowing = nil }
+    }
 
     func history(for root: String) -> CommitHistorySelection {
         if let selection = histories[root] { return selection }
         let selection = CommitHistorySelection()
         histories[root] = selection
         return selection
+    }
+}
+
+// How the card for the whole change lays out its questions: oldest first, so a thread
+// reads top to bottom like a conversation, with the resolved ones kept apart.
+enum WholeChangeThreads {
+    static func split(_ questions: [ReviewQuestion]) -> (open: [ReviewQuestion], resolved: [ReviewQuestion]) {
+        let whole = questions.filter(\.isWhole).sorted { $0.created < $1.created }
+        return (whole.filter { !$0.resolved }, whole.filter(\.resolved))
+    }
+
+    // The thread shown open: the one picked, or else the newest that is still open.
+    static func expanded(_ picked: UUID?, in open: [ReviewQuestion]) -> UUID? {
+        if let picked, open.contains(where: { $0.id == picked }) { return picked }
+        return open.last?.id
+    }
+
+    // True when an answer has landed since the card was last open.
+    static func hasUnreadAnswer(_ questions: [ReviewQuestion], seen: Date) -> Bool {
+        questions.contains { question in
+            question.isWhole && question.exchanges.contains { ($0.answered ?? .distantPast) > seen }
+        }
+    }
+}
+
+// A file an answer points at, with the lines when it names them.
+struct ChangeCitation: Equatable {
+    var root: String
+    var path: String
+    var anchor: DiffAnchor?
+    // A new click on the same reference brings the lines on screen again.
+    var serial = 0
+
+    // Reads a link from an answer as a file in one of the changed repositories. Links
+    // come as absolute file paths or as paths relative to a repository, with an optional
+    // ":line" or ":first-last" at the end. Anything else is left to open as usual.
+    static func resolve(_ url: URL, roots: [String],
+                        isChanged: (_ root: String, _ path: String) -> Bool) -> ChangeCitation? {
+        let raw: String
+        if url.isFileURL {
+            raw = url.path
+        } else if url.scheme == nil || url.scheme?.contains(".") == true {
+            // A bare "File.swift:12" reads to URL as a scheme of "file.swift".
+            raw = url.scheme == nil ? url.path : (url.absoluteString.removingPercentEncoding ?? url.absoluteString)
+        } else {
+            return nil
+        }
+        var path = raw
+        var anchor: DiffAnchor?
+        if let suffix = raw.range(of: #":(\d+)(?:[-:](\d+))?$"#, options: .regularExpression) {
+            let numbers = raw[suffix].dropFirst().split(whereSeparator: { $0 == "-" || $0 == ":" }).compactMap { Int($0) }
+            path = String(raw[..<suffix.lowerBound])
+            if let first = numbers.first {
+                // A second number after a colon is a column, not the end of a range.
+                let isRange = raw[suffix].contains("-")
+                let last = isRange ? numbers.dropFirst().first.flatMap { $0 > first ? $0 : nil } : nil
+                anchor = DiffAnchor(side: .new, line: first, lastLine: last)
+            }
+        }
+        if path.hasPrefix("/") {
+            let root = roots
+                .filter { path.pathRelative(to: $0).map { !$0.isEmpty } ?? false }
+                .max { $0.count < $1.count }
+            guard let root, let relative = path.pathRelative(to: root), isChanged(root, relative) else { return nil }
+            return ChangeCitation(root: root, path: relative, anchor: anchor)
+        }
+        let relative = path.hasPrefix("./") ? String(path.dropFirst(2)) : path
+        guard !relative.isEmpty, let root = roots.first(where: { isChanged($0, relative) }) else { return nil }
+        return ChangeCitation(root: root, path: relative, anchor: anchor)
     }
 }
 

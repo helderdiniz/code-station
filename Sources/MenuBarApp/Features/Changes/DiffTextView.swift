@@ -95,7 +95,8 @@ struct DiffTextView: NSViewRepresentable {
         // The string is built once per loaded diff, so identity is enough to tell the
         // same document from a newly opened file.
         defer {
-            if let reveal, reveal != context.coordinator.revealed, textView.reveal(thread: reveal.line) {
+            if let reveal, reveal != context.coordinator.revealed,
+               reveal.key.map({ textView.reveal(line: $0) }) ?? textView.reveal(thread: reveal.line) {
                 context.coordinator.revealed = reveal
             }
         }
@@ -294,6 +295,27 @@ private final class DiffDocumentView: NSTextView {
         let frame = host.view.frame
         let target = NSRect(x: frame.minX, y: frame.midY - visible / 2, width: 1, height: visible)
         scrollToVisible(target.intersection(bounds).isEmpty ? frame : target.intersection(bounds))
+        return true
+    }
+
+    // Scrolls a numbered line into the middle of the pane. False while the text has no
+    // such line yet.
+    func reveal(line key: String) -> Bool {
+        guard let storage = textStorage, let layoutManager, let textContainer else { return false }
+        var found: NSRange?
+        storage.enumerateAttribute(.diffLineAnchor, in: NSRange(location: 0, length: storage.length)) { value, range, stop in
+            if value as? String == key {
+                found = range
+                stop.pointee = true
+            }
+        }
+        guard let found else { return false }
+        let glyphs = layoutManager.glyphRange(forCharacterRange: found, actualCharacterRange: nil)
+        let row = layoutManager.boundingRect(forGlyphRange: glyphs, in: textContainer)
+            .offsetBy(dx: textContainerOrigin.x, dy: textContainerOrigin.y)
+        let visible = enclosingScrollView?.contentView.bounds.height ?? visibleRect.height
+        let target = NSRect(x: 0, y: row.midY - visible / 2, width: 1, height: visible)
+        scrollToVisible(target.intersection(bounds).isEmpty ? row : target.intersection(bounds))
         return true
     }
 
@@ -767,6 +789,9 @@ extension NSAttributedString.Key {
 struct DiffReveal: Equatable {
     var line: Int
     var serial: Int
+    // A numbered line to bring on screen rather than the thread under it, named by
+    // DiffComments.key.
+    var key: String? = nil
 }
 
 // Where a diff that takes comments keeps room for them. It is handed to the builder off

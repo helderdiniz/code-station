@@ -104,6 +104,8 @@ struct SessionView: View {
     @State private var designHasContent: Bool?
     // Where the recap button sits in the window, so its panel grows out of it.
     @State private var recapOrigin: CGPoint?
+    // Focus goes back to the button that opened the questions card once it is put away.
+    @AccessibilityFocusState private var askButtonFocused: Bool
     @State private var railNotes = 0
     @State private var railNote: String?
     @State private var railNoteIcon = "arrow.up.forward.app"
@@ -700,14 +702,26 @@ struct SessionView: View {
     }
 
     // A question about the whole change has no file or line to start from, so it is asked
-    // from here rather than from anywhere in the list of files.
+    // from here, and its card grows out of this button over the diff.
     private var askWholeChangeButton: some View {
         let asking = changesNavigation.askingWholeChange
+        let unread = !asking && WholeChangeThreads.hasUnreadAnswer(runner.reviews.questions(sessionID),
+                                                                   seen: changesNavigation.wholeChangeSeen)
         return HeaderRailButton(icon: "questionmark.bubble",
                                 state: asking ? .open : .rest,
-                                label: "Ask about the whole change",
-                                hint: "The answer stays in the list of changes") {
-            changesNavigation.askingWholeChange.toggle()
+                                badge: unread,
+                                label: asking ? "Put away the questions" : "Ask about the whole change",
+                                hint: asking ? "Esc does the same" : unread ? "An answer is waiting" : "Shift-? opens it here, over the diff") {
+            if asking { changesNavigation.citation = nil }
+            changesNavigation.setAskingWholeChange(!asking)
+        }
+        .motion(Motion.pop, value: unread)
+        .onCentreChange { changesNavigation.askOrigin = $0 }
+        .accessibilityAddTraits(asking ? .isSelected : [])
+        .accessibilityValue(unread ? "An answer is waiting" : "")
+        .accessibilityFocused($askButtonFocused)
+        .onChange(of: asking) { _, open in
+            if !open { askButtonFocused = true }
         }
     }
 
@@ -1455,6 +1469,7 @@ struct SessionView: View {
         let state = runner.state(target)
         if state.isBusy, state != .stopping, dialogs.current == nil, !menus.isOpen,
            !terminalFocused, !previewFocused, !recapOpen, !commandPalette.isPresented,
+           !(tab == .changes && changesNavigation.askingWholeChange),
            !findFocused, !previewAddressFocused {
             Button("") { runner.stop(target) }
                 .keyboardShortcut(.escape, modifiers: [])

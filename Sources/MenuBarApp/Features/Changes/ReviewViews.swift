@@ -450,6 +450,9 @@ struct QuestionThreadView: View {
     var takeOut: () -> Void = {}
     var editChange: (String) -> Void = { _ in }
     var sendsQuestion: (Bool) -> Void = { _ in }
+    // Set where the follow-up is typed in a field of the host's own, rather than in a box
+    // under the thread.
+    var startFollowUp: (() -> Void)?
 
     @State private var asking = false
     @State private var draft = ""
@@ -708,8 +711,12 @@ struct QuestionThreadView: View {
     private var actions: some View {
         HStack(spacing: 8) {
             ActionButton(title: "Ask a follow-up", tone: .outlined, height: 26, size: 11.5) {
-                asking = true
-                fieldFocused = true
+                if let startFollowUp {
+                    startFollowUp()
+                } else {
+                    asking = true
+                    fieldFocused = true
+                }
             }
             Spacer(minLength: 0)
             InlineLink(title: "Resolve", size: 11.5, tint: Color.secondary, action: resolve)

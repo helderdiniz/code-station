@@ -64,8 +64,6 @@ struct ChangesView: View {
     @State private var revealSerial = 0
     @State private var reviewKeys = WindowKeyHandler(handlesTyping: true)
     @AppStorage("changes.reviewCoachSeen") private var coachSeen = false
-    @State private var wholeQuestion = ""
-    @FocusState private var wholeQuestionFocused: Bool
     private var focusedComment: UUID? {
         get { navigation.focusedComment }
         nonmutating set { navigation.focusedComment = newValue }
@@ -220,6 +218,8 @@ struct ChangesView: View {
             }
             .padding(.bottom, 16)
         }
+        .overlay { wholeChangeCard }
+        .motion(Motion.reveal, value: navigation.askingWholeChange)
         .overlay(alignment: .top) {
             if loading && snapshot != nil {
                 Breathing { Rectangle().fill(Theme.accent) }
@@ -758,32 +758,6 @@ struct ChangesView: View {
         }
     }
 
-    // Questions about the whole change have no file to sit under, so they keep a group of
-    // their own at the end of the list. The way to ask one sits in the session header.
-    @ViewBuilder private var wholeChangeQuestions: some View {
-        if let review {
-            let asked = review.reviews.questions(review.sessionID).filter(\.isWhole).sorted { $0.created > $1.created }
-            if !asked.isEmpty || navigation.askingWholeChange {
-                sectionHeader("Whole change")
-                ForEach(asked) { question in
-                    Group {
-                        if focusedComment == question.id {
-                            questionThread(question, review: review, showsBand: false)
-                        } else {
-                            questionItem(question, review: review)
-                        }
-                    }
-                    .id(question.id)
-                }
-            }
-            if navigation.askingWholeChange {
-                wholeChangeBox(review).padding(.top, 4)
-                    .id(Self.wholeChangeBoxID)
-                    .transition(.fadeIn)
-            }
-        }
-    }
-
     private func sectionHeader(_ title: String) -> some View {
         Text(title)
             .font(.system(size: 11.5, weight: .semibold)).foregroundStyle(.secondary)
@@ -862,12 +836,10 @@ struct ChangesView: View {
                                     .frame(maxWidth: .infinity).padding(.vertical, 16)
                             }
                             settledNotes
-                            wholeChangeQuestions
                         }
                     }.padding(10)
                     .smoothlyResizes(when: mode == .history ? collapsedHistories : collapsedRepositories)
                     .smoothlyResizes(when: navigation.foldedNotes)
-                    .smoothlyResizes(when: navigation.askingWholeChange)
                 }
                 .accessibilityLabel(mode == .history ? "Workspace projects and commits"
                                                      : "Workspace repositories and changed files")
@@ -900,14 +872,6 @@ struct ChangesView: View {
                 .onChange(of: navigatorCursor) { _, item in
                     if let item { proxy.scrollTo(item) }
                 }
-                .onChange(of: navigation.askingWholeChange, initial: true) { _, asking in
-                    guard asking else { return }
-                    mode = .changes
-                    DispatchQueue.main.async {
-                        withAnimation(reduceMotion ? nil : Motion.reveal) { proxy.scrollTo(Self.wholeChangeBoxID, anchor: .bottom) }
-                        $wholeQuestionFocused.request()
-                    }
-                }
                 .onChange(of: fileSelection.activeID) { _, path in
                     guard let path else { return }
                     let item = ChangesNavigatorItem(root: root, path: path)
@@ -924,7 +888,7 @@ struct ChangesView: View {
                                 ?? review.reviews.threads(review.sessionID).first(where: { $0.comment.id == id })?.comment {
                         navigation.foldedNotes.remove(comment.root + "/" + comment.path)
                     } else if let review, let question = review.reviews.question(id, in: review.sessionID) {
-                        if question.isWhole { proxy.scrollTo(question.id) }
+                        if question.isWhole { openWholeChangeThread(question.id) }
                         else { navigation.foldedNotes.remove(question.root + "/" + question.path) }
                     }
                 }
@@ -1860,7 +1824,7 @@ struct ChangesView: View {
     }
 
     private var pickedKeys: Set<String> {
-        commentDraft.map { DiffComments.keys($0.anchor) } ?? []
+        commentDraft.map { DiffComments.keys($0.anchor) } ?? citedAnchor.map(DiffComments.keys) ?? []
     }
 
     // Every comment in the review, in the order they are read and stepped through.
@@ -1945,6 +1909,10 @@ struct ChangesView: View {
     }
 
     private var revealedLine: DiffReveal? {
+        if commentDraft == nil, let anchor = citedAnchor, let citation = navigation.citation, let diff,
+           let id = lineID(for: DiffAnchor(side: anchor.side, line: anchor.line), in: diff.lines) {
+            return DiffReveal(line: id, serial: citation.serial, key: DiffComments.key(DiffAnchor(side: anchor.side, line: anchor.line)))
+        }
         guard let focusedComment,
               let line = placement.below.first(where: { $0.value.contains { $0.id == focusedComment } })?.key
                 ?? sentPlacement.below.first(where: { $0.value.contains { $0.id == focusedComment } })?.key
@@ -2205,6 +2173,16 @@ struct ChangesView: View {
         }
         if flags == .command, event.keyCode == 36, mode == .changes {
             openCommitDialog()
+            return true
+        }
+        let typing = WindowKeyHandler.isTyping(event.window?.firstResponder)
+        if review != nil, !typing, flags == .shift, event.charactersIgnoringModifiers == "?" {
+            if navigation.askingWholeChange { closeWholeChangeCard() } else { navigation.setAskingWholeChange(true) }
+            return true
+        }
+        // The card has the first claim on Escape over the review behind it.
+        if navigation.askingWholeChange, !typing, flags.isEmpty, event.keyCode == 53 {
+            closeWholeChangeCard()
             return true
         }
         guard !WindowKeyHandler.isTyping(event.window?.firstResponder), let review, mode == .changes else { return false }
@@ -2578,7 +2556,8 @@ struct ChangesView: View {
                                recentChat: conversation?.recentChat ?? "")
     }
 
-    private func questionThread(_ question: ReviewQuestion, review: ReviewTarget, showsBand: Bool = true) -> some View {
+    private func questionThread(_ question: ReviewQuestion, review: ReviewTarget, showsBand: Bool = true,
+                                startFollowUp: (() -> Void)? = nil) -> some View {
         let focused = focusedComment == question.id
         let reviews = review.reviews
         let sessionID = review.sessionID
@@ -2622,7 +2601,8 @@ struct ChangesView: View {
             },
             sendsQuestion: { on in
                 if let id = question.changeID { reviews.setSendsQuestion(on, change: id, in: sessionID) }
-            })
+            },
+            startFollowUp: startFollowUp)
             .background(RoundedRectangle(cornerRadius: 10).fill(Theme.card))
             .clipShape(RoundedRectangle(cornerRadius: 10))
             .overlay(RoundedRectangle(cornerRadius: 10).stroke(focused ? Theme.plan : Theme.border, lineWidth: focused ? 2 : 1))
@@ -2645,11 +2625,14 @@ struct ChangesView: View {
     }
 
     // Puts a question in focus and brings it on screen. One about the whole change has no
-    // lines, so it opens in the list instead.
+    // lines, so it opens in the card instead.
     private func focus(_ question: ReviewQuestion) {
         focusedComment = question.id
         revealSerial += 1
-        guard !question.isWhole else { return }
+        guard !question.isWhole else {
+            openWholeChangeThread(question.id)
+            return
+        }
         guard question.root == repoRoot else {
             selectRepository(question.root, question.path)
             return
@@ -2661,106 +2644,116 @@ struct ChangesView: View {
         announce(question.spokenName)
     }
 
-    private func askAboutWholeChange(_ review: ReviewTarget) {
-        guard !wholeQuestion.isBlank else { return }
-        let question = ReviewQuestion.whole(root: repoRoot, agent: review.agent, question: wholeQuestion.trimmed)
-        review.reviews.ask(question, context: questionContext(review), in: review.sessionID)
-        wholeQuestion = ""
-        navigation.askingWholeChange = false
-        focusedComment = question.id
-        announce("Asked. The answer appears in this list and stays here.")
+    // MARK: Whole change
+
+    private func openWholeChangeThread(_ id: UUID) {
+        navigation.askExpanded = id
+        navigation.setAskingWholeChange(true)
     }
 
-    private static let wholeChangeBoxID = "whole-change-box"
+    private func closeWholeChangeCard() {
+        navigation.citation = nil
+        navigation.setAskingWholeChange(false)
+    }
 
-    private func wholeChangeBox(_ review: ReviewTarget) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Ask about the whole change").font(.system(size: 12.5, weight: .semibold))
-            TextField("For example: why does each plugin get its own folder?", text: $wholeQuestion, axis: .vertical)
-                .lineLimit(1...4)
-                .appTextField()
-                .focused($wholeQuestionFocused)
-                .onSubmit { askAboutWholeChange(review) }
-                .onExitCommand { navigation.askingWholeChange = false }
-                .accessibilityLabel("Question about the whole change")
-            HStack(spacing: 8) {
-                Spacer(minLength: 0)
-                ActionButton(title: "Cancel", tone: .outlined, height: 26, size: 11.5) {
-                    navigation.askingWholeChange = false
-                }
-                ActionButton(title: "Ask", tone: .plan, height: 26, size: 11.5, icon: "questionmark") {
-                    askAboutWholeChange(review)
-                }
-                .disabled(wholeQuestion.isBlank)
-            }
+    // A follow-up goes into the thread it was started from; anything else starts a thread.
+    private func askAboutWholeChange(_ text: String, review: ReviewTarget) {
+        let context = questionContext(review)
+        if let id = navigation.askFollowing, review.reviews.question(id, in: review.sessionID) != nil {
+            review.reviews.followUp(text, to: id, context: context, in: review.sessionID)
+            navigation.askExpanded = id
+            announce("Asked a follow-up. The answer appears in this card.")
+        } else {
+            let question = ReviewQuestion.whole(root: repoRoot, agent: review.agent, question: text)
+            review.reviews.ask(question, context: context, in: review.sessionID)
+            navigation.askExpanded = question.id
+            announce("Asked. The answer appears in this card.")
         }
-        .padding(12)
-        .background(RoundedRectangle(cornerRadius: 10).fill(Theme.plan.opacity(0.05)))
-        .overlay(RoundedRectangle(cornerRadius: 10).stroke(Theme.plan.opacity(0.25)))
+        navigation.askDraft = ""
+        navigation.askFollowing = nil
     }
 
-    // A question in the list: where it is, where it stands, and the start of its answer.
-    private func questionItem(_ question: ReviewQuestion, review: ReviewTarget) -> some View {
-        let isFocused = focusedComment == question.id
-        let lines = question.lastLine.map { "\(question.line)–\($0)" } ?? "\(question.line)"
-        return VStack(alignment: .leading, spacing: 6) {
-            Button { focus(question) } label: {
-                VStack(alignment: .leading, spacing: 4) {
-                    HStack(spacing: 6) {
-                        Text(question.isWhole ? "Whole change" : fileLabel(root: question.root, path: question.path) + " " + lines)
-                            .font(.mono(10.5)).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
-                        Spacer(minLength: 4)
-                        questionBadge(question, review: review)
-                        // Room for the stop button, which sits over the label so it is not
-                        // a button inside a button.
-                        if question.status == .answering { Color.clear.frame(width: 22, height: 22) }
-                    }
-                    Text(question.text).font(.system(size: 12, weight: .semibold)).lineLimit(2)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                    switch question.status {
-                    case .answering:
-                        HStack(spacing: 6) {
-                            ProgressView().controlSize(.mini)
-                            Text(review.reviews.questionSteps[question.id]?.last ?? "Starting").lineLimit(1)
+    // The card hangs off the top of the screen, just under the header button that opens
+    // it, and grows out of that button.
+    private var wholeChangeCard: some View {
+        GeometryReader { proxy in
+            ZStack(alignment: .topTrailing) {
+                if navigation.askingWholeChange, let review {
+                    let threads = WholeChangeThreads.split(review.reviews.questions(review.sessionID))
+                    let totals = changeTotals
+                    WholeChangeAskCard(
+                        navigation: navigation, open: threads.open, resolved: threads.resolved,
+                        scope: totals.scope, added: totals.added, removed: totals.removed,
+                        agentTitle: review.agent.title,
+                        maxHeight: max(proxy.size.height - 27, 200),
+                        ask: { askAboutWholeChange($0, review: review) },
+                        close: closeWholeChangeCard) { question, expanded in
+                            wholeChangeThread(question, expanded: expanded, review: review)
                         }
-                        .font(.system(size: 11.5)).foregroundStyle(.secondary)
-                    case .failed:
-                        Text(question.failure ?? "").font(.system(size: 11.5)).foregroundStyle(Theme.warningText).lineLimit(2)
-                    case .stopped:
-                        Text("You stopped it. Ask again or remove it.").font(.system(size: 11.5))
-                            .foregroundStyle(.secondary).lineLimit(2)
-                    case .answered:
-                        ReviewText(text: question.exchanges.last?.answer ?? "", size: 11.5, lineLimit: 3)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel(question.spokenName)
-            .accessibilityAddTraits(isFocused ? .isSelected : [])
-            .overlay(alignment: .topTrailing) {
-                if question.status == .answering {
-                    StopAnsweringButton { stopAnswering(question, review: review) }
+                        .environment(\.openURL, OpenURLAction { citeFile($0) })
+                        .padding(.trailing, 20).padding(.top, 7)
+                        .transition(.grow(from: navigation.askOrigin, reduceMotion: reduceMotion))
                 }
             }
-            if question.status == .failed {
-                HStack(spacing: 12) {
-                    InlineLink(title: "Try again", size: 11.5) {
-                        review.reviews.retryQuestion(question.id, context: questionContext(review), in: review.sessionID)
-                    }
-                    InlineLink(title: "Delete", size: 11.5, tint: Theme.deletion) {
-                        review.reviews.deleteQuestion(question.id, in: review.sessionID)
-                        announce("Question deleted")
-                    }
-                }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+        }
+    }
+
+    private var changeTotals: (scope: [WholeChangeAskScope], added: Int, removed: Int) {
+        var scope: [WholeChangeAskScope] = []
+        var added = 0
+        var removed = 0
+        for repository in repositories {
+            let files = changes(in: repository.root)
+            guard !files.isEmpty else { continue }
+            scope.append(WholeChangeAskScope(name: repository.name, files: files.count))
+            added += files.reduce(0) { $0 + ($1.added ?? 0) }
+            removed += files.reduce(0) { $0 + ($1.removed ?? 0) }
+        }
+        return (scope, added, removed)
+    }
+
+    @ViewBuilder
+    private func wholeChangeThread(_ question: ReviewQuestion, expanded: Bool, review: ReviewTarget) -> some View {
+        if expanded || question.resolved {
+            questionThread(question, review: review, showsBand: false, startFollowUp: {
+                navigation.askFollowing = question.id
+            })
+        } else {
+            WholeChangeFoldedThread(question: question, open: { navigation.askExpanded = question.id }) {
+                questionBadge(question, review: review)
             }
         }
-        .padding(8)
-        .background(RoundedRectangle(cornerRadius: 8).fill(isFocused ? Theme.plan.opacity(0.08) : .clear))
-        .overlay(RoundedRectangle(cornerRadius: 8).stroke(isFocused ? Theme.plan.opacity(0.3) : .clear))
-        .hoverFill(cornerRadius: 8)
-        .opacity(question.resolved ? 0.7 : 1)
+    }
+
+    // A file named in an answer opens in the diff under the card, with the lines it names
+    // lit, so the answer and the code can be read side by side. A file outside the change
+    // opens the usual way.
+    private func citeFile(_ url: URL) -> OpenURLAction.Result {
+        let roots = repositories.map(\.root)
+        guard var citation = ChangeCitation.resolve(url, roots: roots, isChanged: { root, path in
+            changes(in: root).contains { $0.path == path }
+        }) else { return .systemAction }
+        citation.serial = (navigation.citation?.serial ?? 0) + 1
+        navigation.citation = citation
+        if commentDraft?.text.isBlank != false { commentDraft = nil }
+        guard citation.root == root else {
+            selectRepository(citation.root, citation.path)
+            return .handled
+        }
+        if selected?.path != citation.path, let file = files.first(where: { $0.path == citation.path }) {
+            mode = .changes
+            select(file)
+        }
+        announce("Showing \((citation.path as NSString).lastPathComponent)" + (citation.anchor.map { ", \($0.label.lowercased())" } ?? ""))
+        return .handled
+    }
+
+    // The lines the cited reference names, while its file is the one on screen.
+    private var citedAnchor: DiffAnchor? {
+        guard let citation = navigation.citation, citation.root == root,
+              citation.path == shownFile?.path else { return nil }
+        return citation.anchor
     }
 
     private func questionBadge(_ question: ReviewQuestion, review: ReviewTarget) -> some View {
