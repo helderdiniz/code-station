@@ -658,7 +658,9 @@ struct LocalServerPreviewPage: View {
                 .fill(selected ? Theme.card : .clear)
                 .shadow(color: .black.opacity(selected ? 0.07 : 0), radius: 1, y: 0.5))
         .overlay(RoundedRectangle(cornerRadius: 7).stroke(selected ? Theme.border : .clear))
-        .hoverLift()
+        // A fill rather than a lift: the tab holds two buttons with tooltips, and AppKit
+        // cannot lay those out under a scale.
+        .hoverFill(cornerRadius: 7)
     }
 
     // The page keeps this closure, so it captures the composer rather than this view,

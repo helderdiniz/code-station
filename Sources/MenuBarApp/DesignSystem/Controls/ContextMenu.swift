@@ -356,6 +356,7 @@ struct MenuChevron: View {
 
 struct ContextMenuHost: View {
     @Environment(MenuPresenter.self) private var presenter
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     @State private var measurement = OverlayMeasurement()
     @FocusState private var focusedItem: Int?
@@ -407,15 +408,18 @@ struct ContextMenuHost: View {
         .ignoresSafeArea()
     }
 
-    // The menu grows out of the edge it is attached to, so it unfolds from its control
-    // rather than landing on top of the window. It leaves without the scale: a menu on
-    // its way out is already behind whatever the click started.
+    // The menu slides a few points out of the edge it is attached to, so it unfolds from
+    // its control rather than landing on top of the window. It is never scaled: the card
+    // holds a text field, a scroll view and buttons with tooltips, and AppKit cannot lay
+    // those out under a scale. It leaves with a plain fade, since a menu on its way out is
+    // already behind whatever the click started.
     private var opening: AnyTransition {
-        let anchor: UnitPoint = switch presenter.verticalAttachment {
-        case .control(edge: .top, oppositeY: _): .bottom
-        default: .top
+        guard !reduceMotion else { return .opacity.animation(Motion.reveal) }
+        let travel: CGFloat = switch presenter.verticalAttachment {
+        case .control(edge: .top, oppositeY: _): 6
+        default: -6
         }
-        return .asymmetric(insertion: .scale(scale: 0.97, anchor: anchor).combined(with: .opacity),
+        return .asymmetric(insertion: .opacity.combined(with: .offset(y: travel)).animation(Motion.reveal),
                            removal: .opacity)
     }
 

@@ -291,6 +291,9 @@ struct Composer<Above: View, Accessory: View>: View {
                 }
             }
             .frame(width: 32, height: 32)
+            // Lifted below the ring, which is an AppKit layer view that cannot be laid
+            // out under a scale.
+            .hoverLift(amount: Motion.smallLift)
             .overlay {
                 if busy && !stopping {
                     TurnRing(colour: asking ? Theme.attention : Theme.deletion)
@@ -301,7 +304,6 @@ struct Composer<Above: View, Accessory: View>: View {
         }
         .buttonStyle(.plain)
         .disabled(stopping || (!busy && !canSend))
-        .hoverLift(amount: Motion.smallLift)
         .motion(Motion.control, value: busy)
         .motion(Motion.control, value: asking)
         .motion(Motion.hover, value: canSend)

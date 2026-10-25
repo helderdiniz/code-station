@@ -1445,8 +1445,8 @@ private struct SettingsButton: View {
                 if showsUpdate { UpdateIndicator().offset(x: 3, y: -3) }
             }
             .contentShape(RoundedRectangle(cornerRadius: 9))
-            .appTooltip("Tools and settings")
             .hoverLift(hovering, amount: Motion.smallLift)
+            .appTooltip("Tools and settings")
             .onHover { hovering = $0 }
             .accessibilityLabel("Tools and settings")
     }

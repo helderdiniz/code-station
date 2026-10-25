@@ -337,10 +337,10 @@ struct SkillsView: View {
                         .frame(height: 25)
                         .background(RoundedRectangle(cornerRadius: 7).fill(Theme.secret))
                         .contentShape(RoundedRectangle(cornerRadius: 7))
-                        .appTooltip("Update to \(latest)")
                 }
                 .buttonStyle(.plain)
                 .hoverLift()
+                .appTooltip("Update to \(latest)")
                 .disabled(!manageable || manager.isUpdatingAll || manager.isRefreshing)
             }
         }

@@ -254,6 +254,9 @@ struct BotSettingsView: View {
         .overlay(RoundedRectangle(cornerRadius: 14)
             .stroke(selected || focusedBot == avatar.id ? Theme.accent.opacity(0.7) : Theme.border,
                     lineWidth: focusedBot == avatar.id ? 2 : 1))
+        // The card lifts under the menu button rather than with it, since the button's
+        // menu anchor is an AppKit view that cannot be laid out under a scale.
+        .hoverLift()
         .overlay(alignment: .topTrailing) {
             if !builtIn {
                 Image(systemName: "ellipsis").font(.system(size: 15, weight: .bold))
@@ -267,7 +270,6 @@ struct BotSettingsView: View {
                     .accessibilityLabel("More options for \(avatar.personality.title)")
             }
         }
-        .hoverLift()
     }
 
     private func edit(_ avatar: AgentAvatar?) {

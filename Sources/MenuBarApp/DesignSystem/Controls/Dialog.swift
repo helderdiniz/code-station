@@ -439,9 +439,11 @@ private struct ImpactDialogCard: View {
     }
 }
 
-// A dialog's card arrives a little below and a hair smaller than its place, and rises into
-// it. It leaves with a short fade and the faintest shrink, and nothing inside it is staged
-// on the way out. For anyone who asked for less motion, both become a plain crossfade.
+// A dialog's card arrives a little below its place and rises into it. It leaves with a
+// short fade, and nothing inside it is staged on the way out. The card is never scaled:
+// it holds buttons with tooltips, scroll views and text fields, and AppKit cannot lay
+// those out under a scale. For anyone who asked for less motion, both become a plain
+// crossfade.
 extension AnyTransition {
     @MainActor
     static func dialogCard(reduceMotion: Bool) -> AnyTransition {
@@ -451,8 +453,8 @@ extension AnyTransition {
         }
         return .asymmetric(
             insertion: .opacity.animation(.easeOut(duration: 0.12))
-                .combined(with: .scale(scale: 0.985).combined(with: .offset(y: 6)).animation(Motion.arrive)),
-            removal: .opacity.combined(with: .scale(scale: 0.98)).animation(Motion.leave))
+                .combined(with: .offset(y: 8).animation(Motion.arrive)),
+            removal: .opacity.animation(Motion.leave))
     }
 
     @MainActor

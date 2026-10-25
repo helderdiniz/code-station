@@ -151,7 +151,9 @@ struct TerminalDrawer: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .hoverLift()
+        // A fill rather than a lift: while it is renamed the tab holds a text field,
+        // which AppKit cannot lay out under a scale.
+        .hoverFill(cornerRadius: 7)
         .onTapGesture(count: 2) { startRename(terminal) }
         .appContextMenu {
             var entries: [MenuEntry] = [

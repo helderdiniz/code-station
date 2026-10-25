@@ -609,7 +609,8 @@ struct PromptArrival<Outline: Shape>: ViewModifier {
                             .opacity(ring > 0 && ring < 1 ? 1 - ring : 0)
                     }
                 }
-                .scaleEffect(moves ? 0.94 + 0.06 * progress : 1, anchor: .bottomTrailing)
+                // Only moved, never scaled: a bubble can hold attachment chips and code
+                // blocks with tooltips, which AppKit cannot lay out under a scale.
                 .offset(y: moves ? 56 * (1 - progress) : 0)
                 .opacity(min(1, progress * 2.5))
         }
