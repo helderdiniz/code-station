@@ -18,6 +18,7 @@ struct EnvironmentsView: View {
     @State private var propertiesSelected = true
     @State private var previewExpanded = true
     @FocusState private var focusedTab: Bool?
+    @State private var hoveredTab: Bool?
     @FocusState private var focusedEnvironment: String?
     @State private var hoveredEnvironment: String?
     @FocusState private var previewFocused: Bool
@@ -91,11 +92,15 @@ struct EnvironmentsView: View {
     private var settingsPanel: some View {
         VStack(alignment: .leading, spacing: 16) {
             if propertiesSelected {
-                propertiesEditor
-                envRow
-                previewSection
+                Group {
+                    propertiesEditor
+                    envRow
+                    previewSection
+                }
+                .transition(AnyTransition.fadeIn.animation(Motion.reveal))
             } else {
                 authenticationEditor
+                    .transition(AnyTransition.fadeIn.animation(Motion.reveal))
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -250,35 +255,47 @@ struct EnvironmentsView: View {
         }
     }
 
+    // Each label's side padding hangs into the gutter, so the first label still lines up
+    // with the heading above it.
     private var sectionTabs: some View {
-        HStack(spacing: 27) {
+        HStack(spacing: 6) {
             sectionTab("Properties", properties: true)
             sectionTab("Authentication", properties: false)
             Spacer(minLength: 0)
         }
-        .overlay(alignment: .bottom) { Theme.border.frame(height: 1) }
+        .background(alignment: .bottom) { Theme.border.frame(height: 1).padding(.leading, 10) }
+        .padding(.leading, -10)
+        .motion(Motion.control, value: propertiesSelected)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Environment settings tabs")
     }
 
     private func sectionTab(_ title: String, properties: Bool) -> some View {
-        Button { propertiesSelected = properties } label: {
+        let selected = propertiesSelected == properties
+        return Button { propertiesSelected = properties } label: {
             Text(title)
                 .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(propertiesSelected == properties ? Theme.accent : Color.secondary)
-                .padding(.vertical, 13)
+                .foregroundStyle(selected ? Theme.accent : hoveredTab == properties ? Color.primary : Color.secondary)
+                .frame(height: 46)
                 .overlay(alignment: .bottom) {
-                    Rectangle().fill(propertiesSelected == properties ? Theme.accent : .clear)
-                        .frame(height: 3)
+                    if selected {
+                        UnevenRoundedRectangle(topLeadingRadius: 2, topTrailingRadius: 2)
+                            .fill(Theme.accent)
+                            .frame(height: 2)
+                            .matchedGeometryEffect(id: "underline", in: tabPanels)
+                    }
                 }
+                .padding(.horizontal, 10)
                 .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(SectionTabStyle(selected: selected, hovered: hoveredTab == properties,
+                                     showsFocus: focusedTab == properties
+                                         && KeyboardFocusVisibility.shared.isVisible))
         .focusable()
         .focused($focusedTab, equals: properties)
         .focusEffectDisabled()
-        .overlay(RoundedRectangle(cornerRadius: 4)
-            .stroke(focusedTab == properties ? Theme.accent : .clear, lineWidth: 2).padding(2))
+        .onPointerHover { hoveredTab = $0 ? properties : hoveredTab == properties ? nil : hoveredTab }
+        .motion(Motion.hover, value: hoveredTab == properties)
         .onKeyPress(keys: [.leftArrow, .rightArrow, .home, .end]) { press in
             propertiesSelected = press.key == .home ? true : press.key == .end ? false : !properties
             focusedTab = propertiesSelected
@@ -609,5 +626,34 @@ struct SecretField: View {
         .padding(.horizontal, 10)
         .padding(.vertical, 8)
         .fieldSurface(cornerRadius: 8)
+    }
+}
+
+// The hover, press and focus surface stops short of the row's bottom edge, so it never
+// meets the underline of the selected tab.
+private struct SectionTabStyle: ButtonStyle {
+    let selected: Bool
+    let hovered: Bool
+    let showsFocus: Bool
+
+    func makeBody(configuration: Configuration) -> some View {
+        let surface = RoundedRectangle(cornerRadius: 7)
+        configuration.label
+            .background {
+                ZStack {
+                    surface.fill(configuration.isPressed || (hovered && !selected) ? Theme.field : .clear)
+                    if configuration.isPressed { surface.fill(Theme.field.opacity(0.7)) }
+                    if showsFocus {
+                        RoundedRectangle(cornerRadius: 10)
+                            .strokeBorder(Color(nsColor: Theme.focusRing), lineWidth: 3)
+                            .padding(-3)
+                        surface.strokeBorder(Theme.accent, lineWidth: 1)
+                    }
+                }
+                .padding(.top, 6)
+                .padding(.bottom, 7)
+            }
+            .motion(Motion.hover, value: configuration.isPressed)
+            .motion(Motion.hover, value: showsFocus)
     }
 }
