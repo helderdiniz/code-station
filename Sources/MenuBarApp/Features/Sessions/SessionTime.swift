@@ -54,21 +54,37 @@ enum SessionTime {
     // nothing would drop it out of the day altogether.
     static let quietTurn: TimeInterval = 30
 
+    // A turn can stall with nothing running, such as an agent left waiting or a Mac
+    // gone to sleep mid-turn, and pick up hours later. A silence this long between calls
+    // is not work, while a long call still counts in full, since it covers its own time.
+    static let idleGap: TimeInterval = 15 * 60
+
     // The turns of one conversation as spans, oldest first. Only the agent's turns
     // count: a prompt is a moment rather than a stretch of work.
     static func spans(of turns: [TurnTimes]) -> [TimeSpan] {
         var spans: [TimeSpan] = []
         for turn in turns where turn.role == .assistant {
-            var start = turn.date
-            var end = turn.date
+            var pieces = [TimeSpan(start: turn.date, end: turn.date)]
             for call in turn.tools ?? [] {
-                if let began = call.startedAt { start = min(start, began) }
                 // A call still running has only a start, and that is still evidence the
                 // turn was working at least up to then.
-                if let last = call.finishedAt ?? call.startedAt { end = max(end, last) }
+                guard let began = call.startedAt ?? call.finishedAt else { continue }
+                pieces.append(TimeSpan(start: began, end: max(began, call.finishedAt ?? began)))
             }
-            if end <= start { end = start.addingTimeInterval(quietTurn) }
-            spans.append(TimeSpan(start: start, end: end))
+            var stretches: [TimeSpan] = []
+            for piece in pieces.sorted(by: { $0.start < $1.start }) {
+                if let last = stretches.last, piece.start <= last.end.addingTimeInterval(idleGap) {
+                    stretches[stretches.count - 1].end = max(last.end, piece.end)
+                } else {
+                    stretches.append(piece)
+                }
+            }
+            for var stretch in stretches {
+                if stretch.end <= stretch.start {
+                    stretch.end = stretch.start.addingTimeInterval(quietTurn)
+                }
+                spans.append(stretch)
+            }
         }
         return merged(spans)
     }

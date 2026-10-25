@@ -43,6 +43,26 @@ struct DayRibbonTests {
         #expect(total == 1_740)
     }
 
+    // A turn that stalls after its first calls and picks up again in the evening is the
+    // two stretches either side of the silence, not the whole afternoon.
+    @Test func leavesASilenceInsideATurnOutOfTheTotal() {
+        let spans = SessionTime.spans(of: [
+            turn(at(9, 0), calls: [(at(9, 1), at(9, 5)), (at(14, 0), at(14, 10))])
+        ])
+
+        #expect(spans == [TimeSpan(start: at(9, 0), end: at(9, 5)),
+                          TimeSpan(start: at(14, 0), end: at(14, 10))])
+    }
+
+    // A long build is one call, so the turn was working for all of it.
+    @Test func countsALongCallInFull() {
+        let spans = SessionTime.spans(of: [
+            turn(at(9, 0), calls: [(at(9, 1), at(9, 50)), (at(9, 52), at(9, 55))])
+        ])
+
+        #expect(spans == [TimeSpan(start: at(9, 0), end: at(9, 55))])
+    }
+
     @Test func creditsATurnThatOnlyWroteText() {
         let spans = SessionTime.spans(of: [turn(at(9, 0), calls: [])])
 
