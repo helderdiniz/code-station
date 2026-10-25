@@ -49,6 +49,7 @@ struct ChangesView: View {
     @Environment(DialogPresenter.self) private var dialogs
     @Environment(GitStatsCache.self) private var gitStats
     @Environment(AppSettings.self) private var appSettings
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     @State private var commentDraft: CommentDraft?
     @State private var toast: ReviewToast?
@@ -64,7 +65,7 @@ struct ChangesView: View {
     @State private var reviewKeys = WindowKeyHandler(handlesTyping: true)
     @AppStorage("changes.reviewCoachSeen") private var coachSeen = false
     @State private var wholeQuestion = ""
-    @State private var askingWhole = false
+    @FocusState private var wholeQuestionFocused: Bool
     private var focusedComment: UUID? {
         get { navigation.focusedComment }
         nonmutating set { navigation.focusedComment = newValue }
@@ -758,11 +759,11 @@ struct ChangesView: View {
     }
 
     // Questions about the whole change have no file to sit under, so they keep a group of
-    // their own at the end of the list, with the way to ask one.
+    // their own at the end of the list. The way to ask one sits in the session header.
     @ViewBuilder private var wholeChangeQuestions: some View {
         if let review {
             let asked = review.reviews.questions(review.sessionID).filter(\.isWhole).sorted { $0.created > $1.created }
-            if !asked.isEmpty || askingWhole {
+            if !asked.isEmpty || navigation.askingWholeChange {
                 sectionHeader("Whole change")
                 ForEach(asked) { question in
                     Group {
@@ -775,13 +776,10 @@ struct ChangesView: View {
                     .id(question.id)
                 }
             }
-            if askingWhole {
+            if navigation.askingWholeChange {
                 wholeChangeBox(review).padding(.top, 4)
-            } else {
-                InlineLink(title: "Ask about the whole change", size: 11.5, tint: Theme.plan, icon: "questionmark.bubble") {
-                    askingWhole = true
-                }
-                .padding(.horizontal, 6).padding(.top, 10)
+                    .id(Self.wholeChangeBoxID)
+                    .transition(.fadeIn)
             }
         }
     }
@@ -869,6 +867,7 @@ struct ChangesView: View {
                     }.padding(10)
                     .smoothlyResizes(when: mode == .history ? collapsedHistories : collapsedRepositories)
                     .smoothlyResizes(when: navigation.foldedNotes)
+                    .smoothlyResizes(when: navigation.askingWholeChange)
                 }
                 .accessibilityLabel(mode == .history ? "Workspace projects and commits"
                                                      : "Workspace repositories and changed files")
@@ -900,6 +899,14 @@ struct ChangesView: View {
                 }
                 .onChange(of: navigatorCursor) { _, item in
                     if let item { proxy.scrollTo(item) }
+                }
+                .onChange(of: navigation.askingWholeChange, initial: true) { _, asking in
+                    guard asking else { return }
+                    mode = .changes
+                    DispatchQueue.main.async {
+                        withAnimation(reduceMotion ? nil : Motion.reveal) { proxy.scrollTo(Self.wholeChangeBoxID, anchor: .bottom) }
+                        $wholeQuestionFocused.request()
+                    }
                 }
                 .onChange(of: fileSelection.activeID) { _, path in
                     guard let path else { return }
@@ -2659,10 +2666,12 @@ struct ChangesView: View {
         let question = ReviewQuestion.whole(root: repoRoot, agent: review.agent, question: wholeQuestion.trimmed)
         review.reviews.ask(question, context: questionContext(review), in: review.sessionID)
         wholeQuestion = ""
-        askingWhole = false
+        navigation.askingWholeChange = false
         focusedComment = question.id
         announce("Asked. The answer appears in this list and stays here.")
     }
+
+    private static let wholeChangeBoxID = "whole-change-box"
 
     private func wholeChangeBox(_ review: ReviewTarget) -> some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -2670,10 +2679,15 @@ struct ChangesView: View {
             TextField("For example: why does each plugin get its own folder?", text: $wholeQuestion, axis: .vertical)
                 .lineLimit(1...4)
                 .appTextField()
+                .focused($wholeQuestionFocused)
                 .onSubmit { askAboutWholeChange(review) }
+                .onExitCommand { navigation.askingWholeChange = false }
                 .accessibilityLabel("Question about the whole change")
             HStack(spacing: 8) {
                 Spacer(minLength: 0)
+                ActionButton(title: "Cancel", tone: .outlined, height: 26, size: 11.5) {
+                    navigation.askingWholeChange = false
+                }
                 ActionButton(title: "Ask", tone: .plan, height: 26, size: 11.5, icon: "questionmark") {
                     askAboutWholeChange(review)
                 }

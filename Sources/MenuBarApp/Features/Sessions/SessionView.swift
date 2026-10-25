@@ -606,7 +606,14 @@ struct SessionView: View {
             case .conversation:
                 panelDock(session: session, project: project, showsWords: fit == .wide)
                     .transition(.opacity)
-            case .design, .troubleshoot, .evidence, .changes:
+            case .design, .troubleshoot, .evidence:
+                terminalDock(session: session, project: project, showsWord: fit == .wide)
+                    .transition(.opacity)
+            case .changes:
+                if workingTreeChanges(session) != nil {
+                    askWholeChangeButton
+                        .transition(.opacity)
+                }
                 terminalDock(session: session, project: project, showsWord: fit == .wide)
                     .transition(.opacity)
             case .explorer:
@@ -690,6 +697,18 @@ struct SessionView: View {
             }) {
                 toggleTerminal(directory: directory)
             }
+    }
+
+    // A question about the whole change has no file or line to start from, so it is asked
+    // from here rather than from anywhere in the list of files.
+    private var askWholeChangeButton: some View {
+        let asking = changesNavigation.askingWholeChange
+        return HeaderRailButton(icon: "questionmark.bubble",
+                                state: asking ? .open : .rest,
+                                label: "Ask about the whole change",
+                                hint: "The answer stays in the list of changes") {
+            changesNavigation.askingWholeChange.toggle()
+        }
     }
 
     // Find stays one click away. Everything else done to the tree sits behind the menu,

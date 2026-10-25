@@ -121,6 +121,8 @@ final class ChangesNavigationMemory {
     // outside the screen that opens the dialogs.
     var secondOpinionAsks = 0
     var secondOpinionOpens = 0
+    // The box for a question about the whole change is opened from the session header.
+    var askingWholeChange = false
 
     func history(for root: String) -> CommitHistorySelection {
         if let selection = histories[root] { return selection }
