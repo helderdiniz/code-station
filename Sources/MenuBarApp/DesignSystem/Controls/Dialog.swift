@@ -208,6 +208,9 @@ struct DialogHost: View {
             }
         }
         .smoothlyResizes(when: presenter.current?.id)
+        // A closed dialog stays on screen while it fades, and the backdrop would take
+        // the next click meant for the app. A closed dialog takes no clicks at all.
+        .allowsHitTesting(presenter.current != nil)
     }
 
     // The card reads its parts out in order once it has arrived: the question, what it

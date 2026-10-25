@@ -748,7 +748,6 @@ struct QuestionThreadView: View {
             InlineLink(title: "Resolve", size: 11.5, tint: Color.secondary, action: resolve)
             GlyphButton(icon: copied ? "checkmark" : "doc.on.doc", side: 24, tint: copied ? Theme.dotOn : nil,
                         action: copyAnswer)
-                .contentTransition(.symbolEffect(.replace))
                 .appTooltip("Copy the answer")
                 .accessibilityLabel(copied ? "Copied" : "Copy the answer")
         }

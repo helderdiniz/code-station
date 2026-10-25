@@ -264,31 +264,45 @@ struct TooltipHost: View {
     private static let margin: CGFloat = 8
 
     @State private var measurement = OverlayMeasurement()
+    // The hint that has been placed and faded in. It fades only once it has been
+    // measured and moved to its spot, so it never slides there from a corner.
+    @State private var revealed = -1
 
     private var size: CGSize { measurement.size }
 
     var body: some View {
-        if let tooltip = presenter.current, let hanging = tooltip.hanging {
-            HangingCard(hanging: hanging, anchor: presenter.anchor)
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                .allowsHitTesting(false)
-                .ignoresSafeArea()
-        } else if let tooltip = presenter.current {
-            GeometryReader { geometry in
-                card(tooltip)
-                    .measuredOverlay(generation: presenter.generation, into: $measurement)
-                    .offset(x: x(in: geometry.size), y: y(in: geometry.size))
-                    .onHover { inside in
-                        if inside {
-                            presenter.keepInteractiveTooltipVisible()
-                        } else {
-                            presenter.hideInteractiveTooltip()
+        ZStack {
+            if let tooltip = presenter.current, let hanging = tooltip.hanging {
+                HangingCard(hanging: hanging, anchor: presenter.anchor)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                    .allowsHitTesting(false)
+                    .ignoresSafeArea()
+            } else if let tooltip = presenter.current {
+                GeometryReader { geometry in
+                    card(tooltip)
+                        .measuredOverlay(generation: presenter.generation, into: $measurement)
+                        .opacity(revealed == presenter.generation ? 1 : 0)
+                        .offset(x: x(in: geometry.size), y: y(in: geometry.size))
+                        .onHover { inside in
+                            if inside {
+                                presenter.keepInteractiveTooltipVisible()
+                            } else {
+                                presenter.hideInteractiveTooltip()
+                            }
                         }
-                    }
-                    .allowsHitTesting(tooltip.acceptsHover)
+                        .allowsHitTesting(tooltip.acceptsHover)
+                }
+                .ignoresSafeArea()
+                .transition(.asymmetric(insertion: .identity, removal: .opacity.animation(Motion.leave)))
             }
-            .ignoresSafeArea()
         }
+        // A plain fade, which is what Reduce Motion falls back to anyway.
+        .onChange(of: measurement.generation) { _, measured in
+            guard measured == presenter.generation else { return }
+            withAnimation(Motion.reveal) { revealed = measured }
+        }
+        // A hint on its way out takes no clicks, so an interactive one cannot act twice.
+        .allowsHitTesting(presenter.current != nil)
     }
 
     @ViewBuilder private func card(_ tooltip: Tooltip) -> some View {

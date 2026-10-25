@@ -24,7 +24,7 @@ struct HeaderTabToggle<Selection: Hashable>: View {
         // two lines. It is a fixed set of short words: it should hold its size and let
         // the title beside it give way instead.
         .fixedSize(horizontal: true, vertical: false)
-        .animation(.spring(response: 0.3, dampingFraction: 0.85), value: selection)
+        .motion(Motion.control, value: selection)
     }
 
     private func segment(_ option: (label: String, value: Selection)) -> some View {

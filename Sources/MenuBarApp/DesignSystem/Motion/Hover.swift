@@ -112,6 +112,6 @@ private struct SmoothResizeModifier<Value: Equatable>: ViewModifier {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     func body(content: Content) -> some View {
-        content.animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: value)
+        content.animation(reduceMotion ? nil : Motion.reveal, value: value)
     }
 }

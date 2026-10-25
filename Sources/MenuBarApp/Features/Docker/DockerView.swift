@@ -26,7 +26,6 @@ struct DockerView: View {
     @State private var selection: Set<String> = []
     @State private var anchor: String?
     @State private var animatesRows = false
-    @State private var refreshTurns = 0
     @State private var note: String?
     @State private var noteIcon = "checkmark"
     @State private var notes = 0
@@ -103,13 +102,11 @@ struct DockerView: View {
 
             searchField
             GlyphButton(icon: "arrow.clockwise", tint: Theme.accent) {
-                refreshTurns += 1
                 Task {
                     await docker.refresh(sizes: true)
                     showNote("Up to date", icon: "checkmark")
                 }
             }
-            .actOut("arrow.clockwise", trigger: refreshTurns)
             .appTooltip("Refresh everything")
             .accessibilityLabel("Refresh")
 

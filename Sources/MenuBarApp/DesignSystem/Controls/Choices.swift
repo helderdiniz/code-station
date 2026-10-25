@@ -180,7 +180,7 @@ struct OptionRow: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .onHover { hovering = $0 }
+        .onPointerHover { hovering = $0 }
         .motion(Motion.control, value: selected)
         .motion(Motion.hover, value: hovering)
     }
@@ -209,8 +209,8 @@ struct ChoicePill: View {
         }
         .buttonStyle(.plain)
         .disabled(!enabled)
-        .hoverLift(hovering)
-        .onHover { hovering = $0 }
+        .hoverLift(hovering && enabled)
+        .onPointerHover { hovering = $0 }
         .motion(Motion.control, value: selected)
         .motion(Motion.hover, value: hovering)
     }

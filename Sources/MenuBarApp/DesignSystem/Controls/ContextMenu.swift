@@ -420,7 +420,7 @@ struct ContextMenuHost: View {
         default: -6
         }
         return .asymmetric(insertion: .opacity.combined(with: .offset(y: travel)).animation(Motion.reveal),
-                           removal: .opacity)
+                           removal: .opacity.animation(Motion.leave))
     }
 
     private func card(maxHeight: CGFloat) -> some View {
@@ -834,12 +834,12 @@ private struct MenuCardItemView: View {
             .foregroundStyle(Color.primary)
             .frame(maxWidth: .infinity, minHeight: 76, alignment: .topLeading)
             .padding(10)
-            .surface(hovering ? Color.black.opacity(0.055) : Theme.field, cornerRadius: 9)
+            .surface(hovering ? Color.primary.opacity(0.055) : Theme.field, cornerRadius: 9)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .hoverLift(hovering)
-        .onHover { hovering = $0 }
+        .onPointerHover { hovering = $0 }
     }
 }
 
@@ -863,7 +863,7 @@ private struct MenuItemRow: View {
                 row
             }
         }
-        .onHover { hovering = $0 }
+        .onPointerHover { hovering = $0 }
         .motion(Motion.hover, value: hovering)
     }
 
@@ -945,7 +945,7 @@ private struct MenuItemRow: View {
         .padding(.horizontal, 12)
         .padding(.vertical, item.subtitle == nil ? 6 : 8)
         .background(RoundedRectangle(cornerRadius: 6)
-            .fill(action != nil && hovering ? Color.black.opacity(0.05) : .clear)
+            .fill(action != nil && hovering ? Color.primary.opacity(0.05) : .clear)
             .padding(.horizontal, 5))
         .opacity(item.isDisabled ? 0.38 : 1)
         .contentShape(Rectangle())

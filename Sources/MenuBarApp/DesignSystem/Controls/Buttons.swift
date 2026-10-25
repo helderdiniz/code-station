@@ -179,12 +179,17 @@ struct GlyphButton: View {
     var action: (() -> Void)? = nil
 
     @Environment(\.isEnabled) private var isEnabled
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var hovering = false
+    @State private var actOuts = 0
 
     var body: some View {
         Group {
             if let action {
-                Button(action: action) { shape }
+                Button {
+                    actOuts += 1
+                    action()
+                } label: { shape }
                     .buttonStyle(.plain)
             } else {
                 shape
@@ -197,6 +202,10 @@ struct GlyphButton: View {
     private var shape: some View {
         Image(systemName: icon)
             .font(.system(size: side * 0.42, weight: .semibold))
+            // A glyph that changes meaning, such as a star filling in, turns into the
+            // new one rather than being swapped.
+            .contentTransition(reduceMotion ? .identity : .symbolEffect(.replace))
+            .actOut(icon, trigger: actOuts)
             .foregroundStyle(active ? Color.white : tint ?? Color.secondary)
             .frame(width: side, height: side)
             .surface(fill, cornerRadius: side * 0.27, border: active ? .clear : Theme.border)
