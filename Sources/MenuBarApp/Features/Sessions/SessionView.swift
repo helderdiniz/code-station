@@ -167,8 +167,12 @@ struct SessionView: View {
                                              in: session) ?? workingDirectory
             let designFilesURL = store.designFilesURL(for: session)
             let recap = store.recap(for: sessionID)
+            // A Design gets its folder only once the agent writes into it, so until then
+            // the Explorer has nothing to list there and leaves it out.
+            let explorerDesignFilesURL = designHasContent ?? store.hasDesignArtifacts(for: session)
+                ? designFilesURL : nil
             let explorerDirectory = explorerShowsDesignFiles
-                ? designFilesURL?.path ?? projectDirectory
+                ? explorerDesignFilesURL?.path ?? projectDirectory
                 : projectDirectory
             VStack(spacing: 0) {
                 // Cards anchored to a band hang over whatever is under it. A VStack draws
@@ -247,13 +251,13 @@ struct SessionView: View {
                                      showHidden: $explorerShowsHidden,
                                      openFolders: $explorerOpenFolders,
                                      refreshed: { showRailNote("Refreshed \(counted($0, "item"))", icon: "checkmark") },
-                                     repositories: workspaceRepositories(session) + (designFilesURL.map {
+                                     repositories: workspaceRepositories(session) + (explorerDesignFilesURL.map {
                                          [ChangesRepository(root: $0.path, name: "Design files")]
                                      } ?? []),
-                                     designFilesRoot: designFilesURL?.path,
+                                     designFilesRoot: explorerDesignFilesURL?.path,
                                      collapsedProjects: $collapsedExplorerProjects,
                                      selectRoot: { root in
-                                         explorerShowsDesignFiles = root == designFilesURL?.path
+                                         explorerShowsDesignFiles = root == explorerDesignFilesURL?.path
                                          if !explorerShowsDesignFiles { selectWorkspaceRoot(root, in: session) }
                                      })
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -360,7 +364,7 @@ struct SessionView: View {
                         return root == change.root
                     }?.projectID
                 } ?? session.projectID
-                explorerShowsDesignFiles = designFilesURL != nil
+                explorerShowsDesignFiles = store.hasDesignArtifacts(for: session)
                 collapsedExplorerProjects = Set(workingDirectories.dropFirst())
                 sampleMissingFolders()
                 refreshStats(workingDirectories, reusingRecent: true)
