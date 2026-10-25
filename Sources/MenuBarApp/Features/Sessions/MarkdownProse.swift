@@ -491,6 +491,9 @@ extension EnvironmentValues {
     @Entry var explorerRoots: [String] = []
     // Off where there is no preview, so text and its links stay as they were.
     @Entry var previewsLocalServers = false
+    // Told which link the pointer is over, and nil when it leaves, where a screen lights
+    // what a link points at before it is clicked.
+    @Entry var linkHovered: ((URL?) -> Void)? = nil
 }
 
 enum TranscriptLink {
@@ -739,6 +742,7 @@ struct SelectableText: View {
     @Environment(\.transcriptReply) private var transcriptReply
     @Environment(\.explorerRoots) private var explorerRoots
     @Environment(\.previewsLocalServers) private var previewsLocalServers
+    @Environment(\.linkHovered) private var linkHovered
     // Optional because a text view can sit in a sheet that has no menu layer of its own.
     @Environment(MenuPresenter.self) private var menus: MenuPresenter?
 
@@ -891,6 +895,7 @@ struct SelectableText: View {
 
     private func linkHoverChanged(_ hovered: TranscriptLink.Hovered?) {
         pendingTooltip?.cancel()
+        linkHovered?(hovered?.url)
         guard let hovered, hovered.url.isFileURL
                 || (previewsLocalServers && TranscriptLink.isLocalServer(hovered.url)) else {
             tooltipPresenter.hide(owner: tooltipOwner)

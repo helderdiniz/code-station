@@ -1,10 +1,13 @@
 import SwiftUI
 
-// One project the whole change spans, as the card's scope names it.
+// One project the whole change spans, with how much of the change is in it.
 struct WholeChangeAskScope: Identifiable {
     let name: String
     let files: Int
+    let added: Int
+    let removed: Int
     var id: String { name }
+    var lines: Int { added + removed }
 }
 
 // Questions about the whole change, in a card that grows out of the header button that
@@ -15,12 +18,14 @@ struct WholeChangeAskCard<Thread: View>: View {
     let open: [ReviewQuestion]
     let resolved: [ReviewQuestion]
     let scope: [WholeChangeAskScope]
-    let added: Int
-    let removed: Int
     let agentTitle: String
+    // A fork of the conversation has read the chat; any other agent answers from the diff.
+    let forksConversation: Bool
     // The tallest the card may be, so it never runs off the bottom of the window.
     let maxHeight: CGFloat
     let ask: (String) -> Void
+    // Esc stops an answer under way before it puts the card away.
+    let escape: () -> Void
     let close: () -> Void
     // Draws one thread, open or folded to a line.
     @ViewBuilder let thread: (ReviewQuestion, Bool) -> Thread
@@ -29,8 +34,8 @@ struct WholeChangeAskCard<Thread: View>: View {
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @FocusState private var fieldFocused: Bool
-    @State private var threadsHeight: CGFloat = 0
     @State private var frame: CGRect = .zero
+    @State private var mapDrawn = false
 
     private var expanded: UUID? { WholeChangeThreads.expanded(navigation.askExpanded, in: open) }
     private var following: ReviewQuestion? {
@@ -40,13 +45,12 @@ struct WholeChangeAskCard<Thread: View>: View {
     var body: some View {
         VStack(spacing: 0) {
             header
-            scopeRow
+            if !scope.isEmpty { changeMap }
             Rectangle().fill(Theme.hairline).frame(height: 1)
             threads
             composer
         }
         .frame(width: Self.width)
-        .frame(maxHeight: maxHeight)
         .background(RoundedRectangle(cornerRadius: 16).fill(Theme.card))
         .overlay(RoundedRectangle(cornerRadius: 16).stroke(Theme.border))
         .overlay(alignment: .topLeading) { notch }
@@ -55,7 +59,11 @@ struct WholeChangeAskCard<Thread: View>: View {
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Ask about the whole change")
         .accessibilityAddTraits(.isModal)
+        // The card is offered the whole height it may take but only draws what it holds,
+        // from the top, so a short conversation leaves no empty card under it.
+        .frame(height: maxHeight, alignment: .top)
         .onAppear {
+            mapDrawn = true
             DispatchQueue.main.async { fieldFocused = true }
         }
         .onChange(of: navigation.askFollowing) { _, id in
@@ -99,7 +107,9 @@ struct WholeChangeAskCard<Thread: View>: View {
                 Text("Ask about the whole change")
                     .font(.serif(17, .semibold))
                     .accessibilityAddTraits(.isHeader)
-                Text("A side copy of this session answers. Nothing reaches the chat.")
+                Text(forksConversation
+                     ? "A side copy of \(agentTitle) answers. It has read the chat, can't edit files, and nothing it says goes back to the chat."
+                     : "A read-only run of \(agentTitle) answers from the diff and the recent chat. It can't edit files, and nothing it says goes to the chat.")
                     .font(.system(size: 11.5)).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -111,58 +121,96 @@ struct WholeChangeAskCard<Thread: View>: View {
         .padding(.leading, 16).padding(.trailing, 14).padding(.top, 16).padding(.bottom, 12)
     }
 
-    private var scopeRow: some View {
-        HStack(spacing: 6) {
-            ForEach(scope) { project in
-                HStack(spacing: 5) {
-                    Text(project.name).font(.system(size: 11.5, weight: .medium)).lineLimit(1)
-                    Text(counted(project.files, "file")).font(.system(size: 11.5)).foregroundStyle(.secondary)
-                        .fixedSize()
+    // Where the change is: one bar split by how many lines each project changed, then a
+    // row for each project with its files and lines.
+    private var changeMap: some View {
+        let total = max(scope.reduce(0) { $0 + $1.lines }, 1)
+        return VStack(alignment: .leading, spacing: 9) {
+            GeometryReader { proxy in
+                let gaps = CGFloat(max(scope.count - 1, 0)) * 3
+                HStack(spacing: 3) {
+                    ForEach(scope) { project in
+                        Capsule()
+                            .fill(Theme.projectTint(for: project.name).colour)
+                            .frame(width: mapDrawn || reduceMotion
+                                   ? max((proxy.size.width - gaps) * CGFloat(project.lines) / CGFloat(total), 3) : 0)
+                    }
                 }
-                .padding(.horizontal, 9).frame(height: 24)
-                .background(RoundedRectangle(cornerRadius: 7).fill(Theme.sunken))
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .motion(Motion.draw, value: mapDrawn)
             }
-            Spacer(minLength: 6)
-            HStack(spacing: 5) {
-                Text("+\(added)").foregroundStyle(Theme.addition)
-                Text("\u{2212}\(removed)").foregroundStyle(Theme.deletion)
-            }
-            .font(.mono(11)).fixedSize()
+            .frame(height: 6)
             .accessibilityElement(children: .ignore)
-            .accessibilityLabel("\(added) lines added, \(removed) removed")
+            .accessibilityLabel(mapSummary(total: total))
+            Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 5) {
+                ForEach(scope) { project in
+                    GridRow {
+                        HStack(spacing: 7) {
+                            ProjectDot(tint: Theme.projectTint(for: project.name), size: 8)
+                            Text(project.name).font(.system(size: 12, weight: .medium))
+                                .lineLimit(1).truncationMode(.middle)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        Text(counted(project.files, "file"))
+                            .font(.system(size: 11.5)).foregroundStyle(.secondary)
+                            .gridColumnAlignment(.trailing)
+                        HStack(spacing: 5) {
+                            Text("+\(project.added)").foregroundStyle(Theme.addition)
+                            Text("\u{2212}\(project.removed)").foregroundStyle(Theme.deletion)
+                                .opacity(project.removed == 0 ? 0.4 : 1)
+                        }
+                        .font(.mono(11)).fixedSize()
+                        .gridColumnAlignment(.trailing)
+                    }
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel("\(project.name), \(counted(project.files, "file")), "
+                                        + "\(project.added) lines added, \(project.removed) removed")
+                }
+            }
         }
-        .padding(.horizontal, 16).padding(.bottom, 12)
+        .padding(.horizontal, 12).padding(.vertical, 11)
+        .background(RoundedRectangle(cornerRadius: 10).fill(Theme.sunken))
+        .padding(.horizontal, 14).padding(.bottom, 12)
+    }
+
+    private func mapSummary(total: Int) -> String {
+        guard let largest = scope.max(by: { $0.lines < $1.lines }) else { return "" }
+        guard scope.count > 1 else { return "\(largest.name) holds the whole change" }
+        let percent = Int((Double(largest.lines) / Double(total) * 100).rounded())
+        return "\(largest.name) holds \(percent) percent of the changed lines"
     }
 
     // The threads scroll inside the card once they outgrow it. The card is as tall as
     // what it holds, so a short conversation does not leave a tall empty card.
     private var threads: some View {
         ScrollViewReader { proxy in
-            ScrollView {
-                VStack(alignment: .leading, spacing: 4) {
-                    if !resolved.isEmpty {
-                        resolvedToggle.frame(maxWidth: .infinity)
-                    }
-                    if navigation.askShowsResolved {
-                        ForEach(resolved) { question in
-                            thread(question, true).id(question.id).transition(.fadeIn)
+            HuggingHeight {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 4) {
+                        if !resolved.isEmpty {
+                            resolvedToggle.frame(maxWidth: .infinity)
+                        }
+                        if navigation.askShowsResolved {
+                            ForEach(resolved) { question in
+                                thread(question, true).id(question.id).transition(.fadeIn)
+                            }
+                        }
+                        if open.isEmpty && !(navigation.askShowsResolved && !resolved.isEmpty) {
+                            empty.transition(.fadeIn)
+                        }
+                        ForEach(open) { question in
+                            thread(question, question.id == expanded).id(question.id).transition(.fadeIn)
                         }
                     }
-                    if open.isEmpty && !(navigation.askShowsResolved && !resolved.isEmpty) {
-                        empty
-                    }
-                    ForEach(open) { question in
-                        thread(question, question.id == expanded).id(question.id).transition(.fadeIn)
-                    }
+                    .padding(.horizontal, 8).padding(.vertical, 8)
+                    .motion(Motion.reveal, value: expanded)
+                    .motion(Motion.reveal, value: open.map(\.id))
+                    .motion(Motion.reveal, value: navigation.askShowsResolved)
                 }
-                .padding(.horizontal, 8).padding(.vertical, 8)
-                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { threadsHeight = $0 }
-                .motion(Motion.reveal, value: expanded)
-                .motion(Motion.reveal, value: open.map(\.id))
-                .motion(Motion.reveal, value: navigation.askShowsResolved)
+                .scrollBounceBehavior(.basedOnSize)
             }
-            .scrollBounceBehavior(.basedOnSize)
-            .frame(maxHeight: threadsHeight)
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel("Questions")
             .onAppear {
                 if let expanded { proxy.scrollTo(expanded, anchor: .bottom) }
             }
@@ -192,18 +240,27 @@ struct WholeChangeAskCard<Thread: View>: View {
                 .background(RoundedRectangle(cornerRadius: 12).fill(Theme.plan.opacity(0.08)))
                 .padding(.bottom, 4)
                 .accessibilityHidden(true)
-            Text("Nothing asked about the whole change yet").font(.serif(15, .semibold))
-            Text("Ask how the parts fit together, or why it was done this way. Questions about a few lines are asked from the diff.")
+            Text("Ask how this change fits together").font(.serif(15, .semibold))
+                .accessibilityAddTraits(.isHeader)
+            Text("Good for the big picture: why it was built this way, what to read first, what it could break. To ask about a few lines, select them in the diff.")
                 .font(.system(size: 12)).foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)
-                .frame(maxWidth: 300)
+                .frame(maxWidth: 330)
+            VStack(spacing: 4) {
+                ForEach(WholeChangeThreads.starters(projects: scope.count), id: \.self) { starter in
+                    WholeChangeStarter(text: starter) { ask(starter) }
+                }
+            }
+            .padding(.top, 10)
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel("Questions to start with")
         }
         .frame(maxWidth: .infinity)
-        .padding(.horizontal, 20).padding(.vertical, 22)
-        .accessibilityElement(children: .combine)
+        .padding(.horizontal, 12).padding(.top, 18).padding(.bottom, 10)
     }
 
+    // One box: the field, then where the answer stays and the button that asks.
     private var composer: some View {
         VStack(alignment: .leading, spacing: 8) {
             if let following {
@@ -222,23 +279,39 @@ struct WholeChangeAskCard<Thread: View>: View {
                 .background(RoundedRectangle(cornerRadius: 8).fill(Theme.plan.opacity(0.08)))
                 .transition(.fadeIn)
             }
-            HStack(alignment: .bottom, spacing: 8) {
+            VStack(alignment: .leading, spacing: 6) {
                 TextField(following == nil ? "Ask \(agentTitle) about the whole change" : "Ask a follow-up",
                           text: Binding(get: { navigation.askDraft }, set: { navigation.askDraft = $0 }),
                           axis: .vertical)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 13))
                     .lineLimit(1...5)
-                    .appTextField(size: 12.5)
                     .focused($fieldFocused)
                     .onSubmit(send)
-                    .onExitCommand(perform: close)
+                    .onKeyPress(.return, phases: .down) { press in
+                        guard press.modifiers.contains(.shift) else { return .ignored }
+                        navigation.askDraft += "\n"
+                        return .handled
+                    }
+                    .onExitCommand(perform: escape)
                     .accessibilityLabel(following == nil ? "Question about the whole change" : "Follow-up question")
-                ActionButton(title: following == nil ? "Ask" : "Ask follow-up", tone: .plan,
-                             height: 30, size: 11.5, icon: "questionmark", action: send)
-                    .disabled(navigation.askDraft.isBlank)
+                    .accessibilityHint("Return asks. Shift-Return adds a line.")
+                HStack(spacing: 8) {
+                    Label("Stays in this review", systemImage: "lock")
+                        .font(.system(size: 11)).foregroundStyle(.tertiary)
+                        .labelStyle(.titleAndIcon)
+                    Spacer(minLength: 8)
+                    WholeChangeAskButton(title: following == nil ? "Ask" : "Ask follow-up",
+                                         ready: !navigation.askDraft.isBlank, action: send)
+                }
             }
-            Text("Return asks. Esc puts the card away.")
-                .font(.system(size: 10.5)).foregroundStyle(.tertiary)
-                .accessibilityHidden(true)
+            .padding(.leading, 12).padding(.trailing, 7).padding(.top, 10).padding(.bottom, 7)
+            .background(RoundedRectangle(cornerRadius: 10).fill(Theme.field))
+            .overlay(RoundedRectangle(cornerRadius: 10)
+                .stroke(fieldFocused ? Theme.plan.opacity(0.5) : Theme.border))
+            .motion(Motion.hover, value: fieldFocused)
+            .contentShape(RoundedRectangle(cornerRadius: 10))
+            .onTapGesture { fieldFocused = true }
         }
         .padding(.horizontal, 12).padding(.top, 10).padding(.bottom, 12)
         .overlay(alignment: .top) { Rectangle().fill(Theme.hairline).frame(height: 1) }
@@ -253,6 +326,75 @@ struct WholeChangeAskCard<Thread: View>: View {
 
     private func counted(_ count: Int, _ noun: String) -> String {
         count == 1 ? "1 \(noun)" : "\(count) \(noun)s"
+    }
+}
+
+// A question to start with. It is a whole question, so a click asks it at once.
+private struct WholeChangeStarter: View {
+    let text: String
+    let action: () -> Void
+
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 9) {
+                Image(systemName: "questionmark.bubble")
+                    .font(.system(size: 11.5, weight: .semibold))
+                    .foregroundStyle(Theme.plan)
+                Text(text).font(.system(size: 12.5))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                Image(systemName: "return")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(Theme.plan)
+                    .opacity(hovering ? 1 : 0)
+            }
+            .padding(.horizontal, 11).frame(height: 32)
+            .surface(hovering ? Theme.plan.opacity(0.06) : Theme.card, cornerRadius: 8,
+                     border: hovering ? Theme.plan.opacity(0.35) : Theme.border)
+            .contentShape(RoundedRectangle(cornerRadius: 8))
+        }
+        .buttonStyle(.plain)
+        .hoverLift(hovering, amount: Motion.smallLift)
+        .motion(Motion.hover, value: hovering)
+        .onPointerHover { hovering = $0 }
+        .accessibilityLabel(text)
+        .accessibilityHint("Asks it now")
+    }
+}
+
+// The card's Ask button. With nothing typed it waits in the field's own grey rather than
+// fading out, so it reads as not yet rather than broken.
+private struct WholeChangeAskButton: View {
+    let title: String
+    let ready: Bool
+    let action: () -> Void
+
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 6) {
+                Text(title).font(.system(size: 11.5, weight: .semibold)).fixedSize()
+                Image(systemName: "return")
+                    .font(.system(size: 9, weight: .bold))
+                    .padding(.horizontal, 4).padding(.vertical, 2)
+                    .overlay(RoundedRectangle(cornerRadius: 4)
+                        .stroke(ready ? Theme.card.opacity(0.5) : Theme.border))
+            }
+            .foregroundStyle(ready ? Theme.card : Color.secondary)
+            .padding(.horizontal, 10).frame(height: 28)
+            .surface(ready ? (hovering ? Theme.plan.opacity(0.86) : Theme.plan) : Theme.sunken,
+                     cornerRadius: 7, border: ready ? .clear : Theme.border)
+            .contentShape(RoundedRectangle(cornerRadius: 7))
+        }
+        .buttonStyle(.plain)
+        .disabled(!ready)
+        .hoverLift(hovering && ready)
+        .motion(Motion.control, value: ready)
+        .onPointerHover { hovering = $0 }
+        .accessibilityLabel(title)
+        .accessibilityHint(ready ? "" : "Type a question first")
     }
 }
 

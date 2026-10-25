@@ -110,4 +110,83 @@ struct WholeChangeAskTests {
         #expect(resolve("/elsewhere/View.swift") == nil)
         #expect(resolve("https://example.com/Sources/View.swift") == nil)
     }
+
+    @Test func referencesInAnAnswerAreTheChangedFilesItLinksOrNamesEachOnce() {
+        let answer = """
+        The view starts in [View.swift:12](/work/app/Sources/View.swift:12), and reads `keys.json:3`. \
+        See [View.swift:12](/work/app/Sources/View.swift:12) again, [elsewhere](/work/app/Other.swift) \
+        and [the docs](https://example.com). `let x = 1` is code, not a file.
+        """
+        let found = ChangeCitation.references(in: answer, roots: roots) { changed.contains("\($0)|\($1)") }
+        #expect(found.map(\.path) == ["Sources/View.swift", "keys.json"])
+        #expect(found.map(\.root) == ["/work/app", "/work/settings"])
+        #expect(found.first?.linesSuffix == ":12")
+        #expect(found.first?.spokenName == "Show View.swift line 12")
+    }
+
+    @Test func aReferenceToARangeSaysBothEnds() {
+        let citation = resolve("/work/app/Sources/View.swift:606-616")
+        #expect(citation?.linesSuffix == ":606-616")
+        #expect(citation?.spokenName == "Show View.swift lines 606 to 616")
+        #expect(resolve("keys.json")?.spokenName == "Show keys.json")
+    }
+
+    @Test func startersAskAboutHowProjectsFitOnlyWhenThereAreSeveral() {
+        #expect(WholeChangeThreads.starters(projects: 2).count == 4)
+        #expect(WholeChangeThreads.starters(projects: 2).last == "How do the two projects fit together?")
+        #expect(WholeChangeThreads.starters(projects: 3).last == "How do the 3 projects fit together?")
+        #expect(!WholeChangeThreads.starters(projects: 1).contains { $0.contains("projects") })
+    }
+
+    @Test func aFinishedStepIsToldAsDone() {
+        #expect(WholeChangeThreads.finishedStep("Opening a side copy of this session") == "Opened a side copy of this session")
+        #expect(WholeChangeThreads.finishedStep("Reading the chat so far") == "Read the chat so far")
+        #expect(WholeChangeThreads.finishedStep("Going on in the side copy") == "Went on in the side copy")
+        // A word that only starts the same way is left alone.
+        #expect(WholeChangeThreads.finishedStep("Readme checked") == "Readme checked")
+    }
+
+    @Test func aWholeChangeQuestionAsksForFileLinksAndALineQuestionDoesNot() {
+        let whole = ReviewQuestion.whole(root: "/repo", agent: .claudeCode, question: "Why?")
+        let lines = ReviewQuestion(root: "/repo", path: "App.swift", anchor: DiffAnchor(side: .new, line: 3),
+                                   excerpt: "", agent: .claudeCode, question: "Why?")
+        #expect(SideQuestion.forkPrompt(whole).contains(SideQuestion.referenceInstructions))
+        #expect(SideQuestion.readOnlyPrompt(whole, patches: [], recentChat: "").contains(SideQuestion.referenceInstructions))
+        #expect(!SideQuestion.forkPrompt(lines).contains(SideQuestion.referenceInstructions))
+    }
+
+    // MARK: Removing and editing
+
+    private let context = QuestionContext(agent: .claudeCode, executable: nil, directory: "/repo",
+                                          repositories: [], conversationID: nil, recentChat: "")
+
+    @Test func aRemovedQuestionComesBackWhereItWas() {
+        let store = ReviewCommentStore(url: nil)
+        let session = UUID()
+        let first = whole("First", created: Date())
+        let second = whole("Second", created: Date())
+        store.ask(first, context: context, in: session)
+        store.ask(second, context: context, in: session)
+
+        store.deleteQuestion(first.id, in: session)
+        #expect(store.questions(session).map(\.text) == ["Second"])
+        store.restoreQuestion(first, at: 0, in: session)
+        #expect(store.questions(session).map(\.text) == ["First", "Second"])
+        // Undoing twice does not make two of it.
+        store.restoreQuestion(first, at: 0, in: session)
+        #expect(store.questions(session).count == 2)
+    }
+
+    @Test func editingTakesBackOnlyAFollowUp() {
+        let store = ReviewCommentStore(url: nil)
+        let session = UUID()
+        let question = whole("First", created: Date())
+        store.ask(question, context: context, in: session)
+        #expect(store.withdrawFollowUp(question.id, in: session) == nil)
+
+        store.followUp("And then?", to: question.id, context: context, in: session)
+        #expect(store.question(question.id, in: session)?.exchanges.count == 2)
+        #expect(store.withdrawFollowUp(question.id, in: session) == "And then?")
+        #expect(store.question(question.id, in: session)?.exchanges.map(\.question) == ["First"])
+    }
 }

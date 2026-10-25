@@ -1340,6 +1340,27 @@ final class ReviewCommentStore {
         saver?.schedule()
     }
 
+    // Puts a removed question back where it was, for an undo.
+    func restoreQuestion(_ question: ReviewQuestion, at index: Int, in sessionID: UUID) {
+        guard self.question(question.id, in: sessionID) == nil else { return }
+        var list = questions[sessionID] ?? []
+        list.insert(question, at: min(max(index, 0), list.count))
+        questions[sessionID] = list
+        saver?.schedule()
+    }
+
+    // Takes back the last follow-up in a thread that is not answering, and gives its words
+    // back so they can be asked again in other words. The first question is never taken,
+    // since without it there is no thread.
+    func withdrawFollowUp(_ id: UUID, in sessionID: UUID) -> String? {
+        guard let index = questionIndex(id, in: sessionID),
+              let question = questions[sessionID]?[index],
+              question.exchanges.count > 1, question.status != .answering else { return nil }
+        let withdrawn = questions[sessionID]?[index].exchanges.removeLast()
+        saver?.schedule()
+        return withdrawn?.question
+    }
+
     func setResolved(_ id: UUID, _ resolved: Bool, in sessionID: UUID) {
         guard let index = questionIndex(id, in: sessionID) else { return }
         questions[sessionID]?[index].resolved = resolved

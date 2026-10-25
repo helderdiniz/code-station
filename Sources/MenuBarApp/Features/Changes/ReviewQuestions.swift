@@ -138,6 +138,16 @@ enum SideQuestion {
         + "that starts `Suggested change:` followed by one or two sentences I could send you as a review comment. "
         + "Otherwise leave that line out."
 
+    // An answer about the whole change has no lines of its own, so the files it points at
+    // are how the person finds the code. A fixed form lets the screen show each as a chip
+    // that opens the file at those lines.
+    static let referenceInstructions = "When you point at code, name it as a Markdown link to the absolute path "
+        + "with the line, like [Loader.swift:42](/path/to/project/Sources/Loader.swift:42), or a range such as :42-48."
+
+    private static func closing(_ question: ReviewQuestion) -> String {
+        "Answer in a few short paragraphs. " + (question.isWhole ? referenceInstructions + " " : "") + suggestionInstructions
+    }
+
     // The prompt for a fork that has the conversation already: just the question and its
     // place, since everything else is in the chat it was copied from.
     static func forkPrompt(_ question: ReviewQuestion, projectNames: [String: String] = [:]) -> String {
@@ -149,7 +159,7 @@ enum SideQuestion {
             + "change any files. This is a side copy of our conversation: nothing you write here reaches the main one."
         text += "\n\n" + place(question, projectNames: projectNames)
         text += "\n\nMy question: " + last.question.trimmed
-        text += "\n\nAnswer in a few short paragraphs. " + suggestionInstructions
+        text += "\n\n" + closing(question)
         return text
     }
 
@@ -180,7 +190,7 @@ enum SideQuestion {
             if let answer = exchange.answer { text += "\nYou answered: " + answer.trimmed }
         }
         text += "\n\nMy question: " + (question.exchanges.last?.question.trimmed ?? "")
-        text += "\n\nAnswer in a few short paragraphs. " + suggestionInstructions
+        text += "\n\n" + closing(question)
         return text
     }
 

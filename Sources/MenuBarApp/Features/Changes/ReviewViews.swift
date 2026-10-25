@@ -453,8 +453,15 @@ struct QuestionThreadView: View {
     // Set where the follow-up is typed in a field of the host's own, rather than in a box
     // under the thread.
     var startFollowUp: (() -> Void)?
+    // Set where a stopped question can go back to that field to be asked in other words.
+    var editQuestion: (() -> Void)?
+    // The changed files an answer points at, each drawn as a chip that opens it.
+    var references: (String) -> [AnswerReference] = { _ in [] }
+    var showReference: (ChangeCitation) -> Void = { _ in }
+    var hoverReference: (ChangeCitation?) -> Void = { _ in }
 
     @State private var asking = false
+    @State private var copied = false
     @State private var draft = ""
     @FocusState private var fieldFocused: Bool
     @AccessibilityFocusState private var askAgainFocused: Bool
@@ -497,15 +504,18 @@ struct QuestionThreadView: View {
                     you(exchange.question, first: exchange.id == question.exchanges.first?.id)
                     if let answer = exchange.answer {
                         sideCopy(meta: meta(exchange)) {
-                            MarkdownProse(text: answer, projectPath: projectPath, textScale: textScale) { segment in
-                                MarkdownCodeBlock(segment: segment).equatable()
+                            VStack(alignment: .leading, spacing: 8) {
+                                MarkdownProse(text: answer, projectPath: projectPath, textScale: textScale) { segment in
+                                    MarkdownCodeBlock(segment: segment).equatable()
+                                }
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                referenceChips(references(answer))
                             }
-                            .frame(maxWidth: .infinity, alignment: .leading)
                         }
                     } else if let failure = exchange.failure {
                         failed(failure)
-                    } else if exchange.stopped != nil {
-                        stopped(exchange.stoppedSteps ?? [])
+                    } else if let stoppedAt = exchange.stopped {
+                        stopped(exchange.stoppedSteps ?? [], at: stoppedAt)
                     } else {
                         answering
                     }
@@ -569,8 +579,10 @@ struct QuestionThreadView: View {
                             Image(systemName: "checkmark").font(.system(size: 9, weight: .bold))
                                 .foregroundStyle(Theme.dotOn).frame(width: 12)
                         }
-                        Text(step).lineLimit(1).truncationMode(.middle)
+                        Text(index == shown.count - 1 ? step : WholeChangeThreads.finishedStep(step))
+                            .lineLimit(1).truncationMode(.middle)
                     }
+                    .transition(.fadeIn)
                 }
             }
             .font(.system(size: 12)).foregroundStyle(.secondary)
@@ -580,10 +592,10 @@ struct QuestionThreadView: View {
         }
     }
 
-    // The steps it had finished keep their tick, the one it was on is struck through, and
-    // the rest are never shown.
-    private func stopped(_ reached: [String]) -> some View {
-        sideCopy(meta: "side copy · stopped") {
+    // The steps it had finished keep their tick and the one it was on is marked as where it
+    // stopped. Nothing is struck through: stopping is the person's choice, not a failure.
+    private func stopped(_ reached: [String], at time: Date) -> some View {
+        sideCopy(meta: "side copy · stopped at " + time.formatted(date: .omitted, time: .shortened)) {
             VStack(alignment: .leading, spacing: 10) {
                 VStack(alignment: .leading, spacing: 4) {
                     let shown = reached.isEmpty ? ["Starting"] : reached
@@ -592,12 +604,18 @@ struct QuestionThreadView: View {
                             if index == shown.count - 1 {
                                 RoundedRectangle(cornerRadius: 1.5).fill(Color.secondary)
                                     .frame(width: 7, height: 7).frame(width: 12)
-                                Text(step).strikethrough(color: Color.secondary.opacity(0.6))
-                                    .lineLimit(1).truncationMode(.middle)
+                                Text(step).lineLimit(1).truncationMode(.middle)
+                                Text("Stopped here")
+                                    .font(.system(size: 10.5, weight: .semibold))
+                                    .foregroundStyle(.secondary)
+                                    .padding(.horizontal, 6).padding(.vertical, 1.5)
+                                    .background(Capsule().fill(Theme.sunken))
+                                    .fixedSize()
                             } else {
                                 Image(systemName: "checkmark").font(.system(size: 9, weight: .bold))
                                     .foregroundStyle(Theme.dotOn).frame(width: 12)
-                                Text(step).foregroundStyle(Color.primary).lineLimit(1).truncationMode(.middle)
+                                Text(WholeChangeThreads.finishedStep(step)).foregroundStyle(Color.primary)
+                                    .lineLimit(1).truncationMode(.middle)
                             }
                         }
                     }
@@ -606,16 +624,23 @@ struct QuestionThreadView: View {
                 .padding(.top, 2)
                 .accessibilityElement(children: .combine)
                 .accessibilityLabel("Stopped at: " + (reached.last ?? "Starting"))
-                HStack(spacing: 12) {
+                VStack(alignment: .leading, spacing: 10) {
                     (Text("You stopped this answer. ").fontWeight(.semibold).foregroundStyle(Color.primary)
                      + Text("Nothing in the session or the review changed."))
                         .font(.system(size: 12)).foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                    InlineLink(title: "Remove", size: 11.5, action: delete)
-                    ActionButton(title: "Ask again", tone: .plan, height: 26, size: 11.5,
-                                 icon: "arrow.clockwise", action: askAgain)
-                        .accessibilityFocused($askAgainFocused)
+                    HStack(spacing: 8) {
+                        ActionButton(title: "Ask again", tone: .plan, height: 26, size: 11.5,
+                                     icon: "arrow.clockwise", action: askAgain)
+                            .accessibilityFocused($askAgainFocused)
+                        if let editQuestion {
+                            ActionButton(title: "Edit question", tone: .outlined, height: 26, size: 11.5,
+                                         icon: "pencil", action: editQuestion)
+                        }
+                        Spacer(minLength: 0)
+                        QuietRemoveLink(action: delete)
+                    }
                 }
                 .padding(10)
                 .background(RoundedRectangle(cornerRadius: 8).fill(Theme.field))
@@ -636,7 +661,8 @@ struct QuestionThreadView: View {
                 HStack(spacing: 12) {
                     ActionButton(title: "Try again", tone: .outlined, height: 26, size: 11.5,
                                  icon: "arrow.clockwise", action: retry)
-                    InlineLink(title: "Delete", size: 11.5, tint: Theme.deletion, action: delete)
+                    Spacer(minLength: 0)
+                    QuietRemoveLink(action: delete)
                 }
             }
             .padding(10)
@@ -720,9 +746,38 @@ struct QuestionThreadView: View {
             }
             Spacer(minLength: 0)
             InlineLink(title: "Resolve", size: 11.5, tint: Color.secondary, action: resolve)
+            GlyphButton(icon: copied ? "checkmark" : "doc.on.doc", side: 24, tint: copied ? Theme.dotOn : nil,
+                        action: copyAnswer)
+                .contentTransition(.symbolEffect(.replace))
+                .appTooltip("Copy the answer")
+                .accessibilityLabel(copied ? "Copied" : "Copy the answer")
         }
         .padding(.leading, 48).padding(.trailing, 16).padding(.bottom, 14)
     }
+
+    private func copyAnswer() {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(question.exchanges.compactMap(\.answer).last ?? "", forType: .string)
+        copied = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.4) { copied = false }
+    }
+
+    // Each reference drawn as its own chip. The prose is a text view, which cannot hold
+    // a button among its words, so the chips sit in a row under it.
+    @ViewBuilder private func referenceChips(_ found: [AnswerReference]) -> some View {
+        if !found.isEmpty {
+            FlowRow(spacing: 6) {
+                ForEach(Array(found.enumerated()), id: \.offset) { _, reference in
+                    AnswerReferenceChip(reference: reference,
+                                        show: { showReference(reference.citation) },
+                                        hover: { hoverReference($0 ? reference.citation : nil) })
+                }
+            }
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel("Files the answer points at")
+        }
+    }
+
 
     private var followUpBox: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -765,6 +820,68 @@ struct QuestionThreadView: View {
     private func cancel() {
         draft = ""
         asking = false
+    }
+}
+
+// A changed file an answer names, with the colour of the project it belongs to.
+struct AnswerReference {
+    let citation: ChangeCitation
+    let tint: Theme.ProjectTint
+}
+
+// A file an answer names, as a chip: the project's colour, the file and its lines. A click
+// opens the file under the card with the lines marked.
+struct AnswerReferenceChip: View {
+    let reference: AnswerReference
+    let show: () -> Void
+    let hover: (Bool) -> Void
+
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: show) {
+            HStack(spacing: 5) {
+                ProjectDot(tint: reference.tint, size: 7)
+                (Text(reference.citation.fileName).foregroundStyle(Color.primary)
+                 + Text(reference.citation.linesSuffix).foregroundStyle(.secondary))
+                    .font(.mono(11)).lineLimit(1).truncationMode(.middle)
+            }
+            .padding(.horizontal, 7).frame(height: 22)
+            .surface(hovering ? Theme.plan.opacity(0.10) : Theme.sunken, cornerRadius: 6,
+                     border: hovering ? Theme.plan.opacity(0.4) : Theme.border)
+            .contentShape(RoundedRectangle(cornerRadius: 6))
+        }
+        .buttonStyle(.plain)
+        .hoverLift(hovering, amount: Motion.smallLift)
+        .motion(Motion.hover, value: hovering)
+        .onPointerHover { on in
+            hovering = on
+            hover(on)
+        }
+        .onDisappear { if hovering { hover(false) } }
+        .appTooltip("Show in the diff")
+        .accessibilityLabel(reference.citation.spokenName)
+    }
+}
+
+// Remove, said quietly: grey words that turn red under the pointer, for a removal that an
+// undo can take back.
+struct QuietRemoveLink: View {
+    let action: () -> Void
+
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: action) {
+            Text("Remove")
+                .font(.system(size: 11.5, weight: .semibold))
+                .foregroundStyle(hovering ? Theme.deletion : Color.secondary)
+                .fixedSize()
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .motion(Motion.hover, value: hovering)
+        .onPointerHover { hovering = $0 }
     }
 }
 

@@ -137,12 +137,18 @@ final class ChangesNavigationMemory {
     var askShowsResolved = false
     // The file and lines an answer pointed at, lit in the diff under the card.
     var citation: ChangeCitation?
+    // The file a reference in an answer is under the pointer, lit in the file list so the
+    // person sees where it is before they click.
+    var citeHover: ChangeCitation?
 
     func setAskingWholeChange(_ open: Bool) {
         guard open != askingWholeChange else { return }
         askingWholeChange = open
         wholeChangeSeen = Date()
-        if !open { askFollowing = nil }
+        if !open {
+            askFollowing = nil
+            citeHover = nil
+        }
     }
 
     func history(for root: String) -> CommitHistorySelection {
@@ -165,6 +171,27 @@ enum WholeChangeThreads {
     static func expanded(_ picked: UUID?, in open: [ReviewQuestion]) -> UUID? {
         if let picked, open.contains(where: { $0.id == picked }) { return picked }
         return open.last?.id
+    }
+
+    // Questions the card offers before anything is asked. Each is a whole question, so a
+    // click asks it at once. The last one only makes sense when the change spans projects.
+    static func starters(projects: Int) -> [String] {
+        let fit = projects > 1
+            ? "How do the \(projects == 2 ? "two" : "\(projects)") projects fit together?"
+            : "Why was it built this way?"
+        return ["What does this change do, in short?", "Where should I start reading?",
+                "What could break for existing users?", fit]
+    }
+
+    // A step the side copy has finished, told as done: "Reading the chat" becomes "Read
+    // the chat". Steps are written as "-ing" phrases while they run.
+    static func finishedStep(_ step: String) -> String {
+        let done = ["Opening": "Opened", "Reading": "Read", "Writing": "Wrote", "Going on": "Went on",
+                    "Checking": "Checked", "Looking": "Looked", "Searching": "Searched", "Starting": "Started"]
+        for (running, finished) in done where step.hasPrefix(running + " ") || step == running {
+            return finished + step.dropFirst(running.count)
+        }
+        return step
     }
 
     // True when an answer has landed since the card was last open.
@@ -220,6 +247,45 @@ struct ChangeCitation: Equatable {
         guard !relative.isEmpty, let root = roots.first(where: { isChanged($0, relative) }) else { return nil }
         return ChangeCitation(root: root, path: relative, anchor: anchor)
     }
+}
+
+extension ChangeCitation {
+    // Every changed file an answer points at, in the order it names them, each once.
+    // Links are read first; a code span such as `Sources/App.swift:12` counts as well,
+    // since that is how a file is most often named in prose.
+    static func references(in answer: String, roots: [String],
+                           isChanged: (_ root: String, _ path: String) -> Bool) -> [ChangeCitation] {
+        guard let parsed = try? AttributedString(markdown: answer, options: .init(
+            interpretedSyntax: .inlineOnlyPreservingWhitespace)) else { return [] }
+        var found: [ChangeCitation] = []
+        for run in parsed.runs {
+            var url = run.link
+            if url == nil, run.inlinePresentationIntent?.contains(.code) == true {
+                let span = String(parsed[run.range].characters).trimmed
+                url = span.contains(" ") ? nil : URL(string: span)
+            }
+            guard let url, let citation = resolve(url, roots: roots, isChanged: isChanged),
+                  !found.contains(where: { $0.root == citation.root && $0.path == citation.path && $0.anchor == citation.anchor })
+            else { continue }
+            found.append(citation)
+        }
+        return found
+    }
+
+    var fileName: String { (path as NSString).lastPathComponent }
+
+    // ":42" or ":42-48", the way the chip writes it after the file name.
+    var linesSuffix: String {
+        guard let anchor else { return "" }
+        return ":\(anchor.line)" + (anchor.lastLine.map { "-\($0)" } ?? "")
+    }
+
+    var spokenName: String {
+        guard let anchor else { return "Show \(fileName)" }
+        return "Show \(fileName) " + (anchor.lastLine.map { "lines \(anchor.line) to \($0)" } ?? "line \(anchor.line)")
+    }
+
+    func sameFile(root: String, path: String) -> Bool { self.root == root && self.path == path }
 }
 
 struct ChangesRepository: Identifiable {

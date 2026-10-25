@@ -935,6 +935,15 @@ struct ChangesView: View {
                         otherProjectRow(file, in: repository.root)
                     }
                 }
+                .overlay {
+                    // Lit while a reference to this file in an answer is under the pointer.
+                    let cited = navigation.citeHover?.sameFile(root: repository.root, path: file.path) == true
+                    RoundedRectangle(cornerRadius: 8)
+                        .fill(Theme.plan.opacity(cited ? 0.08 : 0))
+                        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.plan.opacity(cited ? 0.45 : 0)))
+                        .motion(Motion.hover, value: cited)
+                        .allowsHitTesting(false)
+                }
                 .modifier(ProjectRule())
                 .id(ChangesNavigatorItem(root: repository.root, path: file.id))
                 .transition(.fold)
@@ -2182,7 +2191,7 @@ struct ChangesView: View {
         }
         // The card has the first claim on Escape over the review behind it.
         if navigation.askingWholeChange, !typing, flags.isEmpty, event.keyCode == 53 {
-            closeWholeChangeCard()
+            escapeWholeChangeCard()
             return true
         }
         guard !WindowKeyHandler.isTyping(event.window?.firstResponder), let review, mode == .changes else { return false }
@@ -2557,7 +2566,7 @@ struct ChangesView: View {
     }
 
     private func questionThread(_ question: ReviewQuestion, review: ReviewTarget, showsBand: Bool = true,
-                                startFollowUp: (() -> Void)? = nil) -> some View {
+                                inCard: Bool = false, startFollowUp: (() -> Void)? = nil) -> some View {
         let focused = focusedComment == question.id
         let reviews = review.reviews
         let sessionID = review.sessionID
@@ -2581,11 +2590,7 @@ struct ChangesView: View {
             },
             reopen: { reviews.setResolved(question.id, false, in: sessionID) },
             retry: { reviews.retryQuestion(question.id, context: questionContext(review), in: sessionID) },
-            delete: {
-                reviews.deleteQuestion(question.id, in: sessionID)
-                if focusedComment == question.id { focusedComment = nil }
-                announce("Question deleted")
-            },
+            delete: { removeQuestion(question, review: review) },
             stop: { stopAnswering(question, review: review) },
             askAgain: { askAgain(question, review: review) },
             makeChange: question.isWhole ? nil : {
@@ -2602,10 +2607,17 @@ struct ChangesView: View {
             sendsQuestion: { on in
                 if let id = question.changeID { reviews.setSendsQuestion(on, change: id, in: sessionID) }
             },
-            startFollowUp: startFollowUp)
-            .background(RoundedRectangle(cornerRadius: 10).fill(Theme.card))
+            startFollowUp: startFollowUp,
+            editQuestion: inCard ? { editWholeChangeQuestion(question, review: review) } : nil,
+            references: inCard ? { answerReferences($0) } : { _ in [] },
+            showReference: { showCitation($0) },
+            hoverReference: { navigation.citeHover = $0 })
+            // In the card a thread sits flat on it, since a card inside a card is only
+            // another edge to read past.
+            .background(RoundedRectangle(cornerRadius: 10).fill(inCard ? .clear : Theme.card))
             .clipShape(RoundedRectangle(cornerRadius: 10))
-            .overlay(RoundedRectangle(cornerRadius: 10).stroke(focused ? Theme.plan : Theme.border, lineWidth: focused ? 2 : 1))
+            .overlay(RoundedRectangle(cornerRadius: 10)
+                .stroke(inCard ? .clear : focused ? Theme.plan : Theme.border, lineWidth: focused && !inCard ? 2 : 1))
             .onTapGesture { focusedComment = question.id }
     }
 
@@ -2680,17 +2692,21 @@ struct ChangesView: View {
             ZStack(alignment: .topTrailing) {
                 if navigation.askingWholeChange, let review {
                     let threads = WholeChangeThreads.split(review.reviews.questions(review.sessionID))
-                    let totals = changeTotals
                     WholeChangeAskCard(
                         navigation: navigation, open: threads.open, resolved: threads.resolved,
-                        scope: totals.scope, added: totals.added, removed: totals.removed,
+                        scope: changeScope,
                         agentTitle: review.agent.title,
+                        forksConversation: review.agent == .claudeCode,
                         maxHeight: max(proxy.size.height - 27, 200),
                         ask: { askAboutWholeChange($0, review: review) },
+                        escape: escapeWholeChangeCard,
                         close: closeWholeChangeCard) { question, expanded in
                             wholeChangeThread(question, expanded: expanded, review: review)
                         }
                         .environment(\.openURL, OpenURLAction { citeFile($0) })
+                        .environment(\.linkHovered) { url in
+                            navigation.citeHover = url.flatMap(resolveCitation)
+                        }
                         .padding(.trailing, 20).padding(.top, 7)
                         .transition(.grow(from: navigation.askOrigin, reduceMotion: reduceMotion))
                 }
@@ -2699,24 +2715,72 @@ struct ChangesView: View {
         }
     }
 
-    private var changeTotals: (scope: [WholeChangeAskScope], added: Int, removed: Int) {
-        var scope: [WholeChangeAskScope] = []
-        var added = 0
-        var removed = 0
-        for repository in repositories {
+    private var changeScope: [WholeChangeAskScope] {
+        repositories.compactMap { repository in
             let files = changes(in: repository.root)
-            guard !files.isEmpty else { continue }
-            scope.append(WholeChangeAskScope(name: repository.name, files: files.count))
-            added += files.reduce(0) { $0 + ($1.added ?? 0) }
-            removed += files.reduce(0) { $0 + ($1.removed ?? 0) }
+            guard !files.isEmpty else { return nil }
+            return WholeChangeAskScope(name: repository.name, files: files.count,
+                                       added: files.reduce(0) { $0 + ($1.added ?? 0) },
+                                       removed: files.reduce(0) { $0 + ($1.removed ?? 0) })
         }
-        return (scope, added, removed)
+    }
+
+    // Esc stops an answer under way first, so the card does not vanish with it running.
+    private func escapeWholeChangeCard() {
+        if let review, let running = WholeChangeThreads.split(review.reviews.questions(review.sessionID)).open
+            .last(where: { $0.status == .answering }) {
+            stopAnswering(running, review: review)
+            return
+        }
+        closeWholeChangeCard()
+    }
+
+    // Removing takes effect at once and an undo puts the question back where it was.
+    private func removeQuestion(_ question: ReviewQuestion, review: ReviewTarget) {
+        let reviews = review.reviews
+        let sessionID = review.sessionID
+        let index = reviews.questions(sessionID).firstIndex { $0.id == question.id } ?? 0
+        if navigation.askFollowing == question.id { navigation.askFollowing = nil }
+        reviews.deleteQuestion(question.id, in: sessionID)
+        if focusedComment == question.id { focusedComment = nil }
+        showToast("Removed \u{201C}\(question.text.trimmed)\u{201D}", action: "Undo") {
+            reviews.restoreQuestion(question, at: index, in: sessionID)
+            navigation.askExpanded = question.id
+        }
+    }
+
+    // A stopped question goes back to the field to be asked in other words. A follow-up
+    // is taken back from its thread; a first question takes its thread with it.
+    private func editWholeChangeQuestion(_ question: ReviewQuestion, review: ReviewTarget) {
+        if let text = review.reviews.withdrawFollowUp(question.id, in: review.sessionID) {
+            navigation.askDraft = text
+            navigation.askFollowing = question.id
+        } else {
+            navigation.askDraft = question.exchanges.last?.question ?? question.text
+            navigation.askFollowing = nil
+            review.reviews.deleteQuestion(question.id, in: review.sessionID)
+        }
+        announce("The question is back in the field")
+    }
+
+    private func resolveCitation(_ url: URL) -> ChangeCitation? {
+        ChangeCitation.resolve(url, roots: repositories.map(\.root)) { root, path in
+            changes(in: root).contains { $0.path == path }
+        }
+    }
+
+    private func answerReferences(_ answer: String) -> [AnswerReference] {
+        let names = Dictionary(repositories.map { ($0.root, $0.name) }, uniquingKeysWith: { first, _ in first })
+        return ChangeCitation.references(in: answer, roots: repositories.map(\.root)) { root, path in
+            changes(in: root).contains { $0.path == path }
+        }
+        .map { AnswerReference(citation: $0, tint: Theme.projectTint(for: names[$0.root] ?? "")) }
     }
 
     @ViewBuilder
     private func wholeChangeThread(_ question: ReviewQuestion, expanded: Bool, review: ReviewTarget) -> some View {
         if expanded || question.resolved {
-            questionThread(question, review: review, showsBand: false, startFollowUp: {
+            questionThread(question, review: review, showsBand: false, inCard: true, startFollowUp: {
                 navigation.askFollowing = question.id
             })
         } else {
@@ -2730,23 +2794,25 @@ struct ChangesView: View {
     // lit, so the answer and the code can be read side by side. A file outside the change
     // opens the usual way.
     private func citeFile(_ url: URL) -> OpenURLAction.Result {
-        let roots = repositories.map(\.root)
-        guard var citation = ChangeCitation.resolve(url, roots: roots, isChanged: { root, path in
-            changes(in: root).contains { $0.path == path }
-        }) else { return .systemAction }
+        guard let citation = resolveCitation(url) else { return .systemAction }
+        showCitation(citation)
+        return .handled
+    }
+
+    private func showCitation(_ found: ChangeCitation) {
+        var citation = found
         citation.serial = (navigation.citation?.serial ?? 0) + 1
         navigation.citation = citation
         if commentDraft?.text.isBlank != false { commentDraft = nil }
         guard citation.root == root else {
             selectRepository(citation.root, citation.path)
-            return .handled
+            return
         }
         if selected?.path != citation.path, let file = files.first(where: { $0.path == citation.path }) {
             mode = .changes
             select(file)
         }
-        announce("Showing \((citation.path as NSString).lastPathComponent)" + (citation.anchor.map { ", \($0.label.lowercased())" } ?? ""))
-        return .handled
+        announce("Showing \(citation.fileName)" + (citation.anchor.map { ", \($0.label.lowercased())" } ?? ""))
     }
 
     // The lines the cited reference names, while its file is the one on screen.
