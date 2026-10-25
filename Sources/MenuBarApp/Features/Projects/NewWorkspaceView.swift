@@ -151,6 +151,7 @@ struct NewWorkspaceView: View {
                         .lineLimit(1)
                     if isLead {
                         MonoChip(text: "LEAD", size: 9, tint: Theme.accent)
+                            .transition(.fadeIn)
                     }
                 }
                 Text(project.collapsedPath)
@@ -166,6 +167,7 @@ struct NewWorkspaceView: View {
                 ActionButton(title: "Make lead", tone: .outlined, height: 26, size: 11) {
                     leadProjectID = project.id
                 }
+                .transition(.fadeIn)
             }
         }
         .padding(.horizontal, 14)
@@ -174,6 +176,11 @@ struct NewWorkspaceView: View {
         .overlay(RoundedRectangle(cornerRadius: 11)
             .stroke(isSelected ? Theme.accent : Theme.border,
                     lineWidth: isSelected ? 1.5 : 1))
+        .contentShape(RoundedRectangle(cornerRadius: 11))
+        .onTapGesture { toggle(project.id) }
+        .hoverFill(cornerRadius: 11)
+        .motion(Motion.control, value: isSelected)
+        .motion(Motion.control, value: isLead)
     }
 
     private var canCreate: Bool {

@@ -195,34 +195,39 @@ struct TroubleshootTabView: View {
     // Presets put the person's words in the brief, so the agent reads "Last 2 hours" the
     // same way it reads a time typed by hand. A time found in the problem text is offered
     // too, and the field is there for anything else.
-    @ViewBuilder private var timePill: some View {
-        if editingTime {
-            HStack(spacing: 6) {
-                Image(systemName: "clock")
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(.secondary)
-                TextField("Your own words: yesterday 09:00 to 09:30", text: entry(\.incidentTime))
-                    .textFieldStyle(.plain)
-                    .font(.system(size: 12))
-                    .focused($timeFocused)
-                    .onSubmit { editingTime = false }
-                    .onExitCommand { editingTime = false }
-                    .accessibilityLabel("When did it happen?")
-                    .accessibilityHint("Use your own words. No timezone is assumed.")
+    private var timePill: some View {
+        Group {
+            if editingTime {
+                HStack(spacing: 6) {
+                    Image(systemName: "clock")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                    TextField("Your own words: yesterday 09:00 to 09:30", text: entry(\.incidentTime))
+                        .textFieldStyle(.plain)
+                        .font(.system(size: 12))
+                        .focused($timeFocused)
+                        .onSubmit { editingTime = false }
+                        .onExitCommand { editingTime = false }
+                        .accessibilityLabel("When did it happen?")
+                        .accessibilityHint("Use your own words. No timezone is assumed.")
+                }
+                .padding(.horizontal, 10)
+                .frame(width: 280, height: 28)
+                .surface(Theme.field, cornerRadius: 8, border: Theme.accent)
+                .transition(.fadeIn)
+                .onAppear { timeFocused = true }
+                .onChange(of: timeFocused) { _, focused in
+                    if !focused { editingTime = false }
+                }
+            } else {
+                let window = brief.incidentTime.trimmed
+                SetupPill(icon: "clock", title: window.isEmpty ? "Any time" : window)
+                    .appMenu { timeMenu }
+                    .accessibilityLabel(window.isEmpty ? "Time window: not set" : "Time window: \(window)")
+                    .transition(.fadeIn)
             }
-            .padding(.horizontal, 10)
-            .frame(width: 280, height: 28)
-            .surface(Theme.field, cornerRadius: 8, border: Theme.accent)
-            .onAppear { timeFocused = true }
-            .onChange(of: timeFocused) { _, focused in
-                if !focused { editingTime = false }
-            }
-        } else {
-            let window = brief.incidentTime.trimmed
-            SetupPill(icon: "clock", title: window.isEmpty ? "Any time" : window)
-                .appMenu { timeMenu }
-                .accessibilityLabel(window.isEmpty ? "Time window: not set" : "Time window: \(window)")
         }
+        .motion(Motion.reveal, value: editingTime)
     }
 
     private var timeMenu: [MenuEntry] {
@@ -574,7 +579,8 @@ private struct SetupPill: View {
         .surface(hovering ? Theme.field : Theme.card, cornerRadius: 8,
                  border: live ? Theme.attention.opacity(0.45) : Theme.border)
         .contentShape(RoundedRectangle(cornerRadius: 8))
-        .onHover { hovering = $0 }
+        .hoverLift(hovering)
+        .onPointerHover { hovering = $0 }
         .motion(Motion.hover, value: hovering)
     }
 }

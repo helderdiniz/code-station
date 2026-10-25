@@ -42,6 +42,9 @@ struct AppSidebar: View {
     @State private var oldSessions = OldSessionsWatch()
     @State private var dropSlot: SidebarDropSlot?
     @State private var picks = SidebarMultiSelection()
+    @State private var note: String?
+    @State private var noteIcon = "checkmark"
+    @State private var notes = 0
     @FocusState private var filterFocused: Bool
 
     private struct SessionRevealTarget: Equatable {
@@ -60,6 +63,20 @@ struct AppSidebar: View {
             projectList
             Spacer(minLength: 0)
             bottomBar
+                // The work happens in another app, so a short line just above the bar is
+                // the only sign in this window that the click landed.
+                .overlay(alignment: .top) {
+                    ZStack {
+                        if let note {
+                            HeaderNote(icon: noteIcon, text: note)
+                                .transition(.asymmetric(
+                                    insertion: (reduceMotion ? AnyTransition.opacity : .opacity.combined(with: .offset(y: 6)))
+                                        .animation(Motion.reveal),
+                                    removal: .opacity.animation(Motion.leave)))
+                        }
+                    }
+                    .alignmentGuide(.top) { $0[.bottom] + 8 }
+                }
         }
         .frame(width: 318)
         .background(Theme.sidebar)
@@ -167,8 +184,7 @@ struct AppSidebar: View {
                     .transition(.fadeIn)
             }
         }
-        .animation(reduceMotion ? nil : .timingCurve(0.2, 0.8, 0.2, 1, duration: 0.4),
-                   value: waiting.isEmpty)
+        .motion(Motion.reveal, value: waiting.isEmpty)
         .motion(Motion.reveal, value: picks.isActive)
     }
 
@@ -281,16 +297,13 @@ struct AppSidebar: View {
                         // project row, or the first session arriving under an open one.
                         // Easing out rather than a spring: the block must not overshoot its
                         // own height, or it opens onto a gap under the last card.
-                        .animation(reduceMotion ? nil : .easeOut(duration: 0.26),
-                                   value: visibilityKey(grouped, workspaceGroups: workspaceGroups))
-                        .animation(reduceMotion ? nil : .easeOut(duration: 0.22), value: itemOrderKey)
-                        .animation(reduceMotion ? nil : .easeOut(duration: 0.22),
-                                   value: sessionOrderKey(grouped,
-                                                          workspaceGroups: workspaceGroups))
-                        .animation(reduceMotion ? nil : .easeOut(duration: 0.22), value: appSettings.projectSort)
-                        .animation(reduceMotion ? nil : .easeOut(duration: 0.22), value: appSettings.projectGrouping)
-                        .animation(reduceMotion ? nil : .easeOut(duration: 0.22), value: collapsedGroups)
-                        .animation(reduceMotion ? nil : .easeOut(duration: 0.22), value: filterBox.text)
+                        .motion(Motion.reveal, value: visibilityKey(grouped, workspaceGroups: workspaceGroups))
+                        .motion(Motion.reveal, value: itemOrderKey)
+                        .motion(Motion.reveal, value: sessionOrderKey(grouped, workspaceGroups: workspaceGroups))
+                        .motion(Motion.reveal, value: appSettings.projectSort)
+                        .motion(Motion.reveal, value: appSettings.projectGrouping)
+                        .motion(Motion.reveal, value: collapsedGroups)
+                        .motion(Motion.reveal, value: filterBox.text)
                         .motion(Motion.reveal, value: picks.isActive)
                     }
                     .scrollPosition($scrollPosition)
@@ -765,9 +778,7 @@ struct AppSidebar: View {
                     .item("Rename…") { renamingID = project.id },
                     .separator]
                 + cleanup
-                + [.item("Reveal in Finder") {
-                        NSWorkspace.shared.activateFileViewerSelecting([project.url])
-                    },
+                + [.item("Reveal in Finder") { revealInFinder(project) },
                     .item("Open in \(SystemTerminal.appName)") { openInTerminal(project) },
                     .separator,
                     .item("Clear idle runs", kind: .destructive) { confirmClearSessions(in: project) },
@@ -779,9 +790,7 @@ struct AppSidebar: View {
                 .item("Import sessions…") { requestSessionImport(into: project) },
                 .separator]
             + cleanup
-            + [.item("Reveal in Finder") {
-                    NSWorkspace.shared.activateFileViewerSelecting([project.url])
-                },
+            + [.item("Reveal in Finder") { revealInFinder(project) },
                 .item("Open in \(SystemTerminal.appName)") { openInTerminal(project) },
                 .separator,
                 .item("Clear idle sessions", kind: .destructive) { confirmClearSessions(in: project) },
@@ -895,7 +904,7 @@ struct AppSidebar: View {
             scroller.scrollTo(id)
             return
         }
-        withAnimation(reduceMotion ? nil : .easeOut(duration: 0.26)) {
+        withAnimation(reduceMotion ? nil : Motion.reveal) {
             scroller.scrollTo(id)
         }
         store.navigation.sessionToReveal = nil
@@ -920,7 +929,7 @@ struct AppSidebar: View {
         showGroup(containing: id)
         await Task.yield()
         guard !Task.isCancelled else { return }
-        withAnimation(reduceMotion ? nil : .easeOut(duration: 0.26)) {
+        withAnimation(reduceMotion ? nil : Motion.reveal) {
             scroller.scrollTo(id, anchor: .top)
         }
         store.navigation.projectToReveal = nil
@@ -1388,6 +1397,27 @@ struct AppSidebar: View {
 
     private func openInTerminal(_ project: Project) {
         SystemTerminal.open(project.url)
+        showNote("Opened \(project.name) in \(SystemTerminal.appName)", icon: "terminal")
+    }
+
+    private func revealInFinder(_ project: Project) {
+        NSWorkspace.shared.activateFileViewerSelecting([project.url])
+        showNote("Showed \(project.name) in Finder", icon: "folder")
+    }
+
+    // MARK: - Notes
+
+    // A second note keeps the line up rather than letting the first one's timer take it
+    // down early.
+    private func showNote(_ text: String, icon: String) {
+        notes += 1
+        let shown = notes
+        noteIcon = icon
+        note = text
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(2.4))
+            if notes == shown { note = nil }
+        }
     }
 }
 
@@ -1464,7 +1494,7 @@ private struct SettingsButton: View {
             .contentShape(RoundedRectangle(cornerRadius: 9))
             .hoverLift(hovering, amount: Motion.smallLift)
             .appTooltip("Tools and settings")
-            .onHover { hovering = $0 }
+            .onPointerHover { hovering = $0 }
             .accessibilityLabel("Tools and settings")
     }
 }
@@ -1474,7 +1504,6 @@ private struct SettingsButton: View {
 // only comes out under the pointer, and the count only while the run is folded, since a
 // folded heading is the only thing left saying what is in there.
 private struct SectionHeading: View {
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let title: String
     let count: Int
     let collapsed: Bool
@@ -1511,7 +1540,7 @@ private struct SectionHeading: View {
         }
         .buttonStyle(.plain)
         .onPointerHover { hovering = $0 }
-        .animation(reduceMotion ? nil : .easeOut(duration: 0.15), value: hovering)
+        .motion(Motion.hover, value: hovering)
         .sidebarFocusRing()
         .accessibilityLabel("\(collapsed ? "Expand" : "Collapse") \(title)")
         .accessibilityValue(collapsed ? "Collapsed" : "Expanded")
@@ -1918,7 +1947,7 @@ private struct RowAction: View {
         .accessibilityLabel(title)
         .sidebarFocusRing()
         .hoverLift(hovering)
-        .onHover { hovering = $0 }
+        .onPointerHover { hovering = $0 }
     }
 }
 
@@ -1967,10 +1996,11 @@ private struct TrailingRowAction: View {
         ZStack {
             if visible {
                 zone
-                    .transition(reduceMotion ? .identity : .opacity.combined(with: .offset(x: 10)))
+                    .transition(reduceMotion ? .opacity : .opacity.combined(with: .offset(x: 10)))
             }
         }
-        .animation(reduceMotion ? nil : .easeOut(duration: 0.16), value: visible)
+        // Still a fade under Reduce Motion, so the action does not cut in over the status.
+        .animation(Motion.hover, value: visible)
     }
 
     private var zone: some View {
@@ -2004,7 +2034,7 @@ private struct TrailingRowAction: View {
             .sidebarFocusRing(focus)
             .accessibilityLabel(accessibilityLabel)
             .appTooltip(tooltip)
-            .onHover { hovering = $0 }
+            .onPointerHover { hovering = $0 }
         }
         .clipShape(UnevenRoundedRectangle(bottomTrailingRadius: cornerRadius,
                                           topTrailingRadius: cornerRadius))
@@ -2448,11 +2478,11 @@ private struct SidebarRevealGlow: ViewModifier {
 
     private func blink() async {
         guard revealed else { return }
-        // Reduce Motion asks for no flicker, so the mark arrives and leaves more slowly
-        // instead of not being drawn at all.
-        withAnimation(.easeOut(duration: reduceMotion ? 0.3 : 0.16)) { glow = 1 }
-        try? await Task.sleep(for: .milliseconds(reduceMotion ? 700 : 320))
-        withAnimation(.easeIn(duration: reduceMotion ? 0.4 : 0.3)) { glow = 0 }
+        // Reduce Motion asks for no flicker, so the mark stays up longer instead of not
+        // being drawn at all.
+        withAnimation(Motion.reveal) { glow = 1 }
+        try? await Task.sleep(for: .milliseconds(reduceMotion ? 900 : 420))
+        withAnimation(Motion.leave) { glow = 0 }
     }
 }
 

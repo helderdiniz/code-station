@@ -576,7 +576,7 @@ struct BarPill<Content: View>: View {
             .contentShape(Capsule())
             .fixedSize()
             .hoverLift(hovering)
-            .onHover { hovering = $0 }
+            .onPointerHover { hovering = $0 }
             .motion(Motion.hover, value: hovering)
     }
 }
@@ -587,6 +587,8 @@ struct RollingText: View {
     let text: String
     var rising = true
     let font: Font
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     init(_ text: String, rising: Bool = true, font: Font) {
         self.text = text
@@ -600,11 +602,13 @@ struct RollingText: View {
                 .font(font)
                 .fixedSize()
                 .id(text)
-                .transition(.asymmetric(
+                .transition(reduceMotion ? AnyTransition.opacity : .asymmetric(
                     insertion: .move(edge: rising ? .bottom : .top).combined(with: .opacity),
                     removal: .move(edge: rising ? .top : .bottom).combined(with: .opacity)))
         }
         .clipped()
-        .motion(Motion.control, value: text)
+        // Not `.motion`, which would stand still under Reduce Motion: there the words
+        // still cross-fade, they only stop rolling.
+        .animation(reduceMotion ? Motion.reveal : Motion.control, value: text)
     }
 }

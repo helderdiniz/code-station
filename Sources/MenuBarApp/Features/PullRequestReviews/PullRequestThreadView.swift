@@ -5,6 +5,7 @@ import SwiftUI
 // the code, the whole conversation and the reply box.
 struct PullRequestThreadView: View {
     @Environment(PullRequestReviewStore.self) private var reviews
+    @Environment(\.showExternalNote) private var showExternalNote
     let thread: PullRequestReviewThread
     let review: PullRequestReview
     let entry: PullRequestReviewStore.Loaded
@@ -25,23 +26,31 @@ struct PullRequestThreadView: View {
                 DisclosureHeader(isExpanded: Binding(get: { unfolded }, set: { _ in toggle() })) { summaryLabel }
                     .frame(maxWidth: .infinity, alignment: .leading)
                 GlyphButton(icon: "arrow.up.right", side: 22) {
-                    if let link = thread.first?.url, let url = URL(string: link) { NSWorkspace.shared.open(url) }
+                    guard let link = thread.first?.url, let url = URL(string: link) else { return }
+                    NSWorkspace.shared.open(url)
+                    showExternalNote("Opened on GitHub", "arrow.up.forward.app")
                 }
                 .appTooltip("Open this thread on GitHub")
             }
             if unfolded {
+                // The hunk is read after the thread opens, so it just appears rather than
+                // moving the card a second time.
                 if let hunk {
                     DiffTextView(text: hunk, fitsContent: true)
                         .frame(maxHeight: 260)
                         .clipShape(RoundedRectangle(cornerRadius: 8))
                         .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.hairline))
                 }
-                ForEach(thread.comments) { comment in
-                    CommentRow(comment: comment)
+                Group {
+                    ForEach(thread.comments) { comment in
+                        CommentRow(comment: comment)
+                    }
+                    if entry.isOpen { footer }
                 }
-                if entry.isOpen { footer }
+                .transition(.fold)
             }
         }
+        .smoothlyResizes(when: unfolded)
         .padding(12)
         .surface(Theme.card, cornerRadius: 10, border: Theme.hairline)
         .task(id: unfolded) {

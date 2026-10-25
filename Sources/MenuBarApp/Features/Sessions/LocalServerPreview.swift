@@ -273,7 +273,7 @@ final class LocalServerPreviewTabs {
 struct LocalServerPreviewPage: View {
     @Environment(SessionRunner.self) private var runner
     @Environment(DialogPresenter.self) private var dialogs
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.showExternalNote) private var showExternalNote
 
     let previews: LocalServerPreviewTabs
     let preview: LocalServerPreview
@@ -401,7 +401,7 @@ struct LocalServerPreviewPage: View {
                 message
                     .padding(.bottom, room)
                     .clipped()
-                    .animation(reduceMotion ? nil : .easeInOut(duration: 0.26), value: room)
+                    .motion(Motion.reveal, value: room)
                     .background(Theme.sunken)
             }
         }
@@ -482,6 +482,8 @@ struct LocalServerPreviewPage: View {
                 .contentShape(RoundedRectangle(cornerRadius: 7))
             }
             .buttonStyle(.plain)
+            // A fill rather than a lift, since the address runs the width of the bar.
+            .hoverFill(cornerRadius: 7)
             .appTooltip(preview.isBlank ? "Type an address" : preview.address.absoluteString)
             .accessibilityLabel("Address")
             .accessibilityValue(LocalServerPreview.label(for: preview.address))
@@ -593,6 +595,7 @@ struct LocalServerPreviewPage: View {
 
     private func openInBrowser(_ url: URL) {
         preview.coordinator.openInBrowser(url)
+        showExternalNote("Opened the page in your browser", "arrow.up.forward.app")
         previews.close(preview)
         if !previews.isOpen { onClose() }
     }
@@ -606,9 +609,11 @@ struct LocalServerPreviewPage: View {
                     ForEach(previews.pages) { page in
                         pageTab(page, spansServers: servers.count > 1)
                             .id(page.id)
+                            .transition(.asymmetric(insertion: .fadeIn, removal: .fold))
                     }
                 }
                 .scrollTargetLayout()
+                .motion(Motion.reveal, value: previews.pages.map(\.id))
                 .padding(.horizontal, 14)
                 .padding(.vertical, 7)
             }
@@ -658,6 +663,7 @@ struct LocalServerPreviewPage: View {
                 .fill(selected ? Theme.card : .clear)
                 .shadow(color: .black.opacity(selected ? 0.07 : 0), radius: 1, y: 0.5))
         .overlay(RoundedRectangle(cornerRadius: 7).stroke(selected ? Theme.border : .clear))
+        .motion(Motion.control, value: selected)
         // A fill rather than a lift: the tab holds two buttons with tooltips, and AppKit
         // cannot lay those out under a scale.
         .hoverFill(cornerRadius: 7)

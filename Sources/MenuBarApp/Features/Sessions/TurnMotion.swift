@@ -563,6 +563,11 @@ extension AnyTransition {
             removal: .modifier(active: SwapTurn(scale: 0.3, degrees: 90, opacity: 0),
                                identity: SwapTurn(scale: 1, degrees: 0, opacity: 1)))
     }
+
+    // Under Reduce Motion the two only cross-fade.
+    static func buttonSwap(reduceMotion: Bool) -> AnyTransition {
+        reduceMotion ? .opacity : buttonSwap
+    }
 }
 
 private struct SwapTurn: ViewModifier {

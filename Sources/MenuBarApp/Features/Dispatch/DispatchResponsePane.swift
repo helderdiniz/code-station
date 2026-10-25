@@ -128,14 +128,14 @@ struct DispatchResponsePane: View {
                     }
                     ZStack {
                         bodyView(result)
-                            .opacity(shown == .body ? 1 : 0)
+                            .standbyPane(shown: shown == .body)
                             .allowsHitTesting(shown == .body).accessibilityHidden(shown != .body)
                         headersView(result)
-                            .opacity(shown == .headers ? 1 : 0)
+                            .standbyPane(shown: shown == .headers)
                             .allowsHitTesting(shown == .headers).accessibilityHidden(shown != .headers)
                         if let table = document.table {
                             tableView(table)
-                                .opacity(shown == .table ? 1 : 0)
+                                .standbyPane(shown: shown == .table)
                                 .allowsHitTesting(shown == .table).accessibilityHidden(shown != .table)
                         }
                     }

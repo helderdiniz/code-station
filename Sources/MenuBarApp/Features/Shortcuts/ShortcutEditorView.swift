@@ -180,6 +180,7 @@ struct ShortcutScopePicker: View {
     // not the Shortcuts window, which never lists it.
     let projectName: String?
 
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Namespace private var track
 
     static func narrowTitle(projectName: String?) -> String {
@@ -220,7 +221,7 @@ struct ShortcutScopePicker: View {
 
     private func pill(_ title: String, selected: Bool, choose: @escaping () -> Void) -> some View {
         ChoicePill(title: title, selected: selected, thumb: track) {
-            withAnimation(Motion.control) { choose() }
+            withAnimation(reduceMotion ? nil : Motion.control) { choose() }
         }
         .accessibilityLabel(title)
         .accessibilityAddTraits(selected ? .isSelected : [])

@@ -75,6 +75,8 @@ struct ServerDetailView: View {
                                  icon: state.isActive ? "stop.fill" : "play.fill") {
                         processes.toggle(server)
                     }
+                    .contentTransition(.interpolate)
+                    .motion(Motion.reveal, value: state.isActive)
                 }
                 GlyphButton(icon: "ellipsis")
                     .appMenu {

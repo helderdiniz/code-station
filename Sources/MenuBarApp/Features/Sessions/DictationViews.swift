@@ -103,9 +103,12 @@ struct DictationMicButton: View {
                 }
             }
             .contentShape(RoundedRectangle(cornerRadius: 8))
+            // Lifted inside the button, since the tooltip on the button is an AppKit view
+            // that cannot be laid out under a scale.
+            .hoverLift(hovering)
         }
         .buttonStyle(.plain)
-        .onHover { hovering = $0 }
+        .onPointerHover { hovering = $0 }
         .motion(Motion.control, value: live)
         .appTooltip(live ? "" : preparing ? "Getting dictation ready" : "Dictate (⇧⌘D)")
         .accessibilityLabel(live ? "Stop dictating" : "Dictate")
@@ -255,6 +258,7 @@ struct DictationNoticeRow: View {
             .padding(.horizontal, 9)
             .frame(height: 24)
             .surface(Theme.card, cornerRadius: 7)
+            .hoverLift()
             .appMenu(edge: .top, inputMenu)
             .accessibilityLabel("Listen through \(inputName ?? input)")
         case .blocked(let failure):
@@ -285,6 +289,7 @@ struct DictationNoticeRow: View {
                     .padding(.horizontal, 8)
                     .frame(height: 24)
                     .surface(Theme.card, cornerRadius: 7)
+                    .hoverLift()
                     .appMenu(edge: .top) { wordMenu(word) }
                     .accessibilityLabel("Check “\(word.heard)”")
             }
@@ -296,13 +301,7 @@ struct DictationNoticeRow: View {
             Text("Threw away that take.")
                 .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: .infinity, alignment: .leading)
-            Button(action: undo) {
-                Text("Undo")
-                    .font(.system(size: 12.5, weight: .semibold))
-                    .foregroundStyle(Theme.accent)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
+            InlineLink(title: "Undo", size: 12.5, action: undo)
         case .failed(let message):
             Image(systemName: "exclamationmark.triangle")
             Text(message)
@@ -348,6 +347,7 @@ struct DictationNoticeRow: View {
             .font(.system(size: 12.5, weight: .semibold))
             .foregroundStyle(Theme.accent)
             .fixedSize()
+            .hoverLift()
             .appMenu(edge: .top, languageMenu)
     }
 

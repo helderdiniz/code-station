@@ -45,6 +45,9 @@ struct FirstRunTour: View {
                     preview
                         .accessibilityLabel("Example session")
                 }
+                // A plain fade under Reduce Motion as well, since nothing here moves.
+                .id(selected)
+                .transition(.fadeIn.animation(Motion.reveal))
             }
             .frame(idealHeight: 280, maxHeight: 320)
             HStack(spacing: 7) {

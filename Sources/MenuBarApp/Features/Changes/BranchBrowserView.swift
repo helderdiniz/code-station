@@ -88,9 +88,8 @@ struct BranchBrowserView: View {
                 }
                 Spacer()
                 if busy || previewing || loading { ChangesProgressLabel(title: busy ? "Working…" : "Reading repository…") }
-                Button { dialogs.dismiss() } label: {
-                    Image(systemName: "xmark").padding(10).contentShape(Rectangle())
-                }.buttonStyle(.plain).disabled(busy).focused($focus, equals: "close")
+                GlyphButton(icon: "xmark") { dialogs.dismiss() }
+                    .disabled(busy).focused($focus, equals: "close")
                     .accessibilityLabel("Close branches").branchFocus(focus == "close")
             }.padding(20)
             Divider()
@@ -106,7 +105,7 @@ struct BranchBrowserView: View {
                 }.frame(maxHeight: 90).fixedSize(horizontal: false, vertical: true).background(Theme.field)
             }
             ZStack {
-                if page == .branches { browser.transition(.opacity) }
+                if page == .branches { browser.transition(.fadeIn) }
                 else {
                     ScrollView {
                         VStack(alignment: .leading, spacing: 18) {
@@ -119,7 +118,7 @@ struct BranchBrowserView: View {
                             }
                         }.padding(22).frame(maxWidth: .infinity, alignment: .leading)
                     }.frame(maxHeight: .infinity)
-                        .id(page).transition(.opacity)
+                        .id(page).transition(.fadeIn)
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -242,7 +241,7 @@ struct BranchBrowserView: View {
                             Text(policy.note).font(.system(size: 10)).foregroundStyle(.secondary)
                         }
                     }.padding(22).frame(maxWidth: .infinity, alignment: .leading)
-                        .id(selected?.id).transition(.opacity)
+                        .id(selected?.id).transition(.fadeIn)
                         .motion(Motion.reveal, value: previewing)
                 }.motion(Motion.reveal, value: selected?.id)
             }
@@ -288,7 +287,7 @@ struct BranchBrowserView: View {
         ZStack(alignment: .topLeading) {
             VStack(alignment: .leading, spacing: 18) {
                 previewBody
-            }.id(preview != nil).transition(.opacity)
+            }.id(preview != nil).transition(.fadeIn)
         }
         .frame(maxWidth: .infinity, minHeight: 260, alignment: .topLeading)
         .motion(Motion.reveal, value: previewing)
@@ -492,6 +491,9 @@ struct BranchBrowserView: View {
                 HStack {
                     ActionButton(title: "Reveal for external editing", tone: .outlined) {
                         NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: root).appendingPathComponent(conflictPath)])
+                        // Finder opens outside the window, so the line above says the click landed.
+                        failed = false
+                        message = "Shown in Finder. Mark it resolved here once it is edited."
                     }.focused($focus, equals: "revealConflict")
                     ActionButton(title: "Mark edited file resolved", tone: .outlined) { resolve() }.disabled(busy).focused($focus, equals: "markResolved")
                 }
@@ -551,6 +553,7 @@ struct BranchBrowserView: View {
                             .lineLimit(2).fixedSize(horizontal: false, vertical: true).padding(.horizontal, 14).padding(.vertical, 9)
                             .frame(maxWidth: 340).foregroundStyle(.white)
                             .background(Theme.accent, in: RoundedRectangle(cornerRadius: 8)).contentShape(Rectangle())
+                            .hoverLift()
                     }.buttonStyle(.plain).opacity(canExecute ? 1 : 0.4)
                         .disabled(!canExecute).focused($focus, equals: "primary").branchFocus(focus == "primary")
                 } else if page == .compare {

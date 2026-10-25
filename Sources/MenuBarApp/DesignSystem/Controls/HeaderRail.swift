@@ -78,6 +78,7 @@ struct HeaderRailButton: View {
     var openFill: Color? = nil
     var action: (() -> Void)? = nil
 
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var hovering = false
     @State private var actOuts = 0
 
@@ -95,7 +96,7 @@ struct HeaderRailButton: View {
             }
         }
         .hoverLift(hovering, amount: Motion.smallLift)
-        .onHover { hovering = $0 }
+        .onPointerHover { hovering = $0 }
         .motion(Motion.hover, value: hovering)
         .motion(Motion.hover, value: state)
         .appTooltip(delay: .zero) { Tooltip(title: label, subtitle: hint) }
@@ -125,13 +126,18 @@ struct HeaderRailButton: View {
             }
         }
         .overlay(alignment: .topTrailing) {
-            if badge {
-                Circle()
-                    .fill(Theme.attention)
-                    .frame(width: 5, height: 5)
-                    .offset(x: -3, y: 5)
-                    .accessibilityHidden(true)
+            ZStack {
+                if badge {
+                    Circle()
+                        .fill(Theme.attention)
+                        .frame(width: 5, height: 5)
+                        .transition(reduceMotion ? .opacity : .scale(scale: 0.5).combined(with: .opacity))
+                        .accessibilityHidden(true)
+                }
             }
+            .frame(width: 5, height: 5)
+            .offset(x: -3, y: 5)
+            .animation(reduceMotion ? Motion.reveal : Motion.pop, value: badge)
         }
         .contentShape(RoundedRectangle(cornerRadius: 8))
     }
@@ -196,7 +202,7 @@ struct HeaderDockSeat: View {
                 // The glyph plays its part on the way in, not on the way out.
                 if !isOpen { actOuts += 1 }
                 action()
-            } label: { face }
+            } label: { face.hoverLift(hovering) }
                 .buttonStyle(.plain)
                 .focused($focused)
                 .appTooltip(delay: .zero) { tooltip }
@@ -208,7 +214,10 @@ struct HeaderDockSeat: View {
             }
         }
         .frame(height: Self.height)
-        .background { seat }
+        // The seat and the face lift on their own rather than the whole seat at once,
+        // since the buttons inside carry tooltips and AppKit cannot lay those out under
+        // a scale.
+        .background { seat.hoverLift(hovering) }
         .overlay(alignment: .bottom) {
             if isOpen {
                 RoundedRectangle(cornerRadius: 1)
@@ -228,10 +237,10 @@ struct HeaderDockSeat: View {
             }
         }
         .opacity(!isEnabled || (isDimmed && !hovering && !isOpen) ? 0.38 : 1)
-        .onHover { hovering = $0 && isEnabled }
+        .onPointerHover { hovering = $0 && isEnabled }
         .motion(Motion.hover, value: hovering)
         .motion(Motion.hover, value: caretHovering)
-        .motion(HeaderMotion.slide, value: isOpen)
+        .motion(Motion.control, value: isOpen)
         .motion(HeaderMotion.slide, value: showsWord)
     }
 
@@ -283,7 +292,7 @@ struct HeaderDockSeat: View {
                 .fill(caretHovering ? Theme.field : Color.clear))
             .contentShape(Rectangle())
             .padding(.leading, -4)
-            .onHover { caretHovering = $0 && isEnabled }
+            .onPointerHover { caretHovering = $0 && isEnabled }
             .appMenu(options.entries)
             .appTooltip(options.label)
             .accessibilityElement()
@@ -340,9 +349,10 @@ struct HeaderSplitButton: View {
                                                    bottomLeadingRadius: Self.radius)
                     .fill(mainHovering ? Theme.field : Color.clear))
                 .contentShape(Rectangle())
+                .hoverLift(hovering)
             }
             .buttonStyle(.plain)
-            .onHover { mainHovering = $0 }
+            .onPointerHover { mainHovering = $0 }
             .appTooltip(delay: .zero, tooltip)
             .accessibilityLabel(word)
 
@@ -358,17 +368,21 @@ struct HeaderSplitButton: View {
                                                    topTrailingRadius: Self.radius)
                     .fill(moreHovering ? Theme.field : Color.clear))
                 .contentShape(Rectangle())
-                .onHover { moreHovering = $0 }
+                .hoverLift(hovering)
+                .onPointerHover { moreHovering = $0 }
                 .appMenu(refreshOnOpen: refresh, entries)
                 .appTooltip(menuLabel)
                 .accessibilityElement()
                 .accessibilityLabel(menuLabel)
                 .accessibilityAddTraits(.isButton)
         }
-        .background(RoundedRectangle(cornerRadius: Self.radius).fill(Theme.card))
+        // Each part lifts on its own rather than the whole pill at once, since both halves
+        // carry tooltips and AppKit cannot lay those out under a scale.
+        .background(RoundedRectangle(cornerRadius: Self.radius).fill(Theme.card).hoverLift(hovering))
         .overlay(RoundedRectangle(cornerRadius: Self.radius)
-            .strokeBorder(hovering ? Theme.accent.opacity(0.22) : Theme.border))
-        .onHover { hovering = $0 }
+            .strokeBorder(hovering ? Theme.accent.opacity(0.22) : Theme.border)
+            .hoverLift(hovering))
+        .onPointerHover { hovering = $0 }
         .motion(Motion.hover, value: hovering)
         .motion(Motion.hover, value: mainHovering)
         .motion(Motion.hover, value: moreHovering)

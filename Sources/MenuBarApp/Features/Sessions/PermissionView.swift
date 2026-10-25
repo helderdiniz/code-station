@@ -136,6 +136,8 @@ private struct QuestionCard: View {
     @State private var typed: [String: String] = [:]
     @State private var currentQuestionIndex = 0
 
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             if request.questions.count > 1 {
@@ -245,7 +247,7 @@ private struct QuestionCard: View {
     }
 
     private func showQuestion(at index: Int) {
-        withAnimation(.easeInOut(duration: 0.15)) {
+        withAnimation(reduceMotion ? nil : Motion.reveal) {
             currentQuestionIndex = index
         }
     }
@@ -259,6 +261,7 @@ private struct QuestionCard: View {
                 Image(systemName: marker(question: question, chosen: chosen))
                     .font(.system(size: 12))
                     .foregroundStyle(chosen ? Theme.accent : Color.secondary)
+                    .contentTransition(reduceMotion ? .identity : .symbolEffect(.replace))
                 VStack(alignment: .leading, spacing: 2) {
                     Text(option.label)
                         .font(.system(size: 12, weight: .semibold))
@@ -275,6 +278,7 @@ private struct QuestionCard: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .surface(chosen ? Theme.accent.opacity(0.10) : Theme.card, cornerRadius: 8,
                      border: chosen ? Theme.accent.opacity(0.45) : Theme.border)
+            .motion(Motion.control, value: chosen)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)

@@ -35,6 +35,8 @@ struct FindBar: View {
                 .lineLimit(1)
                 .minimumScaleFactor(0.8)
                 .frame(minWidth: 55, idealWidth: 82, alignment: .trailing)
+                .contentTransition(.numericText())
+                .motion(Motion.control, value: summary)
 
             button("chevron.up", help: "Previous match", disabled: !hasMatches) { move(-1) }
             button("chevron.down", help: "Next match", disabled: !hasMatches) { move(1) }

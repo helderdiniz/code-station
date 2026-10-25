@@ -36,6 +36,7 @@ struct SessionProjectCard: View {
                                 .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
+                        .hoverLift(amount: Motion.smallLift)
                         .accessibilityLabel("Detach \(project.name) from this session")
                         .appTooltip("Detach from this session")
                     }

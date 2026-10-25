@@ -99,7 +99,7 @@ struct OrbitPhoneBeacon: View {
             .offset(y: hovering ? -1 : 0)
         }
         .buttonStyle(.plain)
-        .onHover { hovering = $0 }
+        .onPointerHover { hovering = $0 }
         .motion(Motion.hover, value: hovering)
         .appTooltip(delay: .zero) {
             Tooltip(title: OrbitPhoneLink.tooltip, subtitle: OrbitPhoneLink.action)

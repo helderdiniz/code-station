@@ -118,10 +118,13 @@ private struct PhonePill: View {
             }
             .shadow(color: Theme.accent.opacity(offering && lit ? 0.1 : 0), radius: 5, y: 3)
             .contentShape(Capsule())
+            // Lifted inside the label, since the button carries an AppKit tooltip that
+            // cannot be laid out under a scale.
+            .hoverLift(hovering)
         }
         .buttonStyle(PressablePill())
         .focused($focused)
-        .onHover { hovering = $0 }
+        .onPointerHover { hovering = $0 }
         .motion(Motion.hover, value: lit)
         .motion(HeaderMotion.slide, value: link)
         .appTooltip(delay: .zero, isFocused: focused && offering) {

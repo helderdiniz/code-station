@@ -407,7 +407,7 @@ private struct ResumeCard: View {
         .buttonStyle(.plain)
         .accessibilityHint("Opens this session")
         .hoverLift(hovering)
-        .onHover { hovering = $0 }
+        .onPointerHover { hovering = $0 }
     }
 }
 

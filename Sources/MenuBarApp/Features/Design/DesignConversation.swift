@@ -235,7 +235,7 @@ struct DesignConversation: View {
             .scrollBounceBehavior(.basedOnSize)
             .frame(maxHeight: .infinity)
         }
-        .onHover { conversationHovered = $0 }
+        .onPointerHover { conversationHovered = $0 }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Conversation")
         // The panel stays built while it is small, so the transcript keeps its scroll
@@ -279,8 +279,8 @@ struct DesignConversation: View {
             expand: {
                 conversationExpanded = true
             }))
-        .animation(reduceMotion ? nil : .easeInOut(duration: 0.26), value: conversationExpanded)
-        .animation(reduceMotion ? nil : .easeInOut(duration: 0.26), value: conversationMinimized)
+        .motion(Motion.reveal, value: conversationExpanded)
+        .motion(Motion.reveal, value: conversationMinimized)
         // The minimized tab hugs its working word, which changes on its own every few
         // seconds, so its width follows the word without any motion.
     }
@@ -295,6 +295,7 @@ struct DesignConversation: View {
         } label: {
             Image(systemName: conversationExpanded ? "chevron.down" : "arrow.up.left.and.arrow.down.right")
                 .font(.system(size: 11, weight: .medium))
+                .contentTransition(reduceMotion ? .identity : .symbolEffect(.replace))
                 .foregroundStyle(cornerHovered ? .primary : .secondary)
                 .frame(width: DesignConversationLayout.cornerButtonSize,
                        height: DesignConversationLayout.cornerButtonSize)
@@ -311,11 +312,12 @@ struct DesignConversation: View {
             conversationExpanded.toggle()
             return .handled
         }
-        .onHover { cornerHovered = $0 }
+        .onPointerHover { cornerHovered = $0 }
+        .motion(Motion.hover, value: cornerHovered)
         .appTooltip(conversationExpanded ? "Collapse" : "Expand")
         .padding(DesignConversationLayout.cornerButtonInset)
         .opacity(visible ? 1 : 0)
-        .animation(reduceMotion ? nil : .easeInOut(duration: 0.15), value: visible)
+        .motion(Motion.reveal, value: visible)
         .accessibilityLabel(conversationExpanded ? "Collapse the conversation" : "Expand the conversation")
     }
 
@@ -363,7 +365,7 @@ struct DesignConversation: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .onHover { inside in
+        .onPointerHover { inside in
             if inside { conversationMinimized = false }
         }
         .accessibilityLabel("Conversation")

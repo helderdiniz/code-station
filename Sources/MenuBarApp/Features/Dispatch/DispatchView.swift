@@ -42,6 +42,7 @@ struct DispatchView: View {
             HStack(spacing: 0) {
                 if !compact || showingLibrary {
                     sidebar
+                        .transition(.drawer(from: .leading, reduceMotion: reduceMotion))
                     Divider().overlay(Theme.hairline)
                 }
                 if !compact || !showingLibrary {
@@ -124,6 +125,7 @@ struct DispatchView: View {
             .padding(.horizontal, 12).frame(height: 34)
             .surface(environment.accent.opacity(0.07), cornerRadius: 8,
                      border: environment.accent.opacity(0.25))
+            .hoverLift()
             .appMenu {
                 auth.environments.map { env in
                     .item(env.label, checked: env == environment) { auth.active = env }
@@ -165,6 +167,7 @@ struct DispatchView: View {
             .foregroundStyle(authenticated ? environment.accent : .secondary)
             .padding(6)
             .contentShape(Rectangle())
+            .hoverLift()
             .appMenu {
                 if busy {
                     [.item("Cancel authentication") { auth.cancelAuthentication(environment) }]
@@ -508,14 +511,17 @@ private struct FolderRow: View {
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
                             .background(Capsule().fill(accent.opacity(0.12)))
                             .contentShape(Rectangle())
+                            .hoverLift()
                     }
                     .buttonStyle(.plain)
                     .appTooltip("New request in \(folder.name)")
+                    .transition(.fadeIn)
                 } else {
                     Text("\(requestCount)")
                         .font(.mono(10))
                         .foregroundStyle(.secondary)
                         .frame(maxWidth: .infinity, alignment: .trailing)
+                        .transition(.fadeIn)
                 }
             }
             .frame(width: 62, height: 20)
@@ -538,7 +544,8 @@ private struct FolderRow: View {
         .accessibilityAddTraits(.isButton)
         .accessibilityAction { onToggle() }
         .motion(Motion.control, value: expanded)
-        .onHover { hovering = $0 }
+        .motion(Motion.hover, value: hovering)
+        .onPointerHover { hovering = $0 }
         .dropDestination(for: String.self) { values, _ in
             guard let value = values.first, let requestID = UUID(uuidString: value) else {
                 return false
@@ -672,7 +679,7 @@ private struct RequestRow: View {
         .accessibilityAction { onSelect() }
         .motion(Motion.control, value: selected)
         .motion(Motion.hover, value: hovering)
-        .onHover { hovering = $0 }
+        .onPointerHover { hovering = $0 }
         .onAppear { prepareRename() }
         .onChange(of: isRenaming) { _, _ in prepareRename() }
         // Clicking away keeps the new name, the way Finder does. Escape is the only
@@ -764,7 +771,7 @@ private struct RequestDetail: View {
                         ZStack {
                             ForEach(Tab.allCases) { item in
                                 editor(for: item)
-                                    .opacity(tab == item ? 1 : 0)
+                                    .standbyPane(shown: tab == item)
                                     .allowsHitTesting(tab == item && !store.workbench.responseExpanded)
                                     .accessibilityHidden(tab != item || store.workbench.responseExpanded)
                                     .disabled(tab != item || store.workbench.responseExpanded)
@@ -838,6 +845,7 @@ private struct RequestDetail: View {
             Spacer(minLength: 0)
             if copiedCurl {
                 Label("Copied curl", systemImage: "checkmark").font(.system(size: 10)).foregroundStyle(environment.accent)
+                    .transition(.fadeIn)
             }
             GlyphButton(icon: draft.isPinned ? "star.fill" : "star", side: 27, tint: environment.accent) {
                 store.togglePin(draft.id)
@@ -848,6 +856,7 @@ private struct RequestDetail: View {
                 .accessibilityLabel("More request actions")
         }
         .padding(.horizontal, 20).frame(height: 55)
+        .motion(Motion.reveal, value: copiedCurl)
     }
 
     private var urlBar: some View {
@@ -859,6 +868,7 @@ private struct RequestDetail: View {
                 }
                 .padding(.horizontal, 12).frame(height: 40)
                 .contentShape(Rectangle())
+                .hoverLift()
                 .appMenu {
                     HTTPMethod.allCases.map { method in
                         .item(method.rawValue, checked: method == draft.method) { draft.method = method }
@@ -953,12 +963,12 @@ private struct RequestDetail: View {
                 }.padding(.horizontal, 20).padding(.top, 12)
                 ZStack {
                     parameterEditor(paths: false)
-                        .opacity(store.workbench.pathParameters ? 0 : 1)
+                        .standbyPane(shown: !store.workbench.pathParameters)
                         .allowsHitTesting(!store.workbench.pathParameters)
                         .accessibilityHidden(store.workbench.pathParameters)
                         .disabled(store.workbench.pathParameters)
                     parameterEditor(paths: true)
-                        .opacity(store.workbench.pathParameters ? 1 : 0)
+                        .standbyPane(shown: store.workbench.pathParameters)
                         .allowsHitTesting(store.workbench.pathParameters)
                         .accessibilityHidden(!store.workbench.pathParameters)
                         .disabled(!store.workbench.pathParameters)

@@ -32,6 +32,8 @@ struct RootView: View {
     @State private var dismissedUpdateStage: AppUpdateInstallState.Stage?
     // Raised by the file being read in the detail pane while it holds Command-F.
     @State private var paneOwnsFindShortcut = false
+    @State private var note: String?
+    @State private var notes = 0
 
     var body: some View {
         window
@@ -67,7 +69,8 @@ struct RootView: View {
                 if let attention, attention != dismissedAttention {
                     AttentionBanner(title: attention.title,
                                     message: attention.message,
-                                    onDismiss: { dismissedAttention = attention })
+                                    onDismiss: { withAnimation(Motion.leave) { dismissedAttention = attention } })
+                        .transition(.asymmetric(insertion: .fadeIn, removal: .fold))
                 }
                 if let release = updateOnShow {
                     AppUpdateBanner(release: release,
@@ -75,16 +78,33 @@ struct RootView: View {
                                     canInstallInPlace: appUpdates.canInstallInPlace,
                                     onInstall: appUpdates.installUpdate,
                                     onRestart: appUpdates.relaunch,
-                                    onViewRelease: appUpdates.openReleasePage,
+                                    onViewRelease: { withAnimation(Motion.leave) { appUpdates.openReleasePage() } },
                                     onReadNotes: appUpdates.openReleaseNotes,
-                                    onDismiss: dismissUpdateBanner)
+                                    onDismiss: { withAnimation(Motion.leave) { dismissUpdateBanner() } })
+                        .transition(.asymmetric(insertion: .fadeIn, removal: .fold))
+                }
+                if let note {
+                    HeaderNote(icon: "arrow.up.forward.app", text: note)
+                        .transition(.asymmetric(
+                            insertion: (reduceMotion ? AnyTransition.opacity : .opacity.combined(with: .offset(y: -6)))
+                                .animation(Motion.reveal),
+                            removal: .opacity.animation(Motion.leave)))
                 }
             }
             .padding(.top, 12)
+            // The backdrop and the palette come and go as separate layers, the same way a
+            // dialog does, so the dimming fades while only the palette rises into place.
             ZStack {
                 if commandPalette.isPresented {
-                    commandPaletteLayer
-                        .transition(.opacity)
+                    Color.black.opacity(0.17)
+                        .contentShape(Rectangle())
+                        .onTapGesture { commandPalette.dismiss() }
+                        .ignoresSafeArea()
+                        .transition(.dialogBackdrop(reduceMotion: reduceMotion))
+                }
+                if commandPalette.isPresented {
+                    commandPaletteCard
+                        .transition(.dialogCard(reduceMotion: reduceMotion))
                 }
             }
             // The palette stays in the view tree until its fade has finished, and while
@@ -95,8 +115,6 @@ struct RootView: View {
             .zIndex(10)
         }
         .background(Theme.background)
-        .animation(reduceMotion ? nil : .easeOut(duration: 0.14),
-                   value: commandPalette.isPresented)
     }
 
     // The window and the work that runs for as long as it is up. Kept apart from `body`
@@ -106,6 +124,9 @@ struct RootView: View {
         layout
             .onChange(of: appUpdates.installState.stage) { _, _ in
                 dismissedUpdateStage = nil
+            }
+            .onChange(of: appUpdates.releasePageOpenings) { _, _ in
+                showNote("Opened the release page in your browser")
             }
             .onChange(of: attention) { oldValue, newValue in
                 if oldValue != newValue { dismissedAttention = nil }
@@ -193,21 +214,16 @@ struct RootView: View {
     // something that no longer belongs to what is underneath it.
     private var canNavigateHistory: Bool { sheet == nil && !commandPalette.isPresented }
 
-    private var commandPaletteLayer: some View {
+    private var commandPaletteCard: some View {
         GeometryReader { geometry in
-            ZStack(alignment: .top) {
-                Color.black.opacity(0.17)
-                    .contentShape(Rectangle())
-                    .onTapGesture { commandPalette.dismiss() }
-
-                GlobalCommandPalette(openSettings: {
-                    commandPalette.close()
-                    sheet = .settings
-                })
-                .frame(width: min(720, geometry.size.width - 64),
-                       height: min(620, geometry.size.height - 64))
-                .padding(.top, 28)
-            }
+            GlobalCommandPalette(openSettings: {
+                commandPalette.close()
+                sheet = .settings
+            })
+            .frame(width: min(720, geometry.size.width - 64),
+                   height: min(620, geometry.size.height - 64))
+            .padding(.top, 28)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         }
         .ignoresSafeArea()
     }
@@ -286,6 +302,18 @@ struct RootView: View {
         let stage = appUpdates.installState.stage
         guard stage != dismissedUpdateStage else { return nil }
         return stage == .idle ? appUpdates.announcedRelease : appUpdates.availableRelease
+    }
+
+    // A second note keeps the line up rather than letting the first one's timer take it
+    // down early.
+    private func showNote(_ text: String) {
+        notes += 1
+        let shown = notes
+        note = text
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(2.4))
+            if notes == shown { note = nil }
+        }
     }
 
     private func dismissUpdateBanner() {
@@ -423,9 +451,11 @@ struct RootView: View {
                     : .conversation
                 SessionView(sessionID: id, opening: opening)
                     .id(SessionOpenRequest(sessionID: id, destination: opening))
+                    .transition(.headerPage(reduceMotion: reduceMotion))
             case .workspace(let id):
                 WorkspaceDetailView(workspaceID: id)
                     .id(id)
+                    .transition(.headerPage(reduceMotion: reduceMotion))
             case nil:
                 if let project = store.selectedProject {
                     // A task's folder is an implementation detail; what it needs on screen
@@ -433,9 +463,11 @@ struct RootView: View {
                     if project.kind == .adHoc {
                         TaskDetailView(projectID: project.id)
                             .id(project.id)
+                            .transition(.headerPage(reduceMotion: reduceMotion))
                     } else {
                         ProjectDetailView(projectID: project.id)
                             .id(project.id)
+                            .transition(.headerPage(reduceMotion: reduceMotion))
                     }
                 } else {
                     home
@@ -447,6 +479,7 @@ struct RootView: View {
 
     private var home: some View {
         HomeView()
+            .transition(.headerPage(reduceMotion: reduceMotion))
     }
 }
 

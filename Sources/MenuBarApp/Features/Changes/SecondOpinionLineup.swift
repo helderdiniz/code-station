@@ -369,7 +369,7 @@ struct SecondOpinionLineupButton: View {
     private var canAsk: Bool { !lineup.isEmpty }
 
     private var change: Animation {
-        reduceMotion ? .easeInOut(duration: 0.15) : HeaderMotion.grow
+        reduceMotion ? Motion.reveal : HeaderMotion.grow
     }
 
     var body: some View {
@@ -380,7 +380,7 @@ struct SecondOpinionLineupButton: View {
         }
         .buttonStyle(.plain)
         .disabled(shown == .rest && !canAsk)
-        .onHover { hovering = $0 }
+        .onPointerHover { hovering = $0 }
         .appTooltip {
             Tooltip(title: "Ask for a second opinion",
                     subtitle: canAsk ? "\(SecondOpinionLineup.names(lineup)) review these changes" : SecondOpinionLineup.installHint(author: author))
@@ -424,8 +424,8 @@ struct SecondOpinionLineupButton: View {
         .contentShape(RoundedRectangle(cornerRadius: 9))
         .frame(height: 34)
         .opacity(shown == .rest && !canAsk ? 0.5 : 1)
-        .animation(change, value: shown)
-        .animation(change, value: hovering)
+        .motion(HeaderMotion.grow, value: shown)
+        .motion(Motion.hover, value: hovering)
     }
 
     @ViewBuilder
@@ -542,8 +542,8 @@ struct AnswerLineupButton: View {
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .onHover { hovering = $0 }
-        .animation(HeaderMotion.grow, value: hovering)
+        .onPointerHover { hovering = $0 }
+        .motion(Motion.hover, value: hovering)
         .appTooltip {
             Tooltip(title: "Get a second opinion",
                     subtitle: lineup.isEmpty ? "Other agents review this answer"

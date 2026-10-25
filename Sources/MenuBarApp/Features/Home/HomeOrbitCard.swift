@@ -25,7 +25,8 @@ struct OrbitSessionCard: View {
                 Text(live.session.agent.title)
                     .foregroundStyle(.tertiary)
                 Spacer(minLength: 4)
-                CardCloseButton(action: close)
+                GlyphButton(icon: "xmark", side: 22, action: close)
+                    .accessibilityLabel("Close")
             }
             .font(.system(size: 11.5))
             Text(live.session.title)
@@ -166,25 +167,5 @@ struct OrbitSessionCard: View {
             }
             Spacer(minLength: 0)
         }
-    }
-}
-
-private struct CardCloseButton: View {
-    let action: () -> Void
-
-    @State private var hovering = false
-
-    var body: some View {
-        Button(action: action) {
-            Image(systemName: "xmark")
-                .font(.system(size: 9, weight: .semibold))
-                .foregroundStyle(hovering ? .primary : .tertiary)
-                .frame(width: 22, height: 22)
-                .background(RoundedRectangle(cornerRadius: 6).fill(hovering ? Theme.field : .clear))
-                .contentShape(RoundedRectangle(cornerRadius: 6))
-        }
-        .buttonStyle(.plain)
-        .onHover { hovering = $0 }
-        .accessibilityLabel("Close")
     }
 }

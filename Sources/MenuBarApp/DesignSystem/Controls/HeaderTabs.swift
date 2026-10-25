@@ -253,7 +253,7 @@ private struct HeaderTabDeckItem: View {
                         // over the place where they were.
                         .transition(.asymmetric(
                             insertion: reduceMotion ? .opacity : .push(from: .bottom),
-                            removal: .opacity.animation(.easeOut(duration: 0.08))))
+                            removal: .opacity.animation(Motion.leave)))
                 } else if let hasContent = tab.hasContent {
                     Circle()
                         .fill(Theme.dotOnText)
@@ -289,7 +289,7 @@ private struct HeaderTabDeckItem: View {
         }
         .buttonStyle(.plain)
         .hoverLift(hovering)
-        .onHover { hovering = $0 }
+        .onPointerHover { hovering = $0 }
         .motion(Motion.hover, value: hovering)
         .onChange(of: tab.selected) { _, selected in
             if selected { actOuts += 1 }

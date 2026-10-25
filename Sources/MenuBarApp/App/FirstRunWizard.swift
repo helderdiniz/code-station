@@ -106,6 +106,7 @@ struct FirstRunWizardContent: View {
 
     @Environment(DialogPresenter.self) private var dialogs
     @Environment(\.textScale) private var textScale
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @FocusState private var focused: Focus?
     @AccessibilityFocusState private var headingFocused: Bool
     @State private var returnsFocusToAgentAction = false
@@ -125,11 +126,15 @@ struct FirstRunWizardContent: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 20) {
                         Color.clear.frame(height: 0).id("top")
-                        switch setup.step {
-                        case .agent: agentSetup
-                        case .configuration: configurationSetup
-                        case .project: projectSetup
+                        Group {
+                            switch setup.step {
+                            case .agent: agentSetup
+                            case .configuration: configurationSetup
+                            case .project: projectSetup
+                            }
                         }
+                        .id(setup.step)
+                        .transition(.headerPage(reduceMotion: reduceMotion))
                     }
                     .padding(.horizontal, 40)
                     .padding(.top, 9)
@@ -216,6 +221,7 @@ struct FirstRunWizardContent: View {
             }
             Spacer(minLength: 0)
         }
+        .motion(Motion.control, value: setup.step)
         .padding(.horizontal, 40)
         .padding(.top, 20)
         .padding(.bottom, 10)
@@ -275,6 +281,7 @@ struct FirstRunWizardContent: View {
                     Spacer(minLength: 0)
                     Image(systemName: selected ? "record.circle" : "circle")
                         .foregroundStyle(selected ? Theme.accent : Color.secondary.opacity(0.4))
+                        .contentTransition(reduceMotion ? .identity : .symbolEffect(.replace))
                         .accessibilityHidden(true)
                 }
                 HStack(spacing: 6) {
@@ -292,8 +299,10 @@ struct FirstRunWizardContent: View {
             .surface(Theme.card, cornerRadius: 10, border: selected ? Theme.accent : Theme.border)
             .overlay(RoundedRectangle(cornerRadius: 10).stroke(selected ? Theme.accent : .clear))
             .contentShape(RoundedRectangle(cornerRadius: 10))
+            .motion(Motion.control, value: selected)
         }
         .buttonStyle(.plain)
+        .hoverLift()
         .focused($focused, equals: .agent(agent))
         .accessibilityLabel("\(agent.title), \(agent.vendor), \(status.label)")
         .accessibilityAddTraits(selected ? [.isSelected] : [])

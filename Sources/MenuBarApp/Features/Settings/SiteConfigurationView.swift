@@ -197,11 +197,12 @@ struct SiteConfigurationSection: View {
             SettingsCard {
                 VStack(alignment: .leading, spacing: 10) {
                     sources
-                    if let selection = loader.selection { preview(selection) }
-                    if let failure = loader.failure { SourceFailure(failure) }
-                    if let loadFailure = loaded.loadFailure { SourceFailure(loadFailure) }
+                    if let selection = loader.selection { preview(selection).transition(.fadeIn) }
+                    if let failure = loader.failure { SourceFailure(failure).transition(.fadeIn) }
+                    if let loadFailure = loaded.loadFailure { SourceFailure(loadFailure).transition(.fadeIn) }
                 }
                 .padding(14)
+                .smoothlyResizes(when: [loader.selection?.sourceName, loader.failure, loaded.loadFailure])
             }
         }
     }
@@ -433,11 +434,13 @@ private struct SiteConfigurationEditorView: View {
                         .toggleStyle(.appCheckbox)
                         .font(.system(size: 12))
                 }
+                .transition(.fold)
             }
             addButton("Add environment") {
                 draft.environments?.append(SiteDefaults.Environment(name: "", title: ""))
             }
         }
+        .smoothlyResizes(when: draft.environments?.count)
     }
 
     private var apiAccessEditor: some View {
@@ -447,33 +450,39 @@ private struct SiteConfigurationEditorView: View {
                     .toggleStyle(.appSwitch)
                     .font(.system(size: 12.5, weight: .semibold))
                 if oauthEnabled.wrappedValue {
-                    OptionMenu(caption: "GRANT TYPE",
-                               value: oauthGrant.wrappedValue.label,
-                               options: GrantType.allCases.map { grant in
-                                   (grant.label, grant == oauthGrant.wrappedValue,
-                                    { oauthGrant.wrappedValue = grant })
-                               })
-                    if oauthGrant.wrappedValue.usesBrowser {
-                        SiteConfigurationField(caption: "AUTH URL",
-                                               placeholder: "https://id.example/oauth/authorize",
-                                               text: oauthText(\.authURL))
+                    VStack(alignment: .leading, spacing: 12) {
+                        OptionMenu(caption: "GRANT TYPE",
+                                   value: oauthGrant.wrappedValue.label,
+                                   options: GrantType.allCases.map { grant in
+                                       (grant.label, grant == oauthGrant.wrappedValue,
+                                        { oauthGrant.wrappedValue = grant })
+                                   })
+                        if oauthGrant.wrappedValue.usesBrowser {
+                            SiteConfigurationField(caption: "AUTH URL",
+                                                   placeholder: "https://id.example/oauth/authorize",
+                                                   text: oauthText(\.authURL))
+                                .transition(.fadeIn)
+                        }
+                        SiteConfigurationField(caption: "ACCESS TOKEN URL",
+                                               placeholder: "https://id.example/oauth/token",
+                                               text: oauthText(\.tokenURL))
+                        SiteConfigurationField(caption: "CLIENT ID",
+                                               placeholder: "client id",
+                                               text: oauthText(\.clientID))
+                        SiteConfigurationField(caption: "SCOPE",
+                                               placeholder: "openid",
+                                               text: oauthText(\.scope))
+                        if oauthGrant.wrappedValue.usesBrowser {
+                            SiteConfigurationField(caption: "CALLBACK URL",
+                                                   placeholder: "http://localhost:8234/callback",
+                                                   text: oauthText(\.callbackURL))
+                                .transition(.fadeIn)
+                        }
                     }
-                    SiteConfigurationField(caption: "ACCESS TOKEN URL",
-                                           placeholder: "https://id.example/oauth/token",
-                                           text: oauthText(\.tokenURL))
-                    SiteConfigurationField(caption: "CLIENT ID",
-                                           placeholder: "client id",
-                                           text: oauthText(\.clientID))
-                    SiteConfigurationField(caption: "SCOPE",
-                                           placeholder: "openid",
-                                           text: oauthText(\.scope))
-                    if oauthGrant.wrappedValue.usesBrowser {
-                        SiteConfigurationField(caption: "CALLBACK URL",
-                                               placeholder: "http://localhost:8234/callback",
-                                               text: oauthText(\.callbackURL))
-                    }
+                    .transition(.fadeIn)
                 }
             }
+            .smoothlyResizes(when: [oauthEnabled.wrappedValue, oauthGrant.wrappedValue.usesBrowser])
 
         }
     }
@@ -495,6 +504,7 @@ private struct SiteConfigurationEditorView: View {
                                            placeholder: "https://api.{{env}}.example/orders",
                                            text: request.url)
                 }
+                .transition(.fold)
             }
             addButton("Add starter request") {
                 var dispatch = draft.dispatch ?? SiteDefaults.DispatchConfig()
@@ -503,6 +513,7 @@ private struct SiteConfigurationEditorView: View {
                 draft.dispatch = dispatch
             }
         }
+        .smoothlyResizes(when: draft.requestList?.count)
     }
 
     private var mcpEditor: some View {
@@ -557,17 +568,21 @@ private struct SiteConfigurationEditorView: View {
                                             { preset.type.wrappedValue = type })
                                        })
                         }
+                        .transition(.fadeIn)
                     } else {
                         SiteConfigurationField(caption: "COMMAND",
                                                placeholder: "mcp-server",
                                                text: optional(preset.command))
+                            .transition(.fadeIn)
                         SiteConfigurationTextArea(caption: "ARGUMENTS - ONE PER LINE",
                                                   placeholder: "--flag\nvalue",
                                                   text: arguments(preset))
+                            .transition(.fadeIn)
                     }
                     presetValuesEditor("ENVIRONMENT VARIABLES", at: index, keyPath: \.env)
                     presetValuesEditor("HEADERS", at: index, keyPath: \.headers)
                 }
+                .transition(.fold)
             }
             addButton("Add MCP preset") {
                 let environment = draft.deployEnvironments.first?.name ?? ""
@@ -579,6 +594,11 @@ private struct SiteConfigurationEditorView: View {
                 draft.mcp = mcp
             }
         }
+        // Keyed on the shape of the list rather than the whole draft, so typing in a
+        // field does not animate.
+        .smoothlyResizes(when: (draft.presetList ?? []).map {
+            [$0.isRemote ? 1 : 0, $0.env?.count ?? 0, $0.headers?.count ?? 0]
+        })
     }
 
     @ViewBuilder private func presetValuesEditor(
@@ -626,6 +646,7 @@ private struct SiteConfigurationEditorView: View {
                         draft.mcp?.presets?[presetIndex] = preset
                     }
                 }
+                .transition(.fold)
             }
         }
         .padding(.top, 4)
@@ -637,44 +658,49 @@ private struct SiteConfigurationEditorView: View {
                 .toggleStyle(.appSwitch)
                 .font(.system(size: 12.5, weight: .semibold))
             if skillsEnabled.wrappedValue {
-                VStack(alignment: .leading, spacing: 6) {
-                    SectionLabel("SOURCE", style: .field)
-                    HStack(spacing: 6) {
-                        ChoicePill(title: "Git repository",
-                                   selected: skillsSourceKind.wrappedValue == .gitRepository) {
-                            skillsSourceKind.wrappedValue = .gitRepository
+                VStack(alignment: .leading, spacing: 12) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        SectionLabel("SOURCE", style: .field)
+                        HStack(spacing: 6) {
+                            ChoicePill(title: "Git repository",
+                                       selected: skillsSourceKind.wrappedValue == .gitRepository) {
+                                skillsSourceKind.wrappedValue = .gitRepository
+                            }
+                            ChoicePill(title: "Local file",
+                                       selected: skillsSourceKind.wrappedValue == .localFile) {
+                                skillsSourceKind.wrappedValue = .localFile
+                            }
+                            Spacer()
                         }
-                        ChoicePill(title: "Local file",
-                                   selected: skillsSourceKind.wrappedValue == .localFile) {
-                            skillsSourceKind.wrappedValue = .localFile
+                    }
+                    SiteConfigurationField(caption: "DISPLAY NAME",
+                                           placeholder: "Example Engineering",
+                                           text: skillsText(\.name))
+                    SiteConfigurationField(caption: "MARKETPLACE NAME",
+                                           placeholder: "example-engineering",
+                                           text: skillsText(\.marketplace))
+                    HStack(alignment: .bottom, spacing: 8) {
+                        SiteConfigurationField(
+                            caption: skillsSourceKind.wrappedValue == .localFile
+                                ? "MARKETPLACE FILE" : "GIT REPOSITORY",
+                            placeholder: skillsSourceKind.wrappedValue == .localFile
+                                ? "/path/to/marketplace.json"
+                                : "https://github.com/example/plugins",
+                            text: skillsText(\.repository))
+                        if skillsSourceKind.wrappedValue == .localFile {
+                            ActionButton(title: "Choose file…",
+                                         tone: .outlined,
+                                         height: 34,
+                                         icon: "folder",
+                                         action: chooseSkillsFile)
+                                .transition(.fadeIn)
                         }
-                        Spacer()
                     }
                 }
-                SiteConfigurationField(caption: "DISPLAY NAME",
-                                       placeholder: "Example Engineering",
-                                       text: skillsText(\.name))
-                SiteConfigurationField(caption: "MARKETPLACE NAME",
-                                       placeholder: "example-engineering",
-                                       text: skillsText(\.marketplace))
-                HStack(alignment: .bottom, spacing: 8) {
-                    SiteConfigurationField(
-                        caption: skillsSourceKind.wrappedValue == .localFile
-                            ? "MARKETPLACE FILE" : "GIT REPOSITORY",
-                        placeholder: skillsSourceKind.wrappedValue == .localFile
-                            ? "/path/to/marketplace.json"
-                            : "https://github.com/example/plugins",
-                        text: skillsText(\.repository))
-                    if skillsSourceKind.wrappedValue == .localFile {
-                        ActionButton(title: "Choose file…",
-                                     tone: .outlined,
-                                     height: 34,
-                                     icon: "folder",
-                                     action: chooseSkillsFile)
-                    }
-                }
+                .transition(.fadeIn)
             }
         }
+        .smoothlyResizes(when: [skillsEnabled.wrappedValue, skillsSourceKind.wrappedValue == .localFile])
     }
 
     private var shortcutsEditor: some View {
@@ -697,11 +723,13 @@ private struct SiteConfigurationEditorView: View {
                         ShortcutIconPicker(symbol: shortcut.icon)
                     }
                 }
+                .transition(.fold)
             }
             addButton("Add shortcut") {
                 draft.shortcuts?.append(SiteDefaults.ShortcutEntry(name: "", command: ""))
             }
         }
+        .smoothlyResizes(when: draft.shortcuts?.count)
     }
 
     private func editorCard<Content: View>(@ViewBuilder content: () -> Content) -> some View {
@@ -1117,9 +1145,11 @@ private struct SiteConfigurationJSONView: View {
                     Text(failure)
                         .font(.system(size: 11.5))
                         .foregroundStyle(Theme.deletion)
+                        .transition(.fadeIn)
                 }
             }
             .padding(20)
+            .smoothlyResizes(when: failure)
 
             SheetFooter(dismiss: { dismiss() }) {
                 HStack(spacing: 14) {

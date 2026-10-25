@@ -18,6 +18,9 @@ struct SettingsView: View {
     @State private var searchResultID: String?
     @State private var searchedAgent: AgentKind?
     @State private var bots = BotSettingsFlow()
+    @State private var note: String?
+    @State private var noteIcon = "checkmark"
+    @State private var notes = 0
     @State private var appearanceBeforeReset: (
         appearance: Appearance, textSize: TextSize, messageColour: MessageColour,
         iconStyle: DiceBearAvatarStyle, iconSet: SidebarIconSet, workingSet: Bool)?
@@ -36,6 +39,7 @@ struct SettingsView: View {
                     BotSettingsView(flow: bots) {
                         navigate(to: .appearance)
                     }
+                    .transition(.headerPage(reduceMotion: reduceMotion))
                 } else {
                     ScrollViewReader { proxy in
                         ScrollView {
@@ -45,12 +49,12 @@ struct SettingsView: View {
                             }
                             .padding(24)
                             .frame(maxWidth: .infinity, alignment: .leading)
-                            .transition(.fadeIn)
                         }
                         .scrollIndicators(.visible)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .background(Theme.background)
                         .id(tab)
+                        .transition(.headerPage(reduceMotion: reduceMotion))
                         .onChange(of: searchTarget) { _, target in
                             guard let target else { return }
                             Task { @MainActor in
@@ -59,8 +63,10 @@ struct SettingsView: View {
                             }
                         }
                     }
+                    .transition(.headerPage(reduceMotion: reduceMotion))
                 }
             }
+            .environment(\.settingsNote, ExternalNote { text, icon in showNote(text, icon: icon) })
             if bots.draft == nil { settingsFooter }
         }
         .frame(width: 960, height: 680)
@@ -73,6 +79,29 @@ struct SettingsView: View {
                 .appOverlays()
         }
         .sheet(isPresented: $showingLog) { LogView().appOverlays() }
+        .overlay(alignment: .topTrailing) {
+            ZStack {
+                if let note {
+                    HeaderNote(icon: noteIcon, text: note)
+                        .padding(.top, Theme.headerHeight + 8).padding(.trailing, 20)
+                        .transition(reduceMotion ? .opacity : .opacity.combined(with: .offset(y: -6)))
+                }
+            }
+            .motion(Motion.reveal, value: note)
+        }
+    }
+
+    // A second note keeps the line up rather than letting the first one's timer take it
+    // down early.
+    private func showNote(_ text: String, icon: String) {
+        notes += 1
+        let shown = notes
+        noteIcon = icon
+        note = text
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(2.4))
+            if notes == shown { note = nil }
+        }
     }
 
     private var header: some View {
@@ -279,7 +308,6 @@ struct SettingsView: View {
                 skillRefresh.id(SettingsSearchTarget.generalSkills.id)
                 system.id(SettingsSearchTarget.generalSystem.id)
             }
-            .transition(.fadeIn)
         case .appearance:
             VStack(alignment: .leading, spacing: 20) {
                 appearance.id(SettingsSearchTarget.appearanceTheme.id)
@@ -290,22 +318,17 @@ struct SettingsView: View {
                 }
                 .id(SettingsSearchTarget.appearanceDefaultBot.id)
             }
-            .transition(.fadeIn)
         case .keyboard:
             keyboardShortcuts.id(SettingsSearchTarget.keyboardShortcuts.id)
-            .transition(.fadeIn)
         case .agents:
             AgentSettingsView(selectedAgent: runner.agent,
                               requestedAgent: searchedAgent)
-            .transition(.fadeIn)
         case .advanced:
             VStack(alignment: .leading, spacing: 20) {
                 SiteConfigurationSection(skills: skills)
             }
-            .transition(.fadeIn)
         case .experimental:
             experimentalFeatures.id(SettingsSearchTarget.experimentalFeatures.id)
-            .transition(.fadeIn)
         }
     }
 
@@ -934,7 +957,10 @@ struct SettingsView: View {
             }
             Spacer(minLength: 0)
             InlineLink(title: "Open") { showingLog = true }
-            InlineLink(title: "Reveal") { SessionLog.revealInFinder() }
+            InlineLink(title: "Reveal") {
+                SessionLog.revealInFinder()
+                showNote("Revealed the session log in Finder", icon: "folder")
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -989,7 +1015,7 @@ private struct SettingsNavigationItem: View {
         }
         .buttonStyle(.plain)
         .focused($focused)
-        .onHover { hovering = $0 }
+        .onPointerHover { hovering = $0 }
         .motion(Motion.hover, value: hovering)
         .accessibilityLabel(title)
         .accessibilityValue(selected ? "Selected" : "Not selected")
@@ -1285,4 +1311,10 @@ private struct KeyboardShortcutRow: View {
         .padding(.horizontal, 14)
         .padding(.vertical, 11)
     }
+}
+
+extension EnvironmentValues {
+    // Lets a pane deep inside Settings leave a note in the window's corner when a click
+    // does its work outside the window, such as revealing a file in Finder.
+    @Entry var settingsNote = ExternalNote()
 }

@@ -146,7 +146,8 @@ struct ComposerField<TrailingAccessory: View>: View {
                         .padding(-1.5)
                 }
             }
-            .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: listening)
+            .motion(Motion.reveal, value: listening)
+            .motion(Motion.hover, value: isFocused)
             .overlay(alignment: .trailing) {
                 trailingAccessory
                     .padding(.trailing, 6)

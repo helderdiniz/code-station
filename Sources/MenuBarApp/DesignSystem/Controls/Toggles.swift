@@ -49,7 +49,7 @@ private struct AppSwitch: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .onHover { hovering = $0 }
+        .onPointerHover { hovering = $0 }
         .motion(Motion.control, value: configuration.isOn)
     }
 }
@@ -78,7 +78,7 @@ private struct AppCheckbox: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .onHover { hovering = $0 }
+        .onPointerHover { hovering = $0 }
         .motion(Motion.control, value: configuration.isOn)
     }
 }

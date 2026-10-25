@@ -6,14 +6,22 @@ struct FileNotesBadge: View {
     let expanded: Bool
     let toggle: () -> Void
 
+    // The count turns over only when the change around it is animated, which is when the
+    // person kept or removed a comment. Findings that arrive in the background just appear.
     var body: some View {
         Button(action: toggle) {
-            Label("\(notes.badgeCount)", systemImage: "text.bubble")
-                .font(.system(size: 10.5, weight: .semibold))
-                .foregroundStyle(ink)
-                .padding(.horizontal, 6).frame(height: 18)
-                .background(Capsule().fill(fill))
-                .contentShape(Capsule())
+            Label {
+                Text("\(notes.badgeCount)")
+                    .contentTransition(.numericText(value: Double(notes.badgeCount)))
+            } icon: {
+                Image(systemName: "text.bubble")
+            }
+            .font(.system(size: 10.5, weight: .semibold))
+            .foregroundStyle(ink)
+            .padding(.horizontal, 6).frame(height: 18)
+            .background(Capsule().fill(fill))
+            .contentShape(Capsule())
+            .hoverLift(amount: Motion.smallLift)
         }
         .buttonStyle(.plain)
         .appTooltip(expanded ? "Hide comments" : "Show comments")

@@ -67,7 +67,7 @@ private struct HeaderTabSegment: View {
         }
         .buttonStyle(.plain)
         .hoverLift(hovering)
-        .onHover { hovering = $0 }
+        .onPointerHover { hovering = $0 }
         .motion(Motion.hover, value: hovering)
     }
 }

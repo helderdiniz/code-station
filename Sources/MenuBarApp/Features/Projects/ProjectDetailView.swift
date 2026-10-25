@@ -32,6 +32,8 @@ struct ProjectDetailView: View {
     // How many sessions the agents ran in this folder that the app does not hold yet. The
     // button that brings them in only shows when there is something to bring.
     @State private var importableCount = 0
+    @State private var note: String?
+    @State private var notes = 0
 
     private var terminalScope: TerminalScope { .project(projectID) }
     private var shortcutScope: ShortcutScope { .project(projectID) }
@@ -50,14 +52,26 @@ struct ProjectDetailView: View {
                     ShortcutOutputDrawer(run: openRun) {
                         shortcuts.showOutput(nil, for: shortcutScope)
                     }
+                    .transition(.drawer(from: .bottom, reduceMotion: reduceMotion))
                 }
                 if terminals.isOpen(terminalScope) {
                     TerminalDrawer(scope: terminalScope,
                                    directory: project.path,
                                    focusTerminal: $terminalFocused)
+                        .transition(.drawer(from: .bottom, reduceMotion: reduceMotion))
                 }
             }
             .background(Theme.background)
+            .overlay(alignment: .topTrailing) {
+                ZStack {
+                    if let note {
+                        HeaderNote(icon: "arrow.up.forward.app", text: note)
+                            .padding(.top, Theme.headerHeight + 8).padding(.trailing, 24)
+                            .transition(reduceMotion ? .opacity : .opacity.combined(with: .offset(y: -6)))
+                    }
+                }
+                .motion(Motion.reveal, value: note)
+            }
             .background(terminalShortcut(project))
             .sheet(item: $shortcutEditor) { request in
                 ShortcutEditorView(request: request) { shortcut in
@@ -131,6 +145,7 @@ struct ProjectDetailView: View {
                     toggleTerminal(directory: project.path)
                 }
                 .disabled(missing)
+                .environment(\.showExternalNote, ExternalNote { text, _ in showNote(text) })
                 .opacity(missing ? 0.4 : 1)
 
                 if importableCount > 0 {
@@ -487,6 +502,7 @@ struct ProjectDetailView: View {
             .item("Reveal in Finder") {
                 NSWorkspace.shared.activateFileViewerSelecting(
                     [URL(fileURLWithPath: session.worktreePath ?? project.path)])
+                showNote("Showed the session folder in Finder")
             },
             .separator,
             .item(session.worktreePath == nil ? "Delete session" : "Remove worktree",
@@ -688,6 +704,19 @@ struct ProjectDetailView: View {
 
     private func reveal(_ project: Project) {
         NSWorkspace.shared.activateFileViewerSelecting([project.url])
+        showNote("Showed \(project.name) in Finder")
+    }
+
+    // A second note keeps the line up rather than letting the first one's timer take it
+    // down early.
+    private func showNote(_ text: String) {
+        notes += 1
+        let shown = notes
+        note = text
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(2.4))
+            if notes == shown { note = nil }
+        }
     }
 }
 
@@ -791,7 +820,7 @@ struct SessionRow: View {
         .appContextMenu(menu)
         .accessibilityAction(named: "Open session", onOpen)
         .motion(Motion.hover, value: hovering)
-        .onHover { hovering = $0 }
+        .onPointerHover { hovering = $0 }
     }
 
     @ViewBuilder

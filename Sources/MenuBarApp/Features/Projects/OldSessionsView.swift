@@ -179,7 +179,7 @@ struct OldSessionsView: View {
                 }
             }
         }
-        .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: group.snoozedUntil)
+        .motion(Motion.reveal, value: group.snoozedUntil)
     }
 
     private func groupHeader(_ group: ProjectGroup) -> some View {
@@ -246,7 +246,7 @@ struct OldSessionsView: View {
     }
 
     private var fold: AnyTransition {
-        reduceMotion ? .identity : .opacity.combined(with: .offset(y: -4))
+        reduceMotion ? .opacity : .opacity.combined(with: .offset(y: -4))
     }
 
     // A card under the list saying something about the list as a whole. Tinted when it
@@ -548,6 +548,8 @@ private struct SessionChoiceRow: View {
         .surface(Theme.card, cornerRadius: 10, border: border)
         .contentShape(Rectangle())
         .onTapGesture(perform: toggle)
+        .hoverFill(cornerRadius: 10)
+        .motion(Motion.control, value: ticked)
         .allowsHitTesting(canToggle)
     }
 

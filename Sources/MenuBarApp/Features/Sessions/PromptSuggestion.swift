@@ -249,14 +249,11 @@ struct PromptSuggestionStrip: View {
         // instead of as a second place to type.
         .surface(Theme.card, cornerRadius: 9, border: Theme.border)
         .opacity(shown ? 1 : 0)
-        .offset(y: shown ? 0 : 5)
+        // Under Reduce Motion the row only fades in, it does not rise.
+        .offset(y: shown || reduceMotion ? 0 : 5)
         .onAppear {
             announce()
-            guard !reduceMotion else {
-                shown = true
-                return
-            }
-            withAnimation(.easeOut(duration: 0.18)) { shown = true }
+            withAnimation(Motion.reveal) { shown = true }
         }
     }
 

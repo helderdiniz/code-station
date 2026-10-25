@@ -28,9 +28,13 @@ struct PullRequestReviewerGroupView: View {
                 ForEach(group.reviews) { review in
                     PullRequestReviewCard(review: review, entry: entry, sessionID: sessionID,
                                           openChanges: openChanges, failed: failed)
+                        .transition(.fold)
                 }
             }
         }
+        // Keyed on the person's own choice, so a thread answered in the background does
+        // not fold the group with motion.
+        .smoothlyResizes(when: unfolded)
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
@@ -85,14 +89,18 @@ struct PullRequestReviewCard: View {
                 }
             }
             if isUnfolded {
-                if !review.body.isEmpty { GitHubProse(review.body) }
-                ForEach(review.threads) { thread in
-                    PullRequestThreadView(thread: thread, review: review, entry: entry, sessionID: sessionID,
-                                          unfolded: unfoldedThreads.contains(thread.id),
-                                          toggle: { toggle(thread.id) }, openChanges: openChanges, failed: failed)
+                Group {
+                    if !review.body.isEmpty { GitHubProse(review.body) }
+                    ForEach(review.threads) { thread in
+                        PullRequestThreadView(thread: thread, review: review, entry: entry, sessionID: sessionID,
+                                              unfolded: unfoldedThreads.contains(thread.id),
+                                              toggle: { toggle(thread.id) }, openChanges: openChanges, failed: failed)
+                    }
                 }
+                .transition(.fold)
             }
         }
+        .smoothlyResizes(when: isUnfolded)
         // The prose inside measures itself against the width it is offered. Without a
         // definite one it falls back to its own idea of a line, and draws wrong.
         .frame(maxWidth: .infinity, alignment: .leading)

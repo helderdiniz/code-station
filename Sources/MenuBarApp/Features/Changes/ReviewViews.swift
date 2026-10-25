@@ -178,7 +178,7 @@ struct ReviewCommentCard: View {
             RoundedRectangle(cornerRadius: 10).stroke(focused ? Theme.accent : .clear, lineWidth: 2)
         }
         .contentShape(RoundedRectangle(cornerRadius: 10))
-        .onHover { hovering = $0 }
+        .onPointerHover { hovering = $0 }
         .accessibilityElement(children: .contain)
         .accessibilityLabel(comment.spokenName)
     }
@@ -215,6 +215,7 @@ struct ReviewCommentCard: View {
                         .accessibilityLabel("Delete comment")
                 }
                 .opacity(hovering || focused ? 1 : 0)
+                .motion(Motion.hover, value: hovering || focused)
             }
         }
     }
@@ -525,8 +526,15 @@ struct QuestionThreadView: View {
 
     var body: some View {
         Group {
-            if question.resolved && question.status == .answered { collapsed } else { full }
+            if question.resolved && question.status == .answered {
+                collapsed.transition(.fadeIn)
+            } else {
+                full.transition(.fadeIn)
+            }
         }
+        // Keyed on resolved alone, which only the person changes. An answer landing from
+        // the side copy does not move the thread.
+        .smoothlyResizes(when: question.resolved)
         .accessibilityElement(children: .contain)
         .accessibilityLabel(question.spokenName)
         .onChange(of: question.status) { _, status in
@@ -548,6 +556,7 @@ struct QuestionThreadView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .hoverFill(cornerRadius: 0)
         .accessibilityHint("Opens the question again")
     }
 
@@ -965,7 +974,8 @@ struct StopAnsweringButton: View {
         }
         .buttonStyle(.plain)
         .hoverLift(hovering, amount: Motion.smallLift)
-        .onHover { hovering = $0 }
+        .motion(Motion.hover, value: hovering)
+        .onPointerHover { hovering = $0 }
         .appTooltip("Stop answering  esc")
         .accessibilityLabel("Stop answering")
     }
@@ -1134,7 +1144,9 @@ struct SeatPill<Content: View>: View {
         .background(Capsule().fill(hovering ? Theme.border : Theme.field))
         .contentShape(Capsule())
         .fixedSize()
-        .onHover { hovering = $0 }
+        .hoverLift(hovering)
+        .motion(Motion.hover, value: hovering)
+        .onPointerHover { hovering = $0 }
     }
 }
 
@@ -1155,7 +1167,7 @@ struct SecondOpinionButton: View {
             HStack(spacing: 7) {
                 if !usual.isEmpty {
                     LineupTiles(agents: usual, fanned: hovering, deals: deals)
-                        .animation(HeaderMotion.grow, value: hovering)
+                        .motion(Motion.hover, value: hovering)
                 }
                 Text("Second opinion").font(.system(size: 12, weight: .semibold))
             }
@@ -1167,7 +1179,7 @@ struct SecondOpinionButton: View {
         }
         .buttonStyle(.plain)
         .hoverLift(hovering)
-        .onHover { hovering = $0 }
+        .onPointerHover { hovering = $0 }
         .accessibilityLabel("Ask for a second opinion")
     }
 }
@@ -1332,6 +1344,7 @@ struct SendReviewSheet: View {
                 Button { dialogs.dismiss() } label: {
                     Text("Cancel").font(.system(size: 12, weight: .semibold)).foregroundStyle(.secondary)
                         .contentShape(Rectangle())
+                        .hoverLift()
                 }
                 .buttonStyle(.plain)
                 .keyboardShortcut(.cancelAction)
@@ -1578,9 +1591,11 @@ struct ReviewThreadView: View {
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+                .hoverFill(cornerRadius: 0)
                 .overlay(alignment: .top) { Rectangle().fill(Theme.hairline).frame(height: 1) }
             }
         }
+        .smoothlyResizes(when: showsAllLines)
         .codeBox()
     }
 
@@ -1711,6 +1726,7 @@ struct ReviewThreadView: View {
                     .background(Capsule().fill(Theme.card))
                     .overlay(Capsule().strokeBorder(Theme.plan.opacity(0.45), style: StrokeStyle(lineWidth: 1, dash: [4, 3])))
                     .contentShape(Capsule())
+                    .hoverLift()
                 }
                 .buttonStyle(.plain)
                 .appTooltip("Send this reply")

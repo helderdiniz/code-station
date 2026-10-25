@@ -103,7 +103,7 @@ struct SidebarBrandBar: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .onHover { hovering = $0 }
+        .onPointerHover { hovering = $0 }
         .onGeometryChange(for: CGSize.self) { $0.size } action: { headerSize = $0 }
         .onContinuousHover { phase in
             if case .active(let point) = phase {
@@ -209,7 +209,7 @@ struct SidebarNeedsYouStack: View {
     // The pointer has to settle for this long before the stack opens, so one passing over
     // on its way to the tree does not shove the tree down and back.
     private static let hoverIntent: Duration = .milliseconds(140)
-    private static let resize: Animation = .timingCurve(0.2, 0.8, 0.2, 1, duration: 0.38)
+    private static let resize = Motion.reveal
 
     private var fans: Bool { fanned && waiting.count > 1 }
 
@@ -228,12 +228,12 @@ struct SidebarNeedsYouStack: View {
             }
             .frame(height: height, alignment: .top)
             .frame(maxWidth: .infinity)
-            .animation(reduceMotion ? nil : Self.resize, value: height)
+            .motion(Self.resize, value: height)
         }
         .padding(.horizontal, 14)
         .padding(.top, 12)
         .padding(.bottom, 12)
-        .onHover(perform: hover)
+        .onPointerHover(hover)
         .onDisappear { intent?.cancel() }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Needs you, \(waiting.count)")
@@ -344,7 +344,7 @@ private struct NeedsYouStackCard: View {
                 y: hovering ? 4 : 1)
         .contentShape(RoundedRectangle(cornerRadius: 11))
         .onTapGesture { open(noticed.session) }
-        .onHover { hovering = $0 }
+        .onPointerHover { hovering = $0 }
         .motion(Motion.hover, value: hovering)
         .accessibilityElement(children: .combine)
         .accessibilityLabel(noticed.session.title)

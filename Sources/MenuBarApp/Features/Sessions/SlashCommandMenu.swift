@@ -88,7 +88,7 @@ struct SlashCommandMenu: View {
         .buttonStyle(.plain)
         .accessibilityLabel("\(command.typed). \(command.summary)")
         .accessibilityAddTraits(isSelected ? .isSelected : [])
-        .onHover { hovering in
+        .onPointerHover { hovering in
             if hovering { highlight(index) }
         }
     }

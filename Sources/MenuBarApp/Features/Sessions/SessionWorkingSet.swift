@@ -16,6 +16,7 @@ struct SessionWorkingSet: View {
 
     @Environment(ProjectStore.self) private var store
     @Environment(SessionRunner.self) private var runner
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     @State private var visibility = WorkingSetToolCallVisibility()
     @State private var spans = WorkingSetExpansion()
@@ -221,7 +222,7 @@ struct SessionWorkingSet: View {
         let entries = turn.entries.filter { $0.id != hiddenID }
         return VStack(spacing: 0) {
             WorkingSetTurnHeader(turn: turn, expanded: expanded) {
-                withAnimation(.easeOut(duration: 0.15)) {
+                withAnimation(reduceMotion ? nil : expanded ? Motion.leave : Motion.reveal) {
                     turns.toggle(key, byDefault: isLatest)
                 }
             }
@@ -257,7 +258,7 @@ struct SessionWorkingSet: View {
                     indent: Self.rowIndent,
                     accessibilityLabel: "Show \(hidden) earlier events in this prompt"
                 ) {
-                    visibility.showAll(in: key)
+                    showAll(in: key)
                 }
             } else {
                 WorkingSetVisibilityRow(
@@ -266,10 +267,18 @@ struct SessionWorkingSet: View {
                     indent: Self.rowIndent,
                     accessibilityLabel: "Show only the five newest events in this prompt"
                 ) {
-                    visibility.hideOlder(in: key)
+                    hideOlder(in: key)
                 }
             }
         }
+    }
+
+    private func showAll(in key: String) {
+        withAnimation(reduceMotion ? nil : Motion.reveal) { visibility.showAll(in: key) }
+    }
+
+    private func hideOlder(in key: String) {
+        withAnimation(reduceMotion ? nil : Motion.leave) { visibility.hideOlder(in: key) }
     }
 
     private func spanView(_ activity: WorkingSetActivity) -> some View {
@@ -294,7 +303,7 @@ struct SessionWorkingSet: View {
     private func spanHeader(_ activity: WorkingSetActivity, ink: WorkingSetInk,
                             expanded: Bool, running: Bool) -> some View {
         Button {
-            withAnimation(.easeOut(duration: 0.15)) {
+            withAnimation(reduceMotion ? nil : expanded ? Motion.leave : Motion.reveal) {
                 spans.toggle(activity.id, byDefault: running)
             }
         } label: {
@@ -322,6 +331,7 @@ struct SessionWorkingSet: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .hoverFill(cornerRadius: 0)
         .accessibilityLabel("\(activity.title), \(activity.kind.label)")
         .accessibilityValue("\(activity.state.label), \(expanded ? "expanded" : "collapsed")")
         .accessibilityHint(expanded ? "Hides what this agent ran" : "Shows what this agent ran")
@@ -356,7 +366,7 @@ struct SessionWorkingSet: View {
                         accessibilityLabel:
                             "Show \(hidden) older actions for \(activity.title)"
                     ) {
-                        visibility.showAll(in: activity.id)
+                        showAll(in: activity.id)
                     }
                 } else {
                     WorkingSetVisibilityRow(
@@ -366,7 +376,7 @@ struct SessionWorkingSet: View {
                         accessibilityLabel:
                             "Show only the five newest actions for \(activity.title)"
                     ) {
-                        visibility.hideOlder(in: activity.id)
+                        hideOlder(in: activity.id)
                     }
                 }
                 Divider().overlay(Theme.hairline)
@@ -427,7 +437,7 @@ private struct WorkingSetVisibilityRow: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .onHover { hovering = $0 }
+        .onPointerHover { hovering = $0 }
         .motion(Motion.hover, value: hovering)
         .accessibilityLabel(accessibilityLabel)
     }
@@ -479,7 +489,7 @@ private struct WorkingSetTurnHeader: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .onHover { hovering = $0 }
+        .onPointerHover { hovering = $0 }
         .motion(Motion.hover, value: hovering)
         .appTooltip(turn.prompt)
         .accessibilityLabel("Prompt: \(turn.prompt)")
@@ -542,7 +552,7 @@ private struct WorkingSetTimelineRow: View {
         }
         .buttonStyle(.plain)
         .background(FrameAnchorView(anchor: anchor))
-        .onHover { hovering = $0 }
+        .onPointerHover { hovering = $0 }
         .motion(Motion.hover, value: hovering)
         .appTooltip(presentation.command.map { "\(presentation.verb) \($0)" } ?? call.title)
         .onChange(of: call) { _, call in

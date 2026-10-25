@@ -62,5 +62,7 @@ struct WorkspaceProjectRow: View {
         .overlay {
             RoundedRectangle(cornerRadius: 7).stroke(showsCursor ? Theme.accent : .clear, lineWidth: 2)
         }
+        .hoverFill(cornerRadius: 7)
+        .motion(Motion.control, value: selected)
     }
 }

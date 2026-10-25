@@ -12,6 +12,7 @@ struct WorkspaceDetailView: View {
     @Environment(DialogPresenter.self) private var dialogs
     @Environment(TerminalStore.self) private var terminals
     @Environment(WorkingTreeWatch.self) private var workingTrees
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     @State private var creatingSession: ProjectWorkspace?
     @State private var terminalFocused = false
@@ -25,6 +26,8 @@ struct WorkspaceDetailView: View {
     // The project row under the pointer. Only one row can be hovered, so the id is
     // enough and each row does not need state of its own.
     @State private var hoveredProjectID: UUID?
+    @State private var note: String?
+    @State private var notes = 0
 
     private var terminalScope: TerminalScope { .workspace(workspaceID) }
 
@@ -38,9 +41,20 @@ struct WorkspaceDetailView: View {
                     TerminalDrawer(scope: terminalScope,
                                    directory: lead.path,
                                    focusTerminal: $terminalFocused)
+                        .transition(.drawer(from: .bottom, reduceMotion: reduceMotion))
                 }
             }
             .background(Theme.background)
+            .overlay(alignment: .topTrailing) {
+                ZStack {
+                    if let note {
+                        HeaderNote(icon: "arrow.up.forward.app", text: note)
+                            .padding(.top, Theme.headerHeight + 8).padding(.trailing, 24)
+                            .transition(reduceMotion ? .opacity : .opacity.combined(with: .offset(y: -6)))
+                    }
+                }
+                .motion(Motion.reveal, value: note)
+            }
             .task(id: workspace.projectIDs) { await checkFreshness(workspace) }
             .task(id: workspace.projectIDs) { await watchWorkingTrees(workspace) }
             .sheet(item: $creatingSession) { workspace in
@@ -91,6 +105,7 @@ struct WorkspaceDetailView: View {
                     toggleTerminal(workspace)
                 }
                 .disabled(hasMissingProjects(workspace))
+                .environment(\.showExternalNote, ExternalNote { text, _ in showNote(text) })
                 .opacity(hasMissingProjects(workspace) ? 0.4 : 1)
 
                 ActionButton(title: "New session", tone: .green, size: 12) {
@@ -246,9 +261,11 @@ struct WorkspaceDetailView: View {
                         .foregroundStyle(.tertiary)
                     ForEach(attached) { project in
                         attachedRow(project, workspace: workspace)
+                            .transition(.fold)
                     }
                     addProjectRow(workspace)
                 }
+                .motion(Motion.reveal, value: workspace.projectIDs)
                 .padding(.leading, 18)
                 .overlay(alignment: .leading) {
                     Rectangle().fill(Theme.border).frame(width: 1.5)
@@ -296,8 +313,8 @@ struct WorkspaceDetailView: View {
             .fill(hoveredProjectID == project.id ? Theme.field : .clear))
         .contentShape(RoundedRectangle(cornerRadius: 10))
         .onTapGesture { open(project) }
-        .animation(.easeOut(duration: 0.12), value: hoveredProjectID)
-        .onHover { hovering(project, $0) }
+        .motion(Motion.hover, value: hoveredProjectID)
+        .onPointerHover { hovering(project, $0) }
         .appTooltip("Open \(project.name)")
         .padding(.horizontal, -11)
         .padding(.vertical, -9)
@@ -343,8 +360,8 @@ struct WorkspaceDetailView: View {
             .fill(hoveredProjectID == project.id ? Theme.field : Theme.sunken))
         .contentShape(RoundedRectangle(cornerRadius: 10))
         .onTapGesture { open(project) }
-        .animation(.easeOut(duration: 0.12), value: hoveredProjectID)
-        .onHover { hovering(project, $0) }
+        .motion(Motion.hover, value: hoveredProjectID)
+        .onPointerHover { hovering(project, $0) }
         .appTooltip("Open \(project.name)")
     }
 
@@ -417,9 +434,11 @@ struct WorkspaceDetailView: View {
                 if !report.onDefaultBranch, let expected = report.defaultBranch {
                     MonoChip(text: "NOT ON \(expected.uppercased())", size: 9,
                              tint: Theme.attention)
+                        .hoverLift()
                         .appMenu { freshenMenu(project, report: report) }
                 } else if report.behind > 0 {
                     MonoChip(text: "\(report.behind) BEHIND", size: 9, tint: Theme.attention)
+                        .hoverLift()
                         .appMenu { freshenMenu(project, report: report) }
                 } else {
                     MonoChip(text: "UP TO DATE", size: 9, tint: Theme.addition)
@@ -446,10 +465,8 @@ struct WorkspaceDetailView: View {
                     .appTooltip(workspace.worktreeProjectIDs.contains(project.id)
                                 ? "\(counted(count, "file")) changed in the project folder. A worktree session starts from the last commit, so this work stays behind."
                                 : "\(counted(count, "file")) changed in the project folder. Sessions here run in it, so they start with this work in place.")
-                    .transition(.fadeIn)
             }
         }
-        .animation(.easeOut(duration: 0.2), value: count)
     }
 
     private func freshenMenu(_ project: Project, report: GitFreshness.Report) -> [MenuEntry] {
@@ -482,10 +499,11 @@ struct WorkspaceDetailView: View {
                     ? await GitActions.switchBranch(branch, at: project.path)
                     : await GitActions.updateCheckout(to: branch, at: project.path)
             }
-            if let fresh = await GitFreshness.check(at: project.path, fetch: false) {
-                withAnimation(.easeOut(duration: 0.2)) { freshness[project.id] = fresh }
+            let fresh = await GitFreshness.check(at: project.path, fetch: false)
+            withAnimation(reduceMotion ? nil : Motion.reveal) {
+                if let fresh { freshness[project.id] = fresh }
+                updating.remove(project.id)
             }
-            updating.remove(project.id)
             if let error {
                 dialogs.show(.notice("Could not update \(project.name)", message: error))
             }
@@ -497,8 +515,9 @@ struct WorkspaceDetailView: View {
             .filter(\.isGitRepository)
             .map { (id: $0.id, path: $0.path) }
         for fetch in [false, true] {
+            // These land on their own after the page opens, so they arrive without motion.
             await GitFreshness.checkAll(repositories, fetch: fetch) { id, report in
-                withAnimation(.easeOut(duration: 0.2)) { freshness[id] = report }
+                freshness[id] = report
             }
         }
     }
@@ -558,6 +577,7 @@ struct WorkspaceDetailView: View {
         .overlay(RoundedRectangle(cornerRadius: 10)
             .stroke(Theme.border, lineWidth: 1.2))
         .contentShape(RoundedRectangle(cornerRadius: 10))
+        .hoverFill(cornerRadius: 10)
         .appMenu { addMenu(workspace) }
     }
 
@@ -741,6 +761,19 @@ struct WorkspaceDetailView: View {
 
     private func reveal(_ project: Project) {
         NSWorkspace.shared.activateFileViewerSelecting([project.url])
+        showNote("Showed \(project.name) in Finder")
+    }
+
+    // A second note keeps the line up rather than letting the first one's timer take it
+    // down early.
+    private func showNote(_ text: String) {
+        notes += 1
+        let shown = notes
+        note = text
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(2.4))
+            if notes == shown { note = nil }
+        }
     }
 
     private func hasMissingProjects(_ workspace: ProjectWorkspace) -> Bool {

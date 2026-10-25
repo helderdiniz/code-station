@@ -207,6 +207,8 @@ struct EnvironmentsView: View {
                                         : hoveredEnvironment == env.name ? Theme.field : .clear,
                                         in: RoundedRectangle(cornerRadius: 6))
                             .contentShape(Rectangle())
+                            .motion(Motion.hover, value: hoveredEnvironment == env.name)
+                            .motion(Motion.control, value: env == shown)
                         }
                         .buttonStyle(.plain)
                         .focusable()
@@ -217,7 +219,7 @@ struct EnvironmentsView: View {
                         .onKeyPress(keys: [.space, .return]) { _ in selected = env; return .handled }
                         .accessibilityAddTraits(env == shown ? [.isSelected] : [])
                         .accessibilityLabel(env.label + (env.isDangerous ? ", live environment" : ""))
-                        .onHover { hoveredEnvironment = $0 ? env.name : nil }
+                        .onPointerHover { hoveredEnvironment = $0 ? env.name : nil }
                         .help(env.label)
                     }
                 }.padding(2)
@@ -312,7 +314,9 @@ struct EnvironmentsView: View {
             Divider().overlay(Theme.hairline)
             Button { previewExpanded.toggle() } label: {
                 HStack {
-                    Image(systemName: previewExpanded ? "chevron.down" : "chevron.right")
+                    Image(systemName: "chevron.right")
+                        .rotationEffect(.degrees(previewExpanded ? 90 : 0))
+                        .motion(Motion.control, value: previewExpanded)
                     Text("Preview in a request").fontWeight(.semibold)
                     Spacer()
                     Text("Nothing is sent").foregroundStyle(.secondary)
@@ -320,6 +324,7 @@ struct EnvironmentsView: View {
                 .font(.system(size: 12))
                 .padding(.vertical, 8)
                 .contentShape(Rectangle())
+                .hoverFill(cornerRadius: 4)
             }
             .buttonStyle(.plain)
             .focusable()
@@ -329,8 +334,12 @@ struct EnvironmentsView: View {
                 .stroke(previewFocused ? Theme.accent : .clear, lineWidth: 2))
             .onKeyPress(keys: [.space, .return]) { _ in previewExpanded.toggle(); return .handled }
             .accessibilityValue(previewExpanded ? "Expanded" : "Collapsed")
-            if previewExpanded { requestPreview }
+            if previewExpanded {
+                requestPreview
+                    .transition(.fold)
+            }
         }
+        .motion(Motion.reveal, value: previewExpanded)
     }
 
     private var authenticationEditor: some View {
@@ -540,6 +549,8 @@ struct EnvironmentTokenControls: View {
                 .frame(width: 7, height: 7)
             Text(auth.tokenStatus(for: env))
                 .font(.system(size: 12, weight: .medium))
+                .contentTransition(.interpolate)
+                .motion(Motion.reveal, value: auth.tokenStatus(for: env))
 
             if auth.tokens[env] != nil, !auth.busy.contains(env) {
                 InlineLink(title: "Clear", size: 11, tint: .secondary) { auth.clearToken(for: env) }

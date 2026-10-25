@@ -116,6 +116,7 @@ struct HTMLPreview: View {
     let reference: HTMLPreviewReference
     let projectPath: String
     @Environment(DialogPresenter.self) private var dialogs
+    @Environment(\.htmlPreviewLinkOpened) private var linkOpened
     @State private var document: HTMLPreviewDocument?
     @State private var failure: String?
     @State private var height: CGFloat = 320
@@ -156,7 +157,7 @@ struct HTMLPreview: View {
                     .padding(16)
             } else if let document {
                 HTMLPreviewWebContent(html: document.html, onHeight: { height = $0 },
-                                      onFailure: { failure = $0 })
+                                      onFailure: { failure = $0 }, onOpen: linkOpened)
                     .frame(height: min(max(height, 96), reference.mode == "wide" ? 720 : 560))
             } else {
                 Text("Loading preview…")
@@ -198,6 +199,7 @@ struct HTMLPreviewWebContent: NSViewRepresentable {
     let html: String
     var onHeight: (CGFloat) -> Void = { _ in }
     var onFailure: (String) -> Void = { _ in }
+    var onOpen: ((URL) -> Void)?
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
@@ -233,6 +235,7 @@ struct HTMLPreviewWebContent: NSViewRepresentable {
     func updateNSView(_ webView: WKWebView, context: Context) {
         context.coordinator.onHeight = onHeight
         context.coordinator.onFailure = onFailure
+        context.coordinator.onOpen = onOpen
         guard context.coordinator.loadedHTML != html else { return }
         context.coordinator.loadedHTML = html
         webView.loadHTMLString(html, baseURL: nil)
@@ -250,6 +253,7 @@ struct HTMLPreviewWebContent: NSViewRepresentable {
         var loadedHTML: String?
         var onHeight: (CGFloat) -> Void = { _ in }
         var onFailure: (String) -> Void = { _ in }
+        var onOpen: ((URL) -> Void)?
 
         func userContentController(_ userContentController: WKUserContentController,
                                    didReceive message: WKScriptMessage) {
@@ -271,6 +275,7 @@ struct HTMLPreviewWebContent: NSViewRepresentable {
             if action.navigationType == .linkActivated, let url,
                ["https", "http", "mailto"].contains(url.scheme?.lowercased() ?? "") {
                 NSWorkspace.shared.open(url)
+                onOpen?(url)
             }
             decisionHandler(.cancel)
         }
@@ -290,4 +295,10 @@ struct HTMLPreviewWebContent: NSViewRepresentable {
             onFailure("The HTML preview stopped. Reload to try again.")
         }
     }
+}
+
+extension EnvironmentValues {
+    // A link in a preview opens outside the window, so the screen showing the preview can
+    // leave a note that the click did something.
+    @Entry var htmlPreviewLinkOpened: ((URL) -> Void)? = nil
 }

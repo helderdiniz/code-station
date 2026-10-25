@@ -360,6 +360,8 @@ private struct CandidateRow: View {
         .surface(Theme.card, cornerRadius: 10, border: ticked ? Theme.accent.opacity(0.45) : Theme.border)
         .contentShape(Rectangle())
         .onTapGesture(perform: toggle)
+        .hoverFill(cornerRadius: 10)
+        .motion(Motion.control, value: ticked)
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(ticked ? .isSelected : [])
     }

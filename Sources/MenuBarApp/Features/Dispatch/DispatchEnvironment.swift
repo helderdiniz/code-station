@@ -112,7 +112,7 @@ private struct EnvironmentPill: View {
         .accessibilityLabel("\(env.label), environment key: \(env.name)" + (env.isDangerous ? ", live environment" : ""))
         .accessibilityAddTraits(selected ? [.isSelected] : [])
         .hoverLift(hovering)
-        .onHover { hovering = $0 }
+        .onPointerHover { hovering = $0 }
         .motion(Motion.hover, value: hovering)
     }
 }

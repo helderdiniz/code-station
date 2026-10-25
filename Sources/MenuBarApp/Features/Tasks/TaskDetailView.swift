@@ -26,6 +26,8 @@ struct TaskDetailView: View {
     @State private var askingTask: Project?
     @State private var runFilter: TaskRunHistory.Filter = .all
     @State private var paneWidth: CGFloat = 1_000
+    @State private var note: String?
+    @State private var notes = 0
 
     private var terminalScope: TerminalScope { .project(projectID) }
 
@@ -43,9 +45,20 @@ struct TaskDetailView: View {
                     TerminalDrawer(scope: terminalScope,
                                    directory: task.path,
                                    focusTerminal: $terminalFocused)
+                        .transition(.drawer(from: .bottom, reduceMotion: reduceMotion))
                 }
             }
             .background(Theme.background)
+            .overlay(alignment: .topTrailing) {
+                ZStack {
+                    if let note {
+                        HeaderNote(icon: "arrow.up.forward.app", text: note)
+                            .padding(.top, Theme.headerHeight + 8).padding(.trailing, 24)
+                            .transition(reduceMotion ? .opacity : .opacity.combined(with: .offset(y: -6)))
+                    }
+                }
+                .motion(Motion.reveal, value: note)
+            }
             .taskRunSheet($askingTask) { asking, values, note in
                 startRun(asking, values: values, note: note)
             }
@@ -99,6 +112,7 @@ struct TaskDetailView: View {
                     toggleTerminal(directory: task.path)
                 }
                 .disabled(store.isMissing(task))
+                .environment(\.showExternalNote, ExternalNote { text, _ in showNote(text) })
                 .opacity(store.isMissing(task) ? 0.4 : 1)
             }
             .fixedSize(horizontal: true, vertical: false)
@@ -150,6 +164,7 @@ struct TaskDetailView: View {
             }
             InlineLink(title: "Reveal in Finder", size: 11.5) {
                 NSWorkspace.shared.activateFileViewerSelecting([task.url])
+                showNote("Showed \(task.name) in Finder")
             }
             .fixedSize()
             .layoutPriority(1)
@@ -234,13 +249,17 @@ struct TaskDetailView: View {
                 .padding(.top, 10)
 
             // How to make a hole only matters while writing, but the holes a run will ask
-            // for stay in view, since they change what pressing Run does.
-            if promptFocused || !inputs.isEmpty {
-                holeHint(inputs)
-                    .padding(.horizontal, 18)
-                    .padding(.top, 12)
-                    .transition(.opacity)
+            // for stay in view, since they change what pressing Run does. The motion is
+            // kept to the hint, so the text view above it is never caught up in it.
+            VStack(spacing: 0) {
+                if promptFocused || !inputs.isEmpty {
+                    holeHint(inputs)
+                        .padding(.horizontal, 18)
+                        .padding(.top, 12)
+                        .transition(.fold)
+                }
             }
+            .motion(Motion.reveal, value: promptFocused)
 
             Divider().overlay(Theme.hairline)
                 .padding(.top, 16)
@@ -252,7 +271,6 @@ struct TaskDetailView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .cardSurface(cornerRadius: 12)
-        .animation(Motion.reveal, value: promptFocused)
     }
 
     // What each run will ask for, read off the prompt as it is typed. With nothing to
@@ -304,9 +322,11 @@ struct TaskDetailView: View {
                 }
             }
 
-            Group {
+            VStack(alignment: .leading, spacing: 0) {
                 if shown.isEmpty {
                     emptyRuns(hasRuns: !runs.isEmpty)
+                        .id(runFilter)
+                        .transition(.fadeIn)
                 } else {
                     LazyVStack(alignment: .leading, spacing: 0) {
                         ForEach(days) { day in
@@ -319,11 +339,14 @@ struct TaskDetailView: View {
                             }
                         }
                     }
+                    .id(runFilter)
+                    .transition(.fadeIn)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .clipShape(RoundedRectangle(cornerRadius: 12))
             .cardSurface(cornerRadius: 12)
+            .motion(Motion.reveal, value: runFilter)
         }
     }
 
@@ -400,6 +423,7 @@ struct TaskDetailView: View {
             SessionUnread.menuEntry(for: session.id, store: store),
             .item("Reveal in Finder") {
                 NSWorkspace.shared.activateFileViewerSelecting([task.url])
+                showNote("Showed \(task.name) in Finder")
             },
             .separator,
             .item("Delete run", kind: .destructive) { confirmRemove(session) }
@@ -619,6 +643,7 @@ struct TaskDetailView: View {
         .foregroundStyle(choice.warning ? Theme.deletion
                                         : choice.overridden ? Theme.accent : Color.secondary)
         .fixedSize()
+        .hoverLift()
         .appMenu { menuEntries(choice, badged: false) }
         .appTooltip(choice.overridden ? "\(choice.help) Overridden for this task." : choice.help)
     }
@@ -639,6 +664,7 @@ struct TaskDetailView: View {
         }
         .foregroundStyle(overridden ? Theme.accent : Color.secondary)
         .fixedSize()
+        .hoverLift()
         .appMenu {
             choices.enumerated().flatMap { index, choice -> [MenuEntry] in
                 (index == 0 ? [] : [.separator]) + menuEntries(choice, badged: true)
@@ -712,6 +738,18 @@ struct TaskDetailView: View {
         var updated = spec(task)
         edit(&updated)
         store.setTaskSpec(updated, for: task.id)
+    }
+
+    // A second note keeps the line up rather than letting the first one's timer take it
+    // down early.
+    private func showNote(_ text: String) {
+        notes += 1
+        let shown = notes
+        note = text
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(2.4))
+            if notes == shown { note = nil }
+        }
     }
 
     private func run(_ task: Project) {

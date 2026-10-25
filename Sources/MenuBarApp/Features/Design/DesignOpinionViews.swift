@@ -94,6 +94,7 @@ struct DesignOpinionPanel: View {
     let stop: (SecondOpinion.Reviewer) -> Void
     let close: () -> Void
 
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var editing: UUID?
     @State private var draft = ""
 
@@ -116,13 +117,14 @@ struct DesignOpinionPanel: View {
                         }
                         ForEach(Array(opinion.notes.enumerated()), id: \.element.id) { index, note in
                             card(note, number: index + 1).id(note.id)
+                                .transition(.fold)
                         }
                     }
                     .padding(14)
                 }
                 .onChange(of: revealedNote) { _, id in
                     guard let id else { return }
-                    withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo(id, anchor: .center) }
+                    withAnimation(reduceMotion ? nil : Motion.reveal) { proxy.scrollTo(id, anchor: .center) }
                     revealedNote = nil
                 }
             }
@@ -209,11 +211,15 @@ struct DesignOpinionPanel: View {
                     .overlay(RoundedRectangle(cornerRadius: 6).stroke(Theme.border))
                 HStack(spacing: 10) {
                     ActionButton(title: "Save and keep", tone: .green, height: 24, size: 11) {
-                        edit(note.id, draft)
-                        editing = nil
+                        animate(Motion.reveal) {
+                            edit(note.id, draft)
+                            editing = nil
+                        }
                     }
                     .disabled(draft.isBlank)
-                    InlineLink(title: "Cancel", size: 11, tint: Color.secondary) { editing = nil }
+                    InlineLink(title: "Cancel", size: 11, tint: Color.secondary) {
+                        animate(Motion.leave) { editing = nil }
+                    }
                 }
             } else {
                 ReviewText(text: note.text, size: 12)
@@ -227,12 +233,16 @@ struct DesignOpinionPanel: View {
                         Label(note.edited ? "Edited and kept" : "Kept", systemImage: "checkmark")
                             .font(.system(size: 11, weight: .semibold)).foregroundStyle(Theme.dotOnText)
                     } else {
-                        ActionButton(title: "Keep", tone: .green, height: 24, size: 11) { keep(note.id) }
-                        InlineLink(title: "Dismiss", size: 11, tint: Color.secondary) { dismissNote(note.id) }
+                        ActionButton(title: "Keep", tone: .green, height: 24, size: 11) {
+                            animate(Motion.reveal) { keep(note.id) }
+                        }
+                        InlineLink(title: "Dismiss", size: 11, tint: Color.secondary) {
+                            animate(Motion.leave) { dismissNote(note.id) }
+                        }
                     }
                     InlineLink(title: "Edit", size: 11, tint: Color.secondary) {
                         draft = note.text
-                        editing = note.id
+                        animate(Motion.reveal) { editing = note.id }
                     }
                     Spacer(minLength: 0)
                     place(note)
@@ -244,8 +254,9 @@ struct DesignOpinionPanel: View {
                                                             : note.severity == .must ? Theme.deletion.opacity(0.04) : Theme.field))
         .overlay(RoundedRectangle(cornerRadius: 10)
             .strokeBorder(hot ? Self.tint(note.severity) : Theme.border, lineWidth: hot ? 2 : 1))
+        .motion(Motion.hover, value: hot)
         .contentShape(RoundedRectangle(cornerRadius: 10))
-        .onHover { inside in
+        .onPointerHover { inside in
             if inside { hotNote = note.id } else if hotNote == note.id { hotNote = nil }
         }
         .accessibilityElement(children: .contain)
@@ -261,9 +272,12 @@ struct DesignOpinionPanel: View {
                     .font(.system(size: 11)).foregroundStyle(.tertiary).lineLimit(1)
             } else {
                 Button { showScreen(id) } label: {
+                    // Lifted inside the label, since the button carries an AppKit tooltip
+                    // that cannot be laid out under a scale.
                     Label("On \(title)", systemImage: "mappin")
                         .font(.system(size: 11, weight: .semibold)).foregroundStyle(Theme.accent).lineLimit(1)
                         .contentShape(Rectangle())
+                        .hoverLift()
                 }
                 .buttonStyle(.plain)
                 .appTooltip("Show the \(title) screen")
@@ -286,6 +300,12 @@ struct DesignOpinionPanel: View {
         }
         .padding(14)
         .overlay(alignment: .top) { Rectangle().fill(Theme.hairline).frame(height: 1) }
+    }
+
+    // The note changes the user asked for are animated where they are made, so notes
+    // that arrive from the reviewers while they work land without motion.
+    private func animate(_ animation: Animation, _ change: () -> Void) {
+        withAnimation(reduceMotion ? nil : animation, change)
     }
 
     static func tint(_ severity: ReviewComment.Severity) -> Color {

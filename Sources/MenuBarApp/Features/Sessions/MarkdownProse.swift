@@ -745,6 +745,7 @@ struct SelectableText: View {
     @Environment(\.linkHovered) private var linkHovered
     // Optional because a text view can sit in a sheet that has no menu layer of its own.
     @Environment(MenuPresenter.self) private var menus: MenuPresenter?
+    @Environment(\.showExternalNote) private var showExternalNote
 
     private let attributed: AttributedString
     private let size: CGFloat
@@ -883,7 +884,8 @@ struct SelectableText: View {
             openLink: openLink,
             linkHoverChanged: linkHoverChanged,
             showMenu: menus.map { menus in { entries, point in menus.show(entries, at: point) } },
-            reply: transcriptReply?.action)
+            reply: transcriptReply?.action,
+            note: showExternalNote.show)
             // NSViewRepresentable does not pass NSTextView's baseline to SwiftUI.
             // The font metric keeps this text on the baseline of whatever it sits
             // beside, such as the marker on a list row.
@@ -970,6 +972,8 @@ private final class LinkTextView: NSTextView {
     var linkHoverChanged: ((TranscriptLink.Hovered?) -> Void)?
     var showMenu: (([MenuEntry], CGPoint) -> Void)?
     var reply: ((String) -> Void)?
+    // A copy changes nothing on screen, so this is how the click shows.
+    var note: ((_ text: String, _ icon: String) -> Void)?
     // Absent for a text view outside a transcript, such as one in a file preview,
     // which selects on its own exactly as AppKit intends.
     var selection: TranscriptSelection?
@@ -1108,13 +1112,18 @@ private final class LinkTextView: NSTextView {
         var entries: [MenuEntry] = []
         let point = convert(event.locationInWindow, from: nil)
         if let link = TranscriptLink.hoveredLink(in: self, at: point) {
-            let address = link.url.isFileURL ? link.url.path : link.url.absoluteString
-            entries.append(.item(link.url.isFileURL ? "Copy path" : "Copy link", icon: "link") {
+            let isFile = link.url.isFileURL
+            let address = isFile ? link.url.path : link.url.absoluteString
+            entries.append(.item(isFile ? "Copy path" : "Copy link", icon: "link") { [note] in
                 Pasteboard.copy(address)
+                note?(isFile ? "Copied the path" : "Copied the link", "checkmark")
             })
         }
         if let text = selectedTextForMenu {
-            entries.append(.item("Copy", icon: "doc.on.doc") { Pasteboard.copy(text) })
+            entries.append(.item("Copy", icon: "doc.on.doc") { [note] in
+                Pasteboard.copy(text)
+                note?("Copied", "checkmark")
+            })
             if let reply {
                 entries.append(.item("Reply", icon: "arrowshape.turn.up.left") { reply(text) })
             }
@@ -1296,6 +1305,7 @@ private struct LinkAwareText: NSViewRepresentable {
     let linkHoverChanged: (TranscriptLink.Hovered?) -> Void
     let showMenu: (([MenuEntry], CGPoint) -> Void)?
     let reply: ((String) -> Void)?
+    let note: ((_ text: String, _ icon: String) -> Void)?
 
     func makeCoordinator() -> Coordinator { Coordinator(openLink: openLink) }
 
@@ -1335,6 +1345,7 @@ private struct LinkAwareText: NSViewRepresentable {
         view.linkHoverChanged = linkHoverChanged
         view.showMenu = showMenu
         view.reply = reply
+        view.note = note
         view.selection = selection
         selection?.register(view, role: role)
         view.find = find
@@ -1348,6 +1359,7 @@ private struct LinkAwareText: NSViewRepresentable {
         (view as? LinkTextView)?.linkHoverChanged = linkHoverChanged
         (view as? LinkTextView)?.showMenu = showMenu
         (view as? LinkTextView)?.reply = reply
+        (view as? LinkTextView)?.note = note
         (view as? LinkTextView)?.selection = selection
         // Unconditional: this is how a block joins the selection that runs across the
         // page, and a view that stopped re-registering would drop out of it.

@@ -14,6 +14,7 @@ struct NewWorkspaceSessionView: View {
     @Environment(ProjectStore.self) private var store
     @Environment(SessionRunner.self) private var runner
     @Environment(AppSettings.self) private var appSettings
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     @State private var sessionID = UUID()
     @State private var projectIDs: [UUID]
@@ -65,12 +66,15 @@ struct NewWorkspaceSessionView: View {
                             Label("Attach a project", systemImage: "plus")
                                 .font(.system(size: 12, weight: .semibold))
                                 .foregroundStyle(Theme.accent)
+                                .contentShape(Rectangle())
+                                .hoverLift()
                                 .appMenu { attachMenu }
                         }
                     }
                     ForEach(projectIDs, id: \.self) { id in
                         if let project = store.project(id) {
                             projectCard(project, lead: id == workspace.leadProjectID)
+                                .transition(cardTransition)
                         }
                     }
 
@@ -122,10 +126,8 @@ struct NewWorkspaceSessionView: View {
         let repositories = projects.map { (id: $0.id, path: $0.path) }
         for fetch in [false, true] {
             await GitFreshness.checkAll(repositories, fetch: fetch) { id, report in
-                withAnimation(.easeOut(duration: 0.2)) {
-                    freshness[id] = report
-                    selectRecommendedStartPoint(for: id)
-                }
+                freshness[id] = report
+                selectRecommendedStartPoint(for: id)
             }
         }
     }
@@ -182,7 +184,9 @@ struct NewWorkspaceSessionView: View {
     private var attachMenu: [MenuEntry] {
         attachableProjects.map { project in
             .item(project.name, subtitle: project.collapsedPath) {
-                projectIDs.append(project.id)
+                withAnimation(reduceMotion ? nil : Motion.reveal) {
+                    projectIDs.append(project.id)
+                }
                 if project.isGitRepository {
                     worktrees.insert(project.id)
                     Task { await check([project]) }
@@ -191,8 +195,18 @@ struct NewWorkspaceSessionView: View {
         }
     }
 
+    // Under Reduce Motion the list closes up at once and only the card's fade is left.
+    private var cardTransition: AnyTransition {
+        reduceMotion
+            ? .asymmetric(insertion: AnyTransition.opacity.animation(Motion.reveal),
+                          removal: AnyTransition.opacity.animation(Motion.leave))
+            : .asymmetric(insertion: .fadeIn, removal: .fold)
+    }
+
     private func detach(_ id: UUID) {
-        projectIDs.removeAll { $0 == id }
+        withAnimation(reduceMotion ? nil : Motion.leave) {
+            projectIDs.removeAll { $0 == id }
+        }
         worktrees.remove(id)
         startPoints.removeValue(forKey: id)
         chosenStartPoints.remove(id)

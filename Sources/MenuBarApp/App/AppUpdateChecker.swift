@@ -89,6 +89,9 @@ final class AppUpdateChecker {
     private(set) var dismissedVersion: String?
     private(set) var installState = AppUpdateInstallState.idle
     private(set) var isRelaunching = false
+    // Counts each time the release page is opened in the browser. The page opens outside
+    // the window, so the window watches this to leave a note that the click landed.
+    private(set) var releasePageOpenings = 0
 
     @ObservationIgnored private let installedVersion: AppVersion?
     @ObservationIgnored private let preferences: UserDefaults
@@ -182,12 +185,14 @@ final class AppUpdateChecker {
         guard let availableRelease else { return }
         dismissAnnouncement()
         NSWorkspace.shared.open(availableRelease.pageURL)
+        releasePageOpenings += 1
     }
 
     // Reading what changed is not taking the update, so the offer stays on screen.
     func openReleaseNotes() {
         guard let availableRelease else { return }
         NSWorkspace.shared.open(availableRelease.pageURL)
+        releasePageOpenings += 1
     }
 
     // Fetches the signed image, checks it, and swaps it in, leaving the running app to

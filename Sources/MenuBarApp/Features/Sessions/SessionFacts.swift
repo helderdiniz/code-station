@@ -132,6 +132,9 @@ struct SessionFactsChip: View {
     let openChanges: () -> Void
     let contextActions: () -> [MenuEntry]
     let usageTooltip: () -> Tooltip
+    // The PR row opens the browser, which leaves nothing in the window to show the click
+    // worked, so the header shows a note instead.
+    var showNote: (String) -> Void = { _ in }
 
     // The card hangs off the pill rather than being placed by a presenter: it belongs to
     // this corner of the band, and nothing above the band can clip it.
@@ -146,14 +149,13 @@ struct SessionFactsChip: View {
     private static let radius: CGFloat = 12
     // Strong enough to read on the cream card, still a step under the values.
     private static let labelInk = Color.primary.opacity(0.42)
-    private static let opening = Animation.timingCurve(0.2, 0.8, 0.2, 1, duration: 0.26)
-    private static let closing = Animation.easeIn(duration: 0.16)
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(AccountUsageMonitor.self) private var usageMonitor: AccountUsageMonitor?
 
     @State private var pointerOnChip = false
     @State private var pointerOnCard = false
+    @State private var pillCentre: CGPoint?
     @State private var hovering = false
     @State private var closing: Task<Void, Never>?
     // Hover alone would make a card that can be read but not used, since reaching a row
@@ -181,15 +183,21 @@ struct SessionFactsChip: View {
             }
         } label: { pill }
             .buttonStyle(PressDip(scale: 0.97))
-            .onHover { pointerOnChip = $0; pointerMoved() }
+            .onPointerHover { pointerOnChip = $0; pointerMoved() }
+            .onCentreChange { pillCentre = $0 }
             .accessibilityLabel(Self.accessibilityLabel(
                 state: state, facts: facts, showsBranch: showsBranch))
             .accessibilityValue(isOpen ? "Expanded" : "Collapsed")
             .background(WindowAnchor(monitor: escape))
             .overlay(alignment: .topTrailing) {
-                if isOpen { hoverCard }
+                // The card is moved under the pill out here rather than on itself, so
+                // the mask it grows from the pill sits where the card is drawn.
+                ZStack {
+                    if isOpen { hoverCard }
+                }
+                .offset(y: Self.pillHeight)
             }
-            .animation(reduceMotion ? nil : isOpen ? Self.opening : Self.closing, value: isOpen)
+            .motion(isOpen ? Motion.reveal : Motion.leave, value: isOpen)
             .onChange(of: facts.context) { old, new in
                 guard let old, let new else { return }
                 let given = Int(((old - new) * 100).rounded())
@@ -324,12 +332,8 @@ struct SessionFactsChip: View {
             card
         }
         .fixedSize()
-        .offset(y: Self.pillHeight)
-        .onHover { pointerOnCard = $0; pointerMoved() }
-        // A rise and a fade, without the scale the card could also take: the card holds
-        // tooltips and hover lifts, which AppKit cannot lay out under a scale.
-        .transition(.asymmetric(insertion: .opacity.combined(with: .offset(y: -4)),
-                                removal: .opacity.combined(with: .offset(y: -3))))
+        .onPointerHover { pointerOnCard = $0; pointerMoved() }
+        .transition(.grow(from: pillCentre, reduceMotion: reduceMotion))
     }
 
     private var card: some View {
@@ -542,6 +546,7 @@ struct SessionFactsChip: View {
             CardLink(action: acting {
                 guard let url = URL(string: pullRequest.url) else { return }
                 NSWorkspace.shared.open(url)
+                showNote("Opened #\(pullRequest.number) in the browser")
             }) { hovering in
                 HStack(spacing: 6) {
                     if namesRepositories, let repository = pullRequest.repository {
@@ -865,7 +870,7 @@ private struct RowArrival: ViewModifier {
             .onAppear {
                 guard !reduceMotion else { return }
                 let delay = 0.06 + Double(position) * 0.028
-                withAnimation(.timingCurve(0.2, 0.8, 0.2, 1, duration: 0.32).delay(delay)) {
+                withAnimation(Motion.reveal.delay(delay)) {
                     arrived = true
                 }
             }
@@ -898,7 +903,7 @@ private struct CardLink<Content: View>: View {
         .overlay(FocusRingStroke(focused: focused))
         .padding(.horizontal, -4)
         .padding(.vertical, -2)
-        .onHover { hovering = $0 }
+        .onPointerHover { hovering = $0 }
         .motion(Motion.hover, value: hovering)
     }
 }
@@ -907,7 +912,7 @@ private struct CardLink<Content: View>: View {
 // after that, so a fresh check or a compact is seen as a change. It can carry the mark
 // where an even pace would be by now, and shimmers while a new reading is on its way.
 private struct LedgerMeter: View {
-    static let fill = Animation.timingCurve(0.2, 0.8, 0.2, 1, duration: 0.7)
+    static let fill = Motion.draw
     static let height: CGFloat = 5
 
     let fraction: Double
@@ -1024,7 +1029,7 @@ private struct UsageRefreshButton: View {
         .focused($focused)
         .overlay(FocusRingStroke(focused: focused))
         .hoverLift(hovering, amount: Motion.smallLift)
-        .onHover { hovering = $0 }
+        .onPointerHover { hovering = $0 }
         .motion(Motion.hover, value: hovering)
     }
 
@@ -1186,7 +1191,7 @@ final class FlowingRailView: LoopLayerView {
 // and its colour is decoration rather than a second warning scale. Near the end, its tip
 // burns like a fuse to make a window that needs attention hard to miss.
 struct ContextHairline: View {
-    static let fuseThreshold = 0.8
+    nonisolated static let fuseThreshold = 0.8
 
     let fraction: Double
     let animated: Bool

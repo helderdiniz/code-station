@@ -55,7 +55,7 @@ struct CleanupStrip: View {
         .disabled(isWorking)
         .opacity(isWorking ? 0.55 : 1)
         .motion(Motion.hover, value: hovering)
-        .onHover { hovering = $0 }
+        .onPointerHover { hovering = $0 }
         .accessibilityLabel(label)
     }
 

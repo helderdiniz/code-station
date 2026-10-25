@@ -5,10 +5,13 @@ import SwiftUI
 // here, so the point of this screen is to have them without leaving the window.
 struct LogView: View {
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     @State private var lines: [LogLine] = []
     @State private var lastWritten: Date?
     @State private var follow = true
+    @State private var note: String?
+    @State private var notes = 0
 
     // How often the file is checked while the screen is open. The log is written from a
     // read handler on every chunk of CLI output, so anything faster would be a poll for
@@ -20,12 +23,37 @@ struct LogView: View {
             header
             content
             SheetFooter(dismiss: { dismiss() }) {
-                InlineLink(title: "Reveal in Finder") { SessionLog.revealInFinder() }
+                InlineLink(title: "Reveal in Finder") {
+                    SessionLog.revealInFinder()
+                    showNote("Revealed the session log in Finder")
+                }
             }
         }
         .frame(width: 760, height: 560)
         .background(Theme.background)
+        .overlay(alignment: .topTrailing) {
+            ZStack {
+                if let note {
+                    HeaderNote(icon: "folder", text: note)
+                        .padding(.top, Theme.headerHeight + 8).padding(.trailing, 20)
+                        .transition(reduceMotion ? .opacity : .opacity.combined(with: .offset(y: -6)))
+                }
+            }
+            .motion(Motion.reveal, value: note)
+        }
         .task { await watch() }
+    }
+
+    // A second note keeps the line up rather than letting the first one's timer take it
+    // down early.
+    private func showNote(_ text: String) {
+        notes += 1
+        let shown = notes
+        note = text
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(2.4))
+            if notes == shown { note = nil }
+        }
     }
 
     private var header: some View {
@@ -78,7 +106,7 @@ struct LogView: View {
                 }
                 .onChange(of: follow) { _, following in
                     guard following else { return }
-                    withAnimation(.easeOut(duration: 0.2)) {
+                    withAnimation(reduceMotion ? nil : Motion.reveal) {
                         scroller.scrollTo(Self.bottom, anchor: .bottom)
                     }
                 }

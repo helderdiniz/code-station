@@ -72,6 +72,7 @@ struct SideBySideDiff: View {
     @State private var numberFrames: [DiffAnchor: CGRect] = [:]
     @State private var dragStart: DiffAnchor?
     @State private var dragEnd: DiffAnchor?
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private static let space = "sideBySideRows"
 
@@ -84,8 +85,9 @@ struct SideBySideDiff: View {
                         if let gap = row.left?.gap {
                             HStack {
                                 ForEach([DiffExpandDirection.up, .all, .down], id: \.self) { direction in
-                                    Button("Show context \(direction.rawValue)") { expand(gap.key, direction) }
-                                        .buttonStyle(.plain)
+                                    InlineLink(title: "Show context \(direction.rawValue)", size: 11) {
+                                        expand(gap.key, direction)
+                                    }
                                 }
                             }
                             .font(.system(size: 11)).padding(8)
@@ -116,7 +118,7 @@ struct SideBySideDiff: View {
                 .frame(width: max(760, geometry.size.width))
             }
             .onChange(of: reveal) { _, reveal in
-                if let reveal { withAnimation(Motion.reveal) { proxy.scrollTo(reveal.line, anchor: .center) } }
+                if let reveal { withAnimation(reduceMotion ? nil : Motion.reveal) { proxy.scrollTo(reveal.line, anchor: .center) } }
             }
             .onAppear {
                 if let reveal { proxy.scrollTo(reveal.line, anchor: .center) }

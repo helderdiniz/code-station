@@ -46,6 +46,7 @@ struct TraceWaterfallView: View {
     @State private var listWidth: CGFloat = 0
     @FocusState private var keyboardFocus: Bool
     @Namespace private var lensTrack
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private let hiddenCounts: [String: Int]
 
@@ -183,14 +184,18 @@ struct TraceWaterfallView: View {
             HStack(spacing: 5) {
                 Image(systemName: copiedID ? "checkmark" : "doc.on.doc")
                     .font(.system(size: 10 * textScale, weight: .semibold))
+                    .contentTransition(reduceMotion ? .identity : .symbolEffect(.replace))
                 Text(copiedID ? "Copied" : String(trace.traceID.prefix(8)))
                     .scaledMono(11)
+                    .contentTransition(.opacity)
             }
             .foregroundStyle(copiedID ? Theme.addition : Color.secondary)
             .modifier(TraceChip())
             .contentShape(Rectangle())
+            .hoverLift()
         }
         .buttonStyle(.plain)
+        .motion(Motion.pop, value: copiedID)
         .appTooltip("Copy trace ID")
         .accessibilityLabel("Copy trace ID \(trace.traceID)")
     }
@@ -221,6 +226,7 @@ struct TraceWaterfallView: View {
                             .foregroundStyle(Theme.deletion)
                             .underline(lens == .failed)
                             .contentShape(Rectangle())
+                            .hoverLift()
                     }
                     .buttonStyle(.plain)
                     .appTooltip(lens == .failed ? "Show all spans" : "Show only failed spans")
@@ -307,9 +313,10 @@ struct TraceWaterfallView: View {
             .background(RoundedRectangle(cornerRadius: 6).fill(focused ? Theme.field : .clear))
             .opacity(focusedService == nil || focused ? 1 : 0.5)
             .contentShape(Rectangle())
+            .hoverLift(previewedService == service)
         }
         .buttonStyle(.plain)
-        .onHover { inside in
+        .onPointerHover { inside in
             if inside {
                 previewedService = service
             } else if previewedService == service {
@@ -559,6 +566,7 @@ struct TraceWaterfallView: View {
         }
         .frame(height: 28 * textScale)
         .background(selected == row.id || isOpen ? Theme.field : Color.clear)
+        .hoverFill(cornerRadius: 0)
         .contentShape(Rectangle())
         .onTapGesture {
             selected = row.id
@@ -1132,9 +1140,11 @@ struct TraceWaterfallView: View {
                             .foregroundStyle(copiedValue == id ? Theme.addition : Color.primary)
                             .multilineTextAlignment(.leading)
                             .fixedSize(horizontal: false, vertical: true)
+                            .contentTransition(.opacity)
                             .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
+                    .motion(Motion.hover, value: copiedValue == id)
                     .appTooltip("Copy value")
                     .accessibilityLabel("\(attribute.key): \(attribute.value)")
                     .accessibilityHint("Copies the value")

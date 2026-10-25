@@ -18,6 +18,7 @@ struct SessionRunButton: View {
     @Environment(ShortcutStore.self) private var shortcuts
     @Environment(ProjectStore.self) private var store
     @Environment(DialogPresenter.self) private var dialogs
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     let session: ChatSession
     let edit: (ShortcutEditorRequest) -> Void
@@ -116,8 +117,11 @@ struct SessionRunButton: View {
                 .shadow(color: .black.opacity(0.16), radius: 18, y: 7)
         }
         .opacity(listOpen ? 1 : 0)
-        .offset(y: listOpen ? 0 : 8)
-        .motion(listOpen ? Motion.pop : Motion.leave, value: listOpen)
+        .offset(y: listOpen || reduceMotion ? 0 : 8)
+        // Not `.motion`, which would stand still under Reduce Motion: there the tray
+        // still fades, it only stops moving.
+        .animation(listOpen ? (reduceMotion ? Motion.reveal : Motion.pop) : Motion.leave,
+                   value: listOpen)
         .allowsHitTesting(listOpen)
         .background(FrameAnchorView(anchor: listAnchor))
         .accessibilityElement(children: .contain)
@@ -159,7 +163,11 @@ struct SessionRunButton: View {
     // Cards rise from the button nearest first, a beat apart, and all drop together. No
     // scale: a card carries AppKit views that cannot be laid out under one.
     private func rise(order: Int) -> AnyTransition {
-        .asymmetric(
+        guard !reduceMotion else {
+            return .asymmetric(insertion: .opacity.animation(Motion.reveal),
+                               removal: .opacity.animation(Motion.leave))
+        }
+        return .asymmetric(
             insertion: .offset(y: 14).combined(with: .opacity)
                 .animation(Motion.pop.delay(Double(order) * 0.038)),
             removal: .opacity.animation(Motion.leave))
@@ -441,7 +449,7 @@ private struct RunHalf: View {
         .buttonStyle(.plain)
         .fixedSize()
         .hoverLift(hovering)
-        .onHover { hovering = $0 }
+        .onPointerHover { hovering = $0 }
         .motion(Motion.hover, value: hovering)
         .motion(Motion.control, value: running)
         .accessibilityLabel(running ? "Show the output of \(name)" : "Run \(name)")
@@ -481,7 +489,7 @@ private struct ListHalf: View {
         .buttonStyle(.plain)
         .fixedSize()
         .hoverLift(hovering)
-        .onHover { hovering = $0 }
+        .onPointerHover { hovering = $0 }
         .motion(Motion.hover, value: hovering)
         .accessibilityLabel("All commands")
         .accessibilityValue(open ? "Expanded" : "Collapsed")
@@ -689,7 +697,7 @@ private struct CommandCard: View {
             .contentShape(RoundedRectangle(cornerRadius: 11))
         }
         .buttonStyle(.plain)
-        .onHover { hovering = $0 }
+        .onPointerHover { hovering = $0 }
         .motion(Motion.hover, value: hovering)
         .accessibilityLabel(name)
         .accessibilityValue(accessibilityDetail)

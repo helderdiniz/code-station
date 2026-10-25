@@ -11,6 +11,10 @@ struct PullRequestReviewsView: View {
 
     @State private var failure: String?
     @State private var showing: PullRequestReviewerFilter = .everyone
+    @State private var note: String?
+    @State private var noteIcon = "arrow.up.forward.app"
+    @State private var notes = 0
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var entries: [PullRequestReviewStore.Loaded] { reviews.loaded[sessionID] ?? [] }
     private var isLoading: Bool { reviews.loading.contains(sessionID) }
@@ -23,6 +27,7 @@ struct PullRequestReviewsView: View {
                         if failure != nil { GlyphButton(icon: "xmark", side: 22) { failure = nil } }
                     }
                     .surface(Theme.warningBackground, cornerRadius: 10, border: .clear)
+                    .transition(.fold)
                 }
                 if !entries.isEmpty { filterRow }
                 ForEach(entries, id: \.pullRequest.url) { entry in
@@ -34,8 +39,35 @@ struct PullRequestReviewsView: View {
             .padding(20)
             .frame(maxWidth: 860)
             .frame(maxWidth: .infinity)
+            // Only a failure the person can dismiss moves the page. An error from a
+            // background read just appears.
+            .smoothlyResizes(when: failure)
         }
         .background(Theme.background)
+        .environment(\.showExternalNote, ExternalNote(showNote))
+        .overlay(alignment: .topTrailing) {
+            ZStack {
+                if let note {
+                    HeaderNote(icon: noteIcon, text: note)
+                        .padding(.top, 12).padding(.trailing, 20)
+                        .transition(reduceMotion ? .opacity : .opacity.combined(with: .offset(y: -6)))
+                }
+            }
+            .motion(Motion.reveal, value: note)
+        }
+    }
+
+    // A second note keeps the line up rather than letting the first one's timer take it
+    // down early.
+    private func showNote(_ text: String, icon: String) {
+        notes += 1
+        let shown = notes
+        noteIcon = icon
+        note = text
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(2.4))
+            if notes == shown { note = nil }
+        }
     }
 
     private var filterRow: some View {
@@ -70,6 +102,7 @@ struct PullRequestReviewsView: View {
 
 // One pull request: its name and state, then its reviewers, each behind a fold.
 private struct PullRequestCard: View {
+    @Environment(\.showExternalNote) private var showExternalNote
     let entry: PullRequestReviewStore.Loaded
     let sessionID: UUID
     let showing: PullRequestReviewerFilter
@@ -105,7 +138,9 @@ private struct PullRequestCard: View {
             Spacer(minLength: 8)
             Text(entry.status.headBranch).font(.mono(11)).foregroundStyle(.secondary).lineLimit(1)
             GlyphButton(icon: "arrow.up.right.square", side: 24) {
-                if let url = URL(string: entry.pullRequest.url) { NSWorkspace.shared.open(url) }
+                guard let url = URL(string: entry.pullRequest.url) else { return }
+                NSWorkspace.shared.open(url)
+                showExternalNote("Opened on GitHub", "arrow.up.forward.app")
             }
             .appTooltip("Open on GitHub")
         }

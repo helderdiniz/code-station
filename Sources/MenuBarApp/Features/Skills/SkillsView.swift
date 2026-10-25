@@ -34,6 +34,7 @@ struct SkillsView: View {
     @State private var sourceFilter: String?
     @State private var hoveredControl: String?
     @FocusState private var focusedUninstall: String?
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     init(manager: SkillsManager) {
         _manager = State(initialValue: manager)
@@ -59,8 +60,10 @@ struct SkillsView: View {
                     filter = .all
                     showingMarketplaces = false
                 }
+                .transition(.headerPage(reduceMotion: reduceMotion))
             } else {
                 content
+                    .transition(.headerPage(reduceMotion: reduceMotion))
             }
             SheetFooter(dismiss: { dismiss() }) {
                 Text("Installs apply to your user account across projects. Agents are managed separately.")
@@ -71,6 +74,7 @@ struct SkillsView: View {
         .frame(width: min(1080, (NSScreen.main?.visibleFrame.width ?? 1200) - 80),
                height: min(720, (NSScreen.main?.visibleFrame.height ?? 860) - 80))
         .background(Theme.background)
+        .motion(Motion.reveal, value: showingMarketplaces)
         .task { await manager.refresh() }
         .onChange(of: manager.marketplaceConfigurations) { _, sources in
             if let sourceFilter, !sources.contains(where: { $0.marketplace == sourceFilter }) {
@@ -100,6 +104,8 @@ struct SkillsView: View {
                              icon: "arrow.clockwise") {
                     Task { await manager.refresh() }
                 }
+                .contentTransition(.interpolate)
+                .motion(Motion.reveal, value: manager.isRefreshing)
                 .disabled(manager.isBusy)
                 .appTooltip("Refresh all marketplaces and installed versions")
             }
@@ -135,7 +141,10 @@ struct SkillsView: View {
                         Spacer()
                         ActionButton(title: manager.isUpdatingAll ? "Updating…" : "Update all", tone: .outlined) {
                             Task { await manager.updateAll() }
-                        }.disabled(manager.isBusy)
+                        }
+                        .contentTransition(.interpolate)
+                        .motion(Motion.reveal, value: manager.isUpdatingAll)
+                        .disabled(manager.isBusy)
                     }
                     .padding(14)
                     .surface(Theme.secret.opacity(0.09), cornerRadius: 10, border: Theme.secret.opacity(0.4))
@@ -315,8 +324,11 @@ struct SkillsView: View {
             }
             if installation != nil, !working, !outdated {
                 Button { confirmUninstall(plugin, host: host) } label: {
+                    // The lift sits on the glyph, since the button carries a tooltip
+                    // that AppKit cannot lay out under a scale.
                     Image(systemName: "minus.circle").foregroundStyle(Theme.deletion)
                         .contentShape(Rectangle())
+                        .hoverLift(amount: Motion.smallLift)
                 }
                 .buttonStyle(.plain)
                 .disabled(!manageable || manager.isUpdatingAll || manager.isRefreshing)
@@ -324,6 +336,7 @@ struct SkillsView: View {
                 .appTooltip("Uninstall from \(host.title)")
                 .focused($focusedUninstall, equals: controlID)
                 .opacity(hoveredControl == controlID || focusedUninstall == controlID ? 1 : 0)
+                .motion(Motion.hover, value: hoveredControl == controlID || focusedUninstall == controlID)
             }
 
             if outdated, progress == nil, let latest = plugin.version {
@@ -349,7 +362,7 @@ struct SkillsView: View {
         .background(RoundedRectangle(cornerRadius: 8)
             .fill(installation == nil ? Color.clear : Theme.field))
         .contentShape(Rectangle())
-        .onHover { hovering in
+        .onPointerHover { hovering in
             if hovering {
                 hoveredControl = controlID
             } else if hoveredControl == controlID {

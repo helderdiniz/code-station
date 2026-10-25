@@ -536,6 +536,7 @@ struct ChangesOpinionAsk: View {
     @State private var focus: Set<SecondOpinion.Focus>
     @State private var scope: SecondOpinionScopeChoice
     @Namespace private var track
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     init(author: SecondOpinion.Reviewer, installed: [AgentKind], running: Set<SecondOpinion.Reviewer>,
          lineup: [SecondOpinion.Reviewer], focus: Set<SecondOpinion.Focus>, scope: SecondOpinionScopeChoice,
@@ -603,7 +604,7 @@ struct ChangesOpinionAsk: View {
 
     private func scopePill(_ title: String, _ choice: SecondOpinionScopeChoice, enabled: Bool = true) -> some View {
         ChoicePill(title: title, selected: scope == choice, enabled: enabled, thumb: track) {
-            withAnimation(Motion.control) { scope = choice }
+            withAnimation(reduceMotion ? nil : Motion.control) { scope = choice }
         }
         .accessibilityLabel(title)
         .accessibilityAddTraits(scope == choice ? .isSelected : [])
@@ -749,6 +750,7 @@ struct SecondOpinionFindingsView: View {
     let review: ReviewTarget
 
     @Environment(DialogPresenter.self) private var dialogs
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var selected: UUID?
     @State private var editing = false
     @State private var draft = ""
@@ -800,7 +802,7 @@ struct SecondOpinionFindingsView: View {
                         .padding(.horizontal, 8).padding(.top, 8).padding(.bottom, 14)
                     }
                     .onChange(of: selected) { _, id in
-                        if let id { withAnimation(Motion.reveal) { proxy.scrollTo(id) } }
+                        if let id { withAnimation(reduceMotion ? nil : Motion.reveal) { proxy.scrollTo(id) } }
                     }
                 }
                 .frame(width: 318)
@@ -841,6 +843,7 @@ struct SecondOpinionFindingsView: View {
     private func progress(_ list: [ReviewComment], dismissed: Set<UUID>, decided: Int) -> some View {
         HStack(spacing: 10) {
             Text("\(decided) of \(list.count) looked at").font(.system(size: 12)).foregroundStyle(.secondary)
+                .contentTransition(.numericText())
             if list.count <= 12 {
                 HStack(spacing: 3) {
                     ForEach(list) { finding in
@@ -854,6 +857,7 @@ struct SecondOpinionFindingsView: View {
         }
         .padding(.top, 6)
         .fixedSize()
+        .motion(Motion.control, value: decided)
     }
 
     private func segmentColour(_ decision: Decision?) -> Color {
@@ -918,6 +922,7 @@ struct SecondOpinionFindingsView: View {
                 if isSelected { Rectangle().fill(Theme.accent).frame(width: 2).padding(.vertical, 2) }
             }
             .contentShape(RoundedRectangle(cornerRadius: 8))
+            .motion(Motion.control, value: decision)
         }
         .buttonStyle(.plain)
         .hoverFill(cornerRadius: 8)
@@ -1005,37 +1010,43 @@ struct SecondOpinionFindingsView: View {
 
     @ViewBuilder private func actions(_ finding: ReviewComment, decision: Decision?, list: [ReviewComment]) -> some View {
         HStack(spacing: 8) {
-            if let decision {
-                Label(decision == .kept ? "Kept. It is in your review." : "Dismissed. It will not be sent.",
-                      systemImage: decision == .kept ? "checkmark" : "xmark")
-                    .font(.system(size: 12.5))
-                Spacer(minLength: 0)
-                InlineLink(title: "Undo", tint: decision == .kept ? Theme.dotOn : Color.secondary) { undo(finding, decision) }
-            } else if editing {
-                ActionButton(title: "Keep my version", tone: .green, height: 30, size: 12, icon: "checkmark",
-                             shortcut: "⌘↩", keyboardShortcut: KeyboardShortcut(.return, modifiers: .command)) {
-                    saveEdit(finding)
+            // The outcome and the buttons it replaces swap places: the old set goes at
+            // once and the new one fades in, so the two are never drawn over each other.
+            Group {
+                if let decision {
+                    Label(decision == .kept ? "Kept. It is in your review." : "Dismissed. It will not be sent.",
+                          systemImage: decision == .kept ? "checkmark" : "xmark")
+                        .font(.system(size: 12.5))
+                    Spacer(minLength: 0)
+                    InlineLink(title: "Undo", tint: decision == .kept ? Theme.dotOn : Color.secondary) { undo(finding, decision) }
+                } else if editing {
+                    ActionButton(title: "Keep my version", tone: .green, height: 30, size: 12, icon: "checkmark",
+                                 shortcut: "⌘↩", keyboardShortcut: KeyboardShortcut(.return, modifiers: .command)) {
+                        saveEdit(finding)
+                    }
+                    .disabled(draft.isBlank)
+                    InlineLink(title: "Cancel", tint: Color.secondary) { editing = false }
+                } else {
+                    ActionButton(title: "Keep", tone: .green, height: 30, size: 12, icon: "checkmark", shortcut: "K") { keep(finding) }
+                    ActionButton(title: "Edit and keep", tone: .outlined, height: 30, size: 12, shortcut: "E") { startEdit(finding) }
+                    ActionButton(title: "Dismiss", tone: .sunken, height: 30, size: 12, shortcut: "D") { dismiss(finding) }
+                    Spacer(minLength: 0)
+                    GlyphButton(icon: "chevron.up", side: 26) { move(-1, in: list) }
+                        .appTooltip("Previous finding  ↑")
+                        .accessibilityLabel("Previous finding")
+                    GlyphButton(icon: "chevron.down", side: 26) { move(1, in: list) }
+                        .appTooltip("Next finding  ↓")
+                        .accessibilityLabel("Next finding")
                 }
-                .disabled(draft.isBlank)
-                InlineLink(title: "Cancel", tint: Color.secondary) { editing = false }
-            } else {
-                ActionButton(title: "Keep", tone: .green, height: 30, size: 12, icon: "checkmark", shortcut: "K") { keep(finding) }
-                ActionButton(title: "Edit and keep", tone: .outlined, height: 30, size: 12, shortcut: "E") { startEdit(finding) }
-                ActionButton(title: "Dismiss", tone: .sunken, height: 30, size: 12, shortcut: "D") { dismiss(finding) }
-                Spacer(minLength: 0)
-                GlyphButton(icon: "chevron.up", side: 26) { move(-1, in: list) }
-                    .appTooltip("Previous finding  ↑")
-                    .accessibilityLabel("Previous finding")
-                GlyphButton(icon: "chevron.down", side: 26) { move(1, in: list) }
-                    .appTooltip("Next finding  ↓")
-                    .accessibilityLabel("Next finding")
             }
+            .transition(.fadeIn)
         }
         .padding(decision == nil ? 0 : 10)
         .foregroundStyle(decision == .kept ? Theme.dotOn : Color.secondary)
         .background(RoundedRectangle(cornerRadius: 9).fill(decision == .kept ? Theme.dotOn.opacity(0.08)
                                                              : decision == .dismissed ? Theme.field : .clear))
         .padding(.top, 4)
+        .motion(Motion.control, value: decision)
     }
 
     // A few lines around the finding, read from the file, with its own line marked.

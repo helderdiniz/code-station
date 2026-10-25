@@ -5,7 +5,6 @@ import SwiftUI
 // the only thing that separates a long build from a turn that will never come back. The
 // call in flight is named in the block above, so the row does not repeat it.
 struct WorkingRow: View {
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(AppSettings.self) private var appSettings
 
     let since: Date
@@ -78,8 +77,8 @@ struct WorkingRow: View {
             // avatar fading in on a new turn animates against the transcript rather than
             // against the row, and lands somewhere the row no longer is.
             .geometryGroup()
-            .animation(reduceMotion ? nil : .easeInOut(duration: 0.25), value: word)
-            .animation(reduceMotion ? nil : .easeInOut(duration: 0.25), value: avatar.id)
+            .motion(Motion.reveal, value: word)
+            .motion(Motion.reveal, value: avatar.id)
             // Only worth a hint once the silence is long enough to worry about; the
             // empty one shows nothing.
             .appTooltip {

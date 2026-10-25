@@ -461,11 +461,10 @@ private struct HangingCard: View {
             .scaleEffect(arrived || reduceMotion ? 1 : 0.97, anchor: .top)
             .offset(x: x, y: anchor.maxY + Self.gap - (arrived || reduceMotion ? 0 : 6))
             .opacity(arrived ? 1 : 0)
-            .animation(reduceMotion ? nil : .spring(response: 0.24, dampingFraction: 0.86),
-                       value: anchor)
+            .motion(Motion.control, value: anchor)
             .accessibilityHidden(true)
             .onAppear {
-                withAnimation(reduceMotion ? .easeOut(duration: 0.12) : hanging.arrival) {
+                withAnimation(reduceMotion ? Motion.reveal : hanging.arrival) {
                     arrived = true
                 }
             }

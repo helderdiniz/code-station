@@ -119,7 +119,7 @@ private struct IconTile: View {
         }
         .buttonStyle(.plain)
         .hoverLift(hovering, amount: Motion.smallLift)
-        .onHover { hovering = $0 }
+        .onPointerHover { hovering = $0 }
         .appTooltip(label)
         .accessibilityLabel(label)
     }

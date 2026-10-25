@@ -27,6 +27,7 @@ struct MessageView: View, Equatable {
     var secondOpinion: (@MainActor () -> Void)?
 
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.showExternalNote) private var showExternalNote
 
     // What the message is made of, and nothing else. The callbacks are left out on
     // purpose: each is a fresh closure on every redraw, so comparing them would say
@@ -218,16 +219,23 @@ struct MessageView: View, Equatable {
     }
 
     private var transcriptOpenURL: OpenURLAction {
-        OpenURLAction { url in
+        let note = showExternalNote.show
+        return OpenURLAction { url in
             if TranscriptLink.isLocalServer(url), openPreview(url) { return .handled }
-            guard let file = TranscriptLink.finderTarget(for: url) else { return .systemAction }
+            guard let file = TranscriptLink.finderTarget(for: url) else {
+                let web = ["http", "https"].contains(url.scheme?.lowercased() ?? "")
+                note?(web ? "Opened the link in your browser" : "Opened the link", "arrow.up.forward.app")
+                return .systemAction
+            }
             if showInExplorer(url) { return .handled }
             if FileManager.default.fileExists(atPath: file.path) {
                 NSWorkspace.shared.activateFileViewerSelecting([file])
+                note?("Revealed \(file.lastPathComponent) in Finder", "folder")
             } else {
                 NSWorkspace.shared.selectFile(
                     nil,
                     inFileViewerRootedAtPath: file.deletingLastPathComponent().path)
+                note?("Opened the folder in Finder", "folder")
             }
             return .handled
         }
@@ -398,7 +406,7 @@ private struct TranscriptCopyButton: ViewModifier {
                     .transition(.fadeIn)
                 }
             }
-            .onHover { hovering = $0 }
+            .onPointerHover { hovering = $0 }
             .motion(Motion.hover, value: hovering)
             .motion(Motion.hover, value: descendantHovering)
             .accessibilityAction(named: tooltip) { Pasteboard.copy(text) }

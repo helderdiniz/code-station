@@ -3,6 +3,7 @@ import UniformTypeIdentifiers
 
 struct BotEditorView: View {
     @Environment(DialogPresenter.self) private var dialogs
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Bindable var draft: BotDraft
     let portraits: Namespace.ID
     let cancel: () -> Void
@@ -24,6 +25,7 @@ struct BotEditorView: View {
                     .padding(.vertical, 3).contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .hoverLift()
             VStack(alignment: .leading, spacing: 6) {
                 Text(draft.isNew ? "Make a new friend" : "Edit \(draft.personality.title)").font(.logo(25))
                 Text(draft.isNew ? "Give your next session a little character." : "Fine-tune the face and personality you work with.")
@@ -63,8 +65,13 @@ struct BotEditorView: View {
                 tab = tab == .personality ? .picture : .personality
                 focusedTab = tab
             }
-            if tab == .personality { personalities } else { pictures }
+            if tab == .personality {
+                personalities.transition(.fadeIn)
+            } else {
+                pictures.transition(.fadeIn)
+            }
         }
+        .motion(Motion.reveal, value: tab)
     }
 
     private var personalities: some View {
@@ -165,8 +172,10 @@ struct BotEditorView: View {
                 .overlay(RoundedRectangle(cornerRadius: 12)
                     .stroke(Theme.accent.opacity(0.45), style: StrokeStyle(lineWidth: 1, dash: [5])))
                 .contentShape(RoundedRectangle(cornerRadius: 12))
+                .motion(Motion.hover, value: dragging)
             }
             .buttonStyle(.plain)
+            .hoverLift()
             .dropDestination(for: URL.self) { urls, _ in
                 guard let url = urls.first else { return false }
                 importPhoto(url)
@@ -175,6 +184,7 @@ struct BotEditorView: View {
             if let imageError {
                 Text(imageError).font(.system(size: 12)).foregroundStyle(Theme.warningText)
                     .fixedSize(horizontal: false, vertical: true)
+                    .transition(.fadeIn)
             }
             HStack {
                 Text("Your picture stays on this Mac.").font(.system(size: 10.5)).foregroundStyle(.secondary)
@@ -188,6 +198,7 @@ struct BotEditorView: View {
                 }
             }
         }
+        .motion(Motion.reveal, value: imageError)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Picture choices")
     }
@@ -226,12 +237,15 @@ struct BotEditorView: View {
                     BotPortraitStage(image: draft.image, size: 110, portraits: portraits,
                                      portraitID: draft.avatar?.id.absoluteString ?? "new-bot")
                         .id(previewIdentity)
-                        .transition(.opacity.combined(with: .scale(scale: 0.94)))
+                        // The stage holds only drawn shapes and a picture, so it can settle
+                        // from a slight scale without upsetting AppKit layout.
+                        .transition(reduceMotion ? .opacity.animation(Motion.reveal)
+                                                 : .opacity.combined(with: .scale(scale: 0.94)))
                     Text("Live preview").font(.system(size: 10, weight: .medium))
                         .foregroundStyle(.white).padding(12)
                 }
                 .frame(height: 186)
-                .motion(.easeOut(duration: 0.28), value: previewIdentity)
+                .motion(Motion.reveal, value: previewIdentity)
                 VStack(alignment: .leading, spacing: 14) {
                     Text(draft.personality.title).font(.logo(16))
                     Text("While your bot is working").font(.system(size: 10.5)).foregroundStyle(.secondary)

@@ -100,29 +100,35 @@ struct ChatOpinionCard: View {
         VStack(alignment: .leading, spacing: 12) {
             header
             if opinion.sent == nil {
-                if opinion.isRunning || opinion.lanes.contains(where: isFailed) {
-                    FlowRow(spacing: 6) {
-                        ForEach(opinion.lanes.filter { !isFinished($0) }) { lane in
-                            ReviewLane(reviewer: lane.reviewer, started: lane.started, ended: lane.ended,
-                                       activity: lane.activity, state: laneState(lane),
-                                       stop: { stop(lane.reviewer) }, retry: { retry(lane.reviewer) },
-                                       dismiss: isFailed(lane) ? { stop(lane.reviewer) } : nil)
+                // Held together so the body folds away as one piece once the points go,
+                // rather than each row dropping out on its own.
+                VStack(alignment: .leading, spacing: 12) {
+                    if opinion.isRunning || opinion.lanes.contains(where: isFailed) {
+                        FlowRow(spacing: 6) {
+                            ForEach(opinion.lanes.filter { !isFinished($0) }) { lane in
+                                ReviewLane(reviewer: lane.reviewer, started: lane.started, ended: lane.ended,
+                                           activity: lane.activity, state: laneState(lane),
+                                           stop: { stop(lane.reviewer) }, retry: { retry(lane.reviewer) },
+                                           dismiss: isFailed(lane) ? { stop(lane.reviewer) } : nil)
+                            }
                         }
                     }
+                    if opinion.isRunning {
+                        Label(planPending ? "You can keep chatting. Approving now does not wait for them."
+                              : "You can keep chatting while they read.", systemImage: "clock")
+                            .font(.system(size: 11.5)).foregroundStyle(.secondary)
+                    }
+                    verdicts
+                    if !opinion.points.isEmpty { points }
+                    if opinion.finishedCount > 0 && !opinion.isRunning { footer }
                 }
-                if opinion.isRunning {
-                    Label(planPending ? "You can keep chatting. Approving now does not wait for them."
-                          : "You can keep chatting while they read.", systemImage: "clock")
-                        .font(.system(size: 11.5)).foregroundStyle(.secondary)
-                }
-                verdicts
-                if !opinion.points.isEmpty { points }
-                if opinion.finishedCount > 0 && !opinion.isRunning { footer }
+                .transition(.fold)
             }
         }
         .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
         .surface(Theme.card, cornerRadius: 12, border: Theme.border)
+        .smoothlyResizes(when: opinion.sent)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Second opinion on this \(opinion.subject.noun)")
         .accessibilityAddTraits(opinion.isRunning ? .updatesFrequently : [])
@@ -232,6 +238,8 @@ struct ChatOpinionCard: View {
             ActionButton(title: count > 0 ? "Send \(counted(count, "point")) to \(authorTitle)" : "Tick a point to send",
                          tone: .green, height: 28, size: 12, action: send)
                 .disabled(count == 0)
+                .contentTransition(.numericText(value: Double(count)))
+                .motion(Motion.control, value: count)
             if planPending {
                 ActionButton(title: "Approve plan as is", tone: .outlined, height: 28, size: 12, action: approve)
             }

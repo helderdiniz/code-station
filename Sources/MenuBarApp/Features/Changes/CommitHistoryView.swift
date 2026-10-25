@@ -84,10 +84,10 @@ struct CommitHistoryView: View {
                 ZStack(alignment: .topLeading) {
                     if let result {
                         loadedBody(commit, result)
-                            .transition(.opacity)
+                            .transition(.fadeIn)
                     } else {
                         ChangesLoadingPlaceholder(title: "Reading commit details…", rows: 4)
-                            .padding(28).transition(.opacity)
+                            .padding(28).transition(.fadeIn)
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -141,13 +141,20 @@ struct CommitHistoryView: View {
             HStack(spacing: 12) {
                 Text("\(commit.author) · \(commit.relativeDate)").lineLimit(1)
                 Button { copyHash(commit) } label: {
-                    Label(copied ? "Copied" : commit.shortHash, systemImage: copied ? "checkmark" : "doc.on.doc")
-                        .font(.mono(11)).foregroundStyle(.primary)
-                        .padding(.horizontal, 8).padding(.vertical, 5)
-                        .background(Theme.field, in: RoundedRectangle(cornerRadius: 6))
-                        .contentShape(Rectangle())
+                    Label {
+                        Text(copied ? "Copied" : commit.shortHash)
+                    } icon: {
+                        Image(systemName: copied ? "checkmark" : "doc.on.doc")
+                            .contentTransition(reduceMotion ? .identity : .symbolEffect(.replace))
+                    }
+                    .font(.mono(11)).foregroundStyle(copied ? Theme.addition : Color.primary)
+                    .padding(.horizontal, 8).padding(.vertical, 5)
+                    .background(Theme.field, in: RoundedRectangle(cornerRadius: 6))
+                    .contentShape(Rectangle())
+                    .hoverLift()
                 }
                 .buttonStyle(.plain)
+                .motion(Motion.pop, value: copied)
                 .appTooltip(commit.hash)
                 .accessibilityLabel("Copy full commit hash")
                 .accessibilityValue(copied ? "Copied" : commit.shortHash)
@@ -235,8 +242,11 @@ struct CommitHistoryView: View {
                                         .background(Theme.card)
                                         .clipShape(OpenTopCard(radius: 9))
                                         .overlay(OpenTopCard(radius: 9).stroke(Theme.border))
+                                        .transition(.fold)
                                 }
-                            }.padding(.bottom, 16)
+                            }
+                            .smoothlyResizes(when: collapsed.contains(file.id))
+                            .padding(.bottom, 16)
                         } header: {
                             cardHeader(file, position: index + 1, of: files.count).id(file.id)
                         }
@@ -301,6 +311,7 @@ struct CommitHistoryView: View {
                     .font(.system(size: 10))
                     .rotationEffect(.degrees(isCollapsed ? 0 : 90))
                     .frame(width: 24, height: 30).contentShape(Rectangle())
+                    .hoverLift(amount: Motion.smallLift)
             }
             .buttonStyle(.plain)
             .foregroundStyle(.secondary)

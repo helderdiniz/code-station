@@ -6,6 +6,7 @@ struct DesignView: View {
     @Environment(ProjectStore.self) private var store
     @Environment(SessionRunner.self) private var runner
     @Environment(DialogPresenter.self) private var dialogs
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     let sessionID: UUID
     var onOpenImplementation: (() -> Void)? = nil
@@ -139,6 +140,8 @@ struct DesignView: View {
                                 icon: preparingHandoff ? "hourglass" : "arrow.triangle.2.circlepath") {
                                     implement()
                                 }
+                                .contentTransition(.interpolate)
+                                .motion(Motion.reveal, value: preparingHandoff)
                                 .disabled(preparingHandoff || busy)
                         } else {
                             MonoChip(text: "BUILD UP TO DATE", size: 8.5,
@@ -150,6 +153,8 @@ struct DesignView: View {
                                      icon: preparingHandoff ? "hourglass" : "hammer.fill") {
                             showImplementationDialog()
                         }
+                        .contentTransition(.interpolate)
+                        .motion(Motion.reveal, value: preparingHandoff)
                         .disabled(preparingHandoff || busy)
                     }
                 }
@@ -183,7 +188,7 @@ struct DesignView: View {
                 if let opinion = runner.designOpinions.opinion(sessionID) {
                     opinionPanel(opinion)
                         .frame(width: 320)
-                        .transition(.move(edge: .trailing).combined(with: .opacity))
+                        .transition(.drawer(from: .trailing, reduceMotion: reduceMotion))
                 }
             }
             .motion(Motion.reveal, value: runner.designOpinions.opinion(sessionID) == nil)

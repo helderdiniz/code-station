@@ -131,6 +131,7 @@ struct GrafanaResultView: View {
                         logRow(entry)
                     }
                 }
+                .smoothlyResizes(when: expanded)
             }
             .frame(maxHeight: 320 * textScale)
         case .samples(let samples, _):
@@ -157,13 +158,18 @@ struct GrafanaResultView: View {
                     ChoicePill(title: "Chart", selected: !showsTable) { showsTable = false }
                     ChoicePill(title: "Table", selected: showsTable) { showsTable = true }
                 }
-                if !showsTable, let spec = Self.chartSpec(series) {
-                    TranscriptChartView(spec: spec)
-                } else {
-                    seriesTable(series)
+                Group {
+                    if !showsTable, let spec = Self.chartSpec(series) {
+                        TranscriptChartView(spec: spec)
+                    } else {
+                        seriesTable(series)
+                    }
                 }
+                .id(showsTable)
+                .transition(.fadeIn)
             }
             .padding(12)
+            .motion(Motion.reveal, value: showsTable)
         case .empty:
             Text("The query returned nothing.")
                 .scaledMono(11.5)
@@ -199,6 +205,7 @@ struct GrafanaResultView: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .hoverFill(cornerRadius: 6)
             if isOpen {
                 VStack(alignment: .leading, spacing: 4) {
                     detail("LINE", entry.line)
@@ -219,6 +226,7 @@ struct GrafanaResultView: View {
                     }
                 }
                 .padding(.leading, 8)
+                .transition(.fold)
             }
         }
         .padding(.horizontal, 12)

@@ -83,7 +83,10 @@ struct BotSettingsView: View {
             }
             .scrollIndicators(.visible)
             .id(flow.draft == nil)
-            if flow.notice != nil { notice }
+            .transition(.headerPage(reduceMotion: reduceMotion))
+            if flow.notice != nil {
+                notice.transition(.fold)
+            }
             if let draft = flow.draft {
                 SheetFooter(
                     title: draft.isNew ? "Ready when you are" : draft.isDirty ? "Unsaved changes" : "No changes yet",
@@ -96,6 +99,7 @@ struct BotSettingsView: View {
             }
         }
         .background(Theme.background)
+        .motion(Motion.reveal, value: flow.notice != nil)
         .onChange(of: flow.draft == nil) { _, showingCollection in
             if showingCollection {
                 Task { @MainActor in
@@ -118,10 +122,11 @@ struct BotSettingsView: View {
                     flow.announce("Default bot restored.")
                 }
             }
-            Button { flow.notice = nil; flow.undoDefaultName = nil } label: {
-                Image(systemName: "xmark").padding(6).contentShape(Rectangle())
+            GlyphButton(icon: "xmark", side: 24) {
+                flow.notice = nil
+                flow.undoDefaultName = nil
             }
-            .buttonStyle(.plain).accessibilityLabel("Dismiss notice")
+            .accessibilityLabel("Dismiss notice")
         }
         .padding(12)
         .background(Theme.botSelection)
@@ -280,7 +285,7 @@ struct BotSettingsView: View {
             returnBot = avatar?.id
             flow.notice = nil
             flow.undoDefaultName = nil
-            withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.36)) { flow.draft = draft }
+            withAnimation(reduceMotion ? nil : Motion.reveal) { flow.draft = draft }
         } catch {
             dialogs.show(.notice("Could not open this bot", message: error.localizedDescription))
         }
@@ -294,7 +299,7 @@ struct BotSettingsView: View {
         guard let draft = flow.draft, draft.isNew || draft.isDirty else { return }
         do {
             try settings.saveBot(draft)
-            flow.draft = nil
+            withAnimation(reduceMotion ? nil : Motion.leave) { flow.draft = nil }
             flow.announce(draft.isNew ? "\(draft.personality.title) joined your crew." : "\(draft.personality.title) is ready. Changes saved.")
         } catch {
             var dialog = Dialog.notice("Could not save this bot", message: "\(error.localizedDescription) Your draft is still here. Try saving again.")
@@ -358,7 +363,7 @@ struct BotPortraitStage: View {
             }
         }
         .clipped()
-        .onHover { hovering = $0 }
+        .onPointerHover { hovering = $0 }
         .motion(Motion.arrive, value: hovering)
         .accessibilityHidden(true)
     }
@@ -394,16 +399,14 @@ struct BotWorkingLine: View {
                 Text(personality.workingWords[line % personality.workingWords.count] + "…")
                     .font(.serif(size, .regular).italic())
                     .fixedSize(horizontal: false, vertical: true)
+                    .contentTransition(.interpolate)
+                    .motion(Motion.reveal, value: line)
             }
-            Button {
+            InlineLink(title: "Another working line", size: 10.5, icon: "arrow.clockwise") {
                 line += 1
                 playing = true
-            } label: {
-                Label("Another working line", systemImage: "arrow.clockwise")
-                    .font(.system(size: 10.5, weight: .medium))
-                    .foregroundStyle(Theme.accent).padding(.vertical, 3).contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
+            .padding(.vertical, 3)
         }
         .onChange(of: personality) { _, _ in line = 0 }
         .task(id: line) {

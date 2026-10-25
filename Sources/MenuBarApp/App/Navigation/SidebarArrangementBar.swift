@@ -51,9 +51,7 @@ private struct SidebarArrangementLabel: View {
             Text(title)
                 .font(.system(size: 10, weight: .medium))
                 .lineLimit(1)
-            Image(systemName: "chevron.down")
-                .font(.system(size: 8, weight: .medium))
-                .foregroundStyle(.tertiary)
+            MenuChevron(size: 8)
         }
         .foregroundStyle(isOpen ? AnyShapeStyle(Theme.accent) : AnyShapeStyle(.secondary))
         .padding(.horizontal, 3)
@@ -61,6 +59,8 @@ private struct SidebarArrangementLabel: View {
         .background(RoundedRectangle(cornerRadius: 6)
             .fill(isOpen || hovering ? Theme.field : .clear))
         .contentShape(RoundedRectangle(cornerRadius: 6))
-        .onHover { hovering = $0 }
+        .motion(Motion.hover, value: hovering)
+        .hoverLift(hovering)
+        .onPointerHover { hovering = $0 }
     }
 }

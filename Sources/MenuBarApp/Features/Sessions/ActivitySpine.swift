@@ -289,10 +289,12 @@ private struct CallReceipt: View {
             Spacer(minLength: 8)
             outcome
             if canExpand {
-                Text(isExpanded ? "▾" : "▸")
-                    .scaledMono(11)
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 8 * textScale, weight: .semibold))
                     .foregroundStyle(isExpanded ? AnyShapeStyle(.secondary)
                                                  : AnyShapeStyle(.tertiary))
+                    .rotationEffect(.degrees(isExpanded ? 90 : 0))
+                    .motion(Motion.control, value: isExpanded)
                     .frame(width: 8 * textScale)
                     .accessibilityHidden(true)
             }

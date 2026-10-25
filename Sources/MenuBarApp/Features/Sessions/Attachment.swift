@@ -143,14 +143,36 @@ extension View {
     // The menu behind every drawn image, so a picture can be taken out of the app
     // wherever it is shown - a composer chip, a message, the full preview.
     func imageContextMenu(_ url: URL) -> some View {
-        appContextMenu {
-            [.item("Copy Image") { Pasteboard.copy(imageAt: url) },
-             .item("Copy Path") { Pasteboard.copy(url.path) },
+        modifier(ImageContextMenu(url: url))
+    }
+}
+
+// Every entry does its work outside the window, so each one leaves a note behind.
+private struct ImageContextMenu: ViewModifier {
+    let url: URL
+
+    @Environment(\.showExternalNote) private var showExternalNote
+
+    func body(content: Content) -> some View {
+        let note = showExternalNote.show
+        return content.appContextMenu {
+            [.item("Copy Image") {
+                 Pasteboard.copy(imageAt: url)
+                 note?("Copied the image", "checkmark")
+             },
+             .item("Copy Path") {
+                 Pasteboard.copy(url.path)
+                 note?("Copied the path", "checkmark")
+             },
              .separator,
              .item("Reveal in Finder") {
                  NSWorkspace.shared.activateFileViewerSelecting([url])
+                 note?("Revealed \(url.lastPathComponent) in Finder", "folder")
              },
-             .item("Open with default app") { NSWorkspace.shared.open(url) }]
+             .item("Open with default app") {
+                 NSWorkspace.shared.open(url)
+                 note?("Opened \(url.lastPathComponent)", "arrow.up.forward.app")
+             }]
         }
     }
 }

@@ -128,6 +128,7 @@ struct WaitingNotice: View {
 
 private struct WaitingTaskRow: View {
     @Environment(\.textScale) private var textScale
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var expanded = false
     @State private var hovering = false
     @FocusState private var focused: Bool
@@ -140,7 +141,7 @@ private struct WaitingTaskRow: View {
                 Button { expanded.toggle() } label: { row }
                     .buttonStyle(.plain)
                     .focused($focused)
-                    .onHover { hovering = $0 }
+                    .onPointerHover { hovering = $0 }
                     .overlay(RoundedRectangle(cornerRadius: 6)
                         .stroke(focused ? Theme.accent : .clear, lineWidth: 2))
                     .accessibilityElement(children: .combine)
@@ -162,8 +163,10 @@ private struct WaitingTaskRow: View {
                     .background(Theme.terminal, in: RoundedRectangle(cornerRadius: 6))
                     .padding(.leading, 14 * textScale)
                     .padding(.bottom, 4)
+                    .transition(reduceMotion ? AnyTransition.opacity.animation(Motion.reveal) : .fold)
             }
         }
+        .smoothlyResizes(when: expanded)
     }
 
     private var row: some View {
@@ -172,6 +175,7 @@ private struct WaitingTaskRow: View {
                 .font(.system(size: 8 * textScale, weight: .semibold))
                 .foregroundStyle(.tertiary)
                 .rotationEffect(.degrees(expanded ? 90 : 0))
+                .motion(Motion.control, value: expanded)
                 .frame(width: 8 * textScale)
                 .opacity(command == nil ? 0 : 1)
                 .accessibilityHidden(true)
@@ -192,6 +196,7 @@ private struct WaitingTaskRow: View {
         .padding(.horizontal, 6)
         .frame(minHeight: 26 * textScale)
         .background(hovering ? Theme.sunken : .clear, in: RoundedRectangle(cornerRadius: 6))
+        .motion(Motion.hover, value: hovering)
         .contentShape(Rectangle())
         .padding(.leading, -6)
     }

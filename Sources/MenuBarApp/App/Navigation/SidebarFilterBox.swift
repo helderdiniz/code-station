@@ -133,7 +133,7 @@ struct SidebarFilterBar: View {
         }
         .buttonStyle(.plain)
         .sidebarFocusRing($commandFocused)
-        .onHover { hovering = $0 }
+        .onPointerHover { hovering = $0 }
         .hoverLift()
         .accessibilityLabel("Search Code Station")
         .accessibilityHint("Search projects, sessions, and actions. Command-K.")

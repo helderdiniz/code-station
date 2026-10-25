@@ -438,10 +438,13 @@ struct ExplorerView: View {
                     PaneMessage(icon: "exclamationmark.triangle", title: "Folder unavailable", detail: error)
                     ActionButton(title: "Try again", tone: .outlined, height: 28, size: 12) { Task { await reopenFolders() } }
                 }.padding(12)
+                .transition(AnyTransition.fadeIn.animation(Motion.reveal))
             } else if loadingFolders.contains(root) && children[root] == nil {
                 ChangesProgressLabel(title: "Reading files…").foregroundStyle(Theme.secondaryText).frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .transition(AnyTransition.fadeIn.animation(Motion.reveal))
             } else if repositories.isEmpty && children[root]?.isEmpty == true {
                 PaneMessage(icon: "folder", title: "Empty folder", detail: showHidden ? "" : "Hidden files are off.")
+                    .transition(AnyTransition.fadeIn.animation(Motion.reveal))
             }
             if folderErrors[root] == nil && (!repositories.isEmpty || children[root]?.isEmpty != true) {
                 ScrollViewReader { proxy in
@@ -455,7 +458,9 @@ struct ExplorerView: View {
                                         treeRow(row).id(row.id).transition(.fold)
                                         if let error = folderErrors[row.node.path], expanded.contains(row.node.path) {
                                             Text(error).font(.system(size: 11)).foregroundStyle(Theme.attention).padding(8)
+                                                .transition(AnyTransition.fadeIn.animation(Motion.reveal))
                                             InlineLink(title: "Try again") { Task { await load(row.node.path) } }
+                                                .transition(AnyTransition.fadeIn.animation(Motion.reveal))
                                         }
                                     }
                                 }
@@ -678,7 +683,11 @@ struct ExplorerView: View {
                         if findPresented {
                             findBar.transition(reduceMotion ? AnyTransition.opacity.animation(Motion.reveal) : .fold)
                         }
+                        // Keyed on what kind of body is showing rather than on the file, so
+                        // moving between two text files keeps the same editor.
                         fileBody(node)
+                            .id(bodyKind(node))
+                            .transition(AnyTransition.fadeIn.animation(Motion.reveal))
                         if isEditable { editStatus }
                     } else {
                         PaneMessage(icon: "sidebar.left", title: "Pick a file",
@@ -891,6 +900,23 @@ struct ExplorerView: View {
         } else { close() }
     }
 
+    private func noteLinkOpened(_ url: URL) {
+        showNote(url.scheme == "mailto"
+                 ? "Opened your mail app"
+                 : "Opened \(url.host() ?? "the link") in your browser")
+    }
+
+    private func bodyKind(_ node: FileNode) -> String {
+        switch preview {
+        case .text, .empty: renderingMarkdown && node.supportsMarkdownPreview ? "markdown" : "text"
+        case .image: "image"
+        case .binary: "binary"
+        case .tooLarge: "too large"
+        case .unreadable: "unreadable"
+        case nil: "reading"
+        }
+    }
+
     @ViewBuilder private func fileBody(_ node: FileNode) -> some View {
         switch preview {
         case .text, .empty:
@@ -899,6 +925,7 @@ struct ExplorerView: View {
                     MarkdownDocumentView(text: draft,
                                          basePath: node.url.deletingLastPathComponent().path,
                                          textScale: 1)
+                        .environment(\.htmlPreviewLinkOpened, noteLinkOpened)
                         .padding(28)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }

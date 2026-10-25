@@ -111,13 +111,6 @@ extension View {
 private struct ChangingName: ViewModifier {
     let name: String
 
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
-    // Slow for an animation, and deliberately so: this runs once in a session's life,
-    // while the eye is still on the composer the name came from. Anything quicker is
-    // over before it is looked at, and reads as the name having always been there.
-    private static let duration = 0.7
-
     // The words change inside the one view instead of a new copy being stacked over the
     // old one. Stacking keys the view on the name itself, so a row the list hands to
     // another session counts as a name change and draws both names at once, and the old
@@ -125,6 +118,6 @@ private struct ChangingName: ViewModifier {
     func body(content: Content) -> some View {
         content
             .contentTransition(.opacity)
-            .animation(reduceMotion ? nil : .easeInOut(duration: Self.duration), value: name)
+            .motion(Motion.reveal, value: name)
     }
 }

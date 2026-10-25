@@ -93,18 +93,14 @@ struct NewSessionView: View {
         .task {
             guard project.isGitRepository else { return }
             let local = await GitFreshness.check(at: project.path, fetch: false)
-            withAnimation(.easeOut(duration: 0.2)) {
-                freshness = local
-                if let local { selectRecommendedStartPoint(for: local) }
-            }
+            freshness = local
+            if let local { selectRecommendedStartPoint(for: local) }
             let fetched = await GitFreshness.check(at: project.path, fetch: true)
-            withAnimation(.easeOut(duration: 0.2)) {
-                if let fetched {
-                    freshness = fetched
-                    selectRecommendedStartPoint(for: fetched)
-                }
-                fetching = false
+            if let fetched {
+                freshness = fetched
+                selectRecommendedStartPoint(for: fetched)
             }
+            fetching = false
         }
     }
 
@@ -228,6 +224,8 @@ struct FreshnessNotice: View {
     @Binding var startPoint: SessionStartPoint
     let onChoose: () -> Void
 
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
@@ -282,6 +280,8 @@ struct FreshnessNotice: View {
                     .font(.system(size: 13))
                     .foregroundStyle(startPoint == value ? AnyShapeStyle(Theme.accent)
                                                          : AnyShapeStyle(.secondary))
+                    .contentTransition(reduceMotion ? .identity : .symbolEffect(.replace))
+                    .motion(Motion.control, value: startPoint == value)
                     .padding(.top, 1)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(title)

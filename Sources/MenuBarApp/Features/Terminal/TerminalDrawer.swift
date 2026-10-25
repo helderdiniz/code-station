@@ -42,6 +42,7 @@ struct TerminalDrawer: View {
         HStack(spacing: 6) {
             ForEach(open) { terminal in
                 tab(terminal)
+                    .transition(.asymmetric(insertion: .fadeIn, removal: .fold))
             }
 
             Button {
@@ -70,6 +71,7 @@ struct TerminalDrawer: View {
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 7)
+        .motion(Motion.reveal, value: open.map(\.id))
         .background(Theme.card)
         .contentShape(Rectangle())
         // The strip doubles as the resize handle, which is where the hand naturally
@@ -110,8 +112,9 @@ struct TerminalDrawer: View {
             .contentShape(RoundedRectangle(cornerRadius: 7))
         }
         .buttonStyle(.plain)
+        .hoverLift(hoveringClose)
         .motion(Motion.hover, value: hoveringClose)
-        .onHover { hoveringClose = $0 }
+        .onPointerHover { hoveringClose = $0 }
     }
 
     private func tab(_ terminal: TerminalSession) -> some View {
@@ -151,6 +154,7 @@ struct TerminalDrawer: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .motion(Motion.control, value: selected)
         // A fill rather than a lift: while it is renamed the tab holds a text field,
         // which AppKit cannot lay out under a scale.
         .hoverFill(cornerRadius: 7)
@@ -192,6 +196,9 @@ struct TerminalToggle: View {
     let directory: String
     let toggle: () -> Void
 
+    @Environment(\.showExternalNote) private var showExternalNote
+    @State private var hovering = false
+
     var body: some View {
         HStack(spacing: 6) {
             Text(">_")
@@ -205,19 +212,28 @@ struct TerminalToggle: View {
         .foregroundStyle(isOpen ? Color.white : Color.primary)
         .padding(.horizontal, 12)
         .padding(.vertical, 7)
-        .surface(isOpen ? Theme.accentFill : Theme.card, cornerRadius: 10,
-                 border: isOpen ? .clear : Theme.border)
+        .surface(isOpen ? Theme.accentFill.opacity(hovering ? 0.86 : 1) : hovering ? Theme.field : Theme.card,
+                 cornerRadius: 10, border: isOpen ? .clear : Theme.border)
         .contentShape(Rectangle())
-        .appMenu { terminalEntries(isOpen: isOpen, toggle: toggle, directory: directory) }
+        .motion(Motion.control, value: isOpen)
+        // Lifted inside the menu's button, so the tooltip outside it is never scaled.
+        .hoverLift(hovering)
+        .onPointerHover { hovering = $0 }
+        .appMenu {
+            terminalEntries(isOpen: isOpen, toggle: toggle, directory: directory,
+                            note: showExternalNote.show)
+        }
         .appTooltip("Open a shell here or in \(SystemTerminal.appName)")
     }
 }
 
 // Both ways to reach a shell, in the order the setting puts them: the one the setting
 // prefers comes first, so the menu reads as the choice that was made plus the other one.
+// The system terminal opens over the window, so `note` is how the click shows in it.
 @MainActor func terminalEntries(isOpen: Bool,
                                 toggle: @escaping () -> Void,
-                                directory: String) -> [MenuEntry] {
+                                directory: String,
+                                note: ((_ text: String, _ icon: String) -> Void)? = nil) -> [MenuEntry] {
     let here = MenuEntry.item(isOpen ? "Hide terminal here" : "Open terminal here",
                               icon: "terminal",
                               subtitle: "A shell in the drawer, beside what you were reading.",
@@ -227,6 +243,7 @@ struct TerminalToggle: View {
                              icon: "macwindow",
                              subtitle: "A shell in a window of its own.") {
         SystemTerminal.open(directory)
+        note?("Opened a shell in \(SystemTerminal.appName)", "arrow.up.forward.app")
     }
     return Preferences.terminalBundleID == nil ? [here, app] : [app, here]
 }

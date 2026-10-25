@@ -66,7 +66,7 @@ struct TaskRunRow: View {
         .contentShape(Rectangle())
         .onTapGesture(perform: onOpen)
         .appContextMenu(menu)
-        .onHover { hovering = $0 }
+        .onPointerHover { hovering = $0 }
         .motion(Motion.hover, value: hovering)
     }
 

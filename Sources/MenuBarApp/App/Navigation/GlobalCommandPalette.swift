@@ -212,8 +212,7 @@ struct GlobalCommandPalette: View {
         }
         .onChange(of: query) { _, _ in resetResults() }
         .onChange(of: category) { _, _ in resetResults() }
-        .animation(reduceMotion ? nil : .easeOut(duration: 0.14),
-                   value: resultWindow.visibleResults(in: results).map(\.id))
+        .motion(Motion.reveal, value: resultWindow.visibleResults(in: results).map(\.id))
     }
 
     private var searchBar: some View {
@@ -322,7 +321,7 @@ struct GlobalCommandPalette: View {
             }
             .onChange(of: scrollTarget) { _, destination in
                 guard let destination else { return }
-                withAnimation(reduceMotion ? nil : .easeOut(duration: 0.12)) {
+                withAnimation(reduceMotion ? nil : Motion.reveal) {
                     proxy.scrollTo(destination, anchor: .center)
                 }
             }
@@ -370,6 +369,7 @@ struct GlobalCommandPalette: View {
             .padding(.vertical, 8)
             .background(RoundedRectangle(cornerRadius: 9)
                 .fill(isSelected ? Theme.accent.opacity(0.08) : Color.clear))
+            .motion(Motion.hover, value: isSelected)
             .contentShape(RoundedRectangle(cornerRadius: 9))
         }
         .buttonStyle(.plain)

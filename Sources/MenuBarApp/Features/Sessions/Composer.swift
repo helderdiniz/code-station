@@ -13,10 +13,10 @@ struct Composer<Above: View, Accessory: View>: View {
     @Environment(ProjectStore.self) private var store
     @Environment(SessionRunner.self) private var runner
     @Environment(AppSettings.self) private var appSettings
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     // Optional so a pane hosted without them simply has no microphone.
     @Environment(Dictation.self) private var dictation: Dictation?
     @Environment(MenuPresenter.self) private var menus: MenuPresenter?
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     let sessionID: UUID
     // Which CLI the prompt is bound for: only Claude's reads a thinking keyword out of it.
@@ -81,6 +81,8 @@ struct Composer<Above: View, Accessory: View>: View {
         let roots = store.session(sessionID).map(store.workingDirectories(for:)) ?? []
 
         let matches = matches
+        let menuShown = !matches.isEmpty && isFocused && !blocked
+        let noticeShown = dictationHere?.notice(for: sessionID) != nil
 
         VStack(alignment: .leading, spacing: 8) {
             if let dictation = dictationHere, let notice = dictation.notice(for: sessionID) {
@@ -90,12 +92,13 @@ struct Composer<Above: View, Accessory: View>: View {
             above
             attachmentStrip
 
-            if !matches.isEmpty, isFocused, !blocked {
+            if menuShown {
                 SlashCommandMenu(agent: agent,
                                  commands: matches,
                                  selected: min(commandSelection, matches.count - 1),
                                  choose: take,
                                  highlight: { commandSelection = $0 })
+                    .transition(.fadeIn)
             }
 
             HStack(alignment: .bottom, spacing: 10) {
@@ -149,10 +152,13 @@ struct Composer<Above: View, Accessory: View>: View {
                 // turning into the other, and the field never changes width over it.
                 primaryButton(state: state, canSend: canSend)
             }
-            .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: canSend)
-            .animation(reduceMotion ? nil : Motion.control, value: busy)
-            .animation(reduceMotion ? nil : Motion.control, value: state == .stopping)
+            .motion(Motion.reveal, value: canSend)
+            .motion(Motion.control, value: busy)
+            .motion(Motion.control, value: state == .stopping)
         }
+        .motion(Motion.reveal, value: menuShown)
+        .motion(Motion.reveal, value: noticeShown)
+        .smoothlyResizes(when: attachments.count)
         .padding(.horizontal, inset)
         // The top matches the stack spacing, so a row above the field sits evenly
         // between the edge of the bar and the field.
@@ -162,6 +168,7 @@ struct Composer<Above: View, Accessory: View>: View {
         .overlay(RoundedRectangle(cornerRadius: 10)
             .stroke(Theme.accent, lineWidth: dropTargeted ? 2 : 0)
             .padding(6))
+        .motion(Motion.hover, value: dropTargeted)
         // Saved drafts need the command names too. Refresh as the menu opens or closes,
         // since command files can change between prompts.
         .task(id: [agent.rawValue, String(query == nil)] + roots) {
@@ -277,17 +284,17 @@ struct Composer<Above: View, Accessory: View>: View {
                     Image(systemName: "hourglass")
                         .font(.system(size: 12, weight: .bold))
                         .foregroundStyle(.secondary)
-                        .transition(.buttonSwap)
+                        .transition(.buttonSwap(reduceMotion: reduceMotion))
                 } else if busy {
                     RoundedRectangle(cornerRadius: 2.5)
                         .fill(.white)
                         .frame(width: 10, height: 10)
-                        .transition(.buttonSwap)
+                        .transition(.buttonSwap(reduceMotion: reduceMotion))
                 } else {
                     Image(systemName: "arrow.up")
                         .font(.system(size: 13, weight: .bold))
                         .foregroundStyle(.white)
-                        .transition(.buttonSwap)
+                        .transition(.buttonSwap(reduceMotion: reduceMotion))
                 }
             }
             .frame(width: 32, height: 32)
@@ -323,10 +330,12 @@ struct Composer<Above: View, Accessory: View>: View {
                         AttachmentChip(url: attachment.url) {
                             runner.composer.editDraft(sessionID) { $0.attachments.removeAll { $0.id == attachment.id } }
                         }
+                        .transition(.asymmetric(insertion: .fadeIn, removal: .fold))
                     }
                 }
                 .padding(.vertical, 1)
             }
+            .transition(.fold)
         }
     }
 

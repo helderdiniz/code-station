@@ -322,6 +322,7 @@ struct AgentSettingsView: View {
     @Environment(SessionRunner.self) private var runner
     @Environment(AppSettings.self) private var appSettings
     @Environment(AccountUsageMonitor.self) private var usageMonitor: AccountUsageMonitor?
+    @Environment(\.settingsNote) private var settingsNote
     @State private var selectedAgent: AgentKind
     @State private var claude = ClaudeAgentInfo()
     @State private var codex = CodexAgentInfo()
@@ -343,7 +344,10 @@ struct AgentSettingsView: View {
             defaultAgent.id(SettingsSearchTarget.agentDefault.id)
             agentTabs.id(SettingsSearchTarget.agentConfigure.id)
             agentSection(for: selectedAgent)
+                .id(selectedAgent)
+                .transition(.fadeIn)
         }
+        .motion(Motion.reveal, value: selectedAgent)
         .sheet(item: $loggingIn, onDismiss: { refresh() }) { agent in
             AgentLoginSheet(agent: agent).appOverlays()
         }
@@ -822,6 +826,7 @@ struct AgentSettingsView: View {
                     Spacer(minLength: 0)
                     InlineLink(title: "Reveal") {
                         NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)])
+                        settingsNote("Revealed \(title) in Finder", "folder")
                     }
                 }
                 .padding(.horizontal, 14)

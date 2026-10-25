@@ -9,6 +9,7 @@ struct ConfigManagerView: View {
     @Environment(CodexCodeManager.self) private var codex
     @Environment(CopilotCodeManager.self) private var copilot
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var addingPresetGroup: SiteDefaults.MCP.PresetGroup?
     @State private var showingAddJSON = false
     @State private var grafanaExpanded = false
@@ -16,6 +17,9 @@ struct ConfigManagerView: View {
     // A server two agents hold has a row under each, so the pick names the agent too.
     @State private var selectedAgentConfigured: AgentConfiguredSelection?
     @State private var filter = ""
+    @State private var note: String?
+    @State private var noteIcon = "checkmark"
+    @State private var notes = 0
 
     var body: some View {
         VStack(spacing: 0) {
@@ -39,12 +43,24 @@ struct ConfigManagerView: View {
                 sidebar
                 Divider().overlay(Theme.hairline)
                 detail
+                    .motion(Motion.reveal, value: selectedAgentConfigured)
+                    .motion(Motion.reveal, value: store.selectedID)
             }
             .disabled(store.loadError != nil)
             SheetFooter { dismiss() }
         }
         .frame(width: 940, height: 640)
         .background(Theme.background)
+        .overlay(alignment: .topTrailing) {
+            ZStack {
+                if let note {
+                    HeaderNote(icon: noteIcon, text: note)
+                        .padding(.top, Theme.headerHeight + 8).padding(.trailing, 20)
+                        .transition(reduceMotion ? .opacity : .opacity.combined(with: .offset(y: -6)))
+                }
+            }
+            .motion(Motion.reveal, value: note)
+        }
         .sheet(item: $addingPresetGroup) { AddServerView(group: $0).appOverlays() }
         .sheet(isPresented: $showingAddJSON) { AddJSONServerView() }
         .onAppear { refreshIntegrations() }
@@ -272,7 +288,21 @@ struct ConfigManagerView: View {
          },
          .item("Reveal config in Finder") {
              NSWorkspace.shared.activateFileViewerSelecting([store.configURL])
+             showNote("Revealed the config in Finder", icon: "folder")
          }]
+    }
+
+    // A second note keeps the line up rather than letting the first one's timer take it
+    // down early.
+    private func showNote(_ text: String, icon: String) {
+        notes += 1
+        let shown = notes
+        noteIcon = icon
+        note = text
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(2.4))
+            if notes == shown { note = nil }
+        }
     }
 
     private func matches(_ name: String) -> Bool {
@@ -317,28 +347,35 @@ struct ConfigManagerView: View {
     }
 
     private func row(for server: Server) -> some View {
-        ServerRow(server: server,
-                  selected: selectedAgentConfigured == nil && server.id == store.selectedID,
-                  running: processes.state(server.id).isActive,
-                  claudeStatus: claude.registration(of: server.name)?.status)
-            .contentShape(Rectangle())
-            .onTapGesture {
-                selectedAgentConfigured = nil
-                store.selectedID = server.id
-            }
+        let selected = selectedAgentConfigured == nil && server.id == store.selectedID
+        return Button {
+            selectedAgentConfigured = nil
+            store.selectedID = server.id
+        } label: {
+            ServerRow(server: server,
+                      selected: selected,
+                      running: processes.state(server.id).isActive,
+                      claudeStatus: claude.registration(of: server.name)?.status)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .hoverFill(cornerRadius: 9)
+        .motion(Motion.control, value: selected)
     }
 
     private func row(for server: AgentConfiguredServer,
                      from source: AgentConfiguredServer.Source) -> some View {
         let selection = AgentConfiguredSelection(name: server.name, source: source)
-        return AgentConfiguredServerRow(
-            server: server,
-            source: source,
-            selected: selectedAgentConfigured == selection)
-            .contentShape(Rectangle())
-            .onTapGesture { selectedAgentConfigured = selection }
-            .accessibilityAddTraits(.isButton)
-            .accessibilityAction { selectedAgentConfigured = selection }
+        let selected = selectedAgentConfigured == selection
+        return Button {
+            selectedAgentConfigured = selection
+        } label: {
+            AgentConfiguredServerRow(server: server, source: source, selected: selected)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .hoverFill(cornerRadius: 9)
+        .motion(Motion.control, value: selected)
     }
 
     private func toggleAllGrafana() {
@@ -375,14 +412,17 @@ struct ConfigManagerView: View {
             AgentConfiguredServerDetailView(server: server, leading: selection.source)
                 .id(server.id)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .transition(.fadeIn)
         } else if let server = store.selected {
             ServerDetailView(serverID: server.id)
                 .id(server.id)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .transition(.fadeIn)
         } else {
             EmptyDetail(hasServers: !store.servers.isEmpty || !agentConfiguredServers.isEmpty,
                         addMenu: { addServerMenuEntries })
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .transition(.fadeIn)
         }
     }
 }
@@ -411,6 +451,7 @@ private struct AgentConfiguredGroupHeader: View {
                     .font(.system(size: 10, weight: .bold))
                     .foregroundStyle(.secondary)
                     .rotationEffect(.degrees(expanded ? 90 : 0))
+                    .motion(Motion.reveal, value: expanded)
                 Image(systemName: source.symbol)
                     .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(.primary)
@@ -463,6 +504,7 @@ private struct GrafanaGroupHeader: View {
                         .font(.system(size: 10, weight: .bold))
                         .foregroundStyle(.secondary)
                         .rotationEffect(.degrees(expanded ? 90 : 0))
+                        .motion(Motion.reveal, value: expanded)
                     Image(systemName: "chart.xyaxis.line")
                         .font(.system(size: 11, weight: .medium))
                         .foregroundStyle(.primary)
@@ -477,7 +519,7 @@ private struct GrafanaGroupHeader: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .hoverLift()
+            .hoverFill(cornerRadius: 8)
 
             Spacer()
 
@@ -485,9 +527,11 @@ private struct GrafanaGroupHeader: View {
                 Text(allRunning ? "Stop all" : "Start all")
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(allRunning ? Color.secondary : Theme.accent)
+                    .contentTransition(.interpolate)
                     .padding(.horizontal, 8)
                     .padding(.vertical, 3)
                     .background(Capsule().fill(Color.black.opacity(0.05)))
+                    .motion(Motion.reveal, value: allRunning)
             }
             .buttonStyle(.plain)
             .hoverLift()

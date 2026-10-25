@@ -265,6 +265,7 @@ struct SessionView: View {
                     ShortcutOutputDrawer(run: openRun) {
                         shortcuts.showOutput(nil, for: shortcutScope)
                     }
+                    .transition(.drawer(from: .bottom, reduceMotion: reduceMotion))
                 }
 
                 if terminals.isOpen(terminalScope) {
@@ -275,6 +276,9 @@ struct SessionView: View {
                 }
             }
             .background(Theme.background)
+            // Clicks deep in the transcript that act outside the window, such as revealing
+            // a file or opening a link, leave their note on the rail like the header's own.
+            .environment(\.showExternalNote, ExternalNote { text, icon in showRailNote(text, icon: icon) })
             .onAppear {
                 composerFocused = true
                 recapOpen = recap != nil
@@ -386,7 +390,7 @@ struct SessionView: View {
                     recapNeedsAttention = false
                 } else {
                     if recapRequested || recapOpen {
-                        withAnimation(reduceMotion ? nil : .easeOut(duration: 0.14)) {
+                        withAnimation(reduceMotion ? nil : Motion.reveal) {
                             recapOpen = true
                         }
                     } else {
@@ -558,7 +562,8 @@ struct SessionView: View {
                     guard let usage = session.usage else { return Tooltip(title: "") }
                     return usageTooltip(usage, agent: session.agent,
                                         clearable: !contextActions().isEmpty)
-                })
+                },
+                showNote: { showRailNote($0) })
         }
         .fixedSize(horizontal: false, vertical: true)
     }
@@ -587,7 +592,7 @@ struct SessionView: View {
         .overlay(alignment: .topTrailing) {
             recapCard(recap)
         }
-        .animation(reduceMotion ? nil : .easeOut(duration: 0.14), value: recapOpen)
+        .motion(recapOpen ? Motion.reveal : Motion.leave, value: recapOpen)
     }
 
     private func destinationRow(session: ChatSession, project: Project,
@@ -766,7 +771,8 @@ struct SessionView: View {
     private func terminalOptions(isOpen: Bool, directory: String) -> [MenuEntry] {
         terminalEntries(isOpen: isOpen,
                         toggle: { toggleTerminal(directory: directory) },
-                        directory: directory)
+                        directory: directory,
+                        note: { text, icon in showRailNote(text, icon: icon) })
             + [.separator,
                .item("Copy cd command", icon: "doc.on.doc",
                      subtitle: "cd \(directory.shellQuoted)", monospacedSubtitle: true) {
@@ -1586,14 +1592,14 @@ struct SessionView: View {
             return
         }
         recapNeedsAttention = false
-        withAnimation(reduceMotion ? nil : .easeOut(duration: 0.14)) {
+        withAnimation(reduceMotion ? nil : recapOpen ? Motion.leave : Motion.reveal) {
             recapOpen.toggle()
         }
     }
 
     private func closeRecap() {
         recapNeedsAttention = false
-        withAnimation(reduceMotion ? nil : .easeOut(duration: 0.14)) {
+        withAnimation(reduceMotion ? nil : Motion.leave) {
             recapOpen = false
         }
     }
@@ -1824,7 +1830,7 @@ struct SessionView: View {
                 } else {
                     proxy.scrollTo(bottomAnchor, anchor: .bottom)
                 }
-                withAnimation(reduceMotion ? nil : .easeOut(duration: 0.16)) { opened = true }
+                withAnimation(reduceMotion ? nil : Motion.reveal) { opened = true }
             }
             .task(id: transcriptFind.jumpRequest) {
                 await revealFindMatch(in: session, proxy: proxy)
@@ -1963,9 +1969,13 @@ struct SessionView: View {
                               tasks: runner.backgroundTasks(sessionID),
                               agentTitle: session.agent.title,
                               command: { session.shellCommand(for: $0) },
-                              onKeepWaiting: { waitNoticeDismissed = true },
+                              onKeepWaiting: {
+                                  withAnimation(reduceMotion ? nil : Motion.leave) {
+                                      waitNoticeDismissed = true
+                                  }
+                              },
                               onEnd: { runner.endWait(sessionID) })
-                    .transition(.fadeIn)
+                    .transition(dismissal)
             }
 
             if case .reconnecting(let message) = state {
@@ -2515,8 +2525,10 @@ struct SessionView: View {
                                              sessionID: sessionID,
                                              size: 22)
                         })
-                        .motion(Motion.reveal, value: store.isSnoozed(sessionID))
+                        .motion(store.isSnoozed(sessionID) ? Motion.reveal : Motion.leave,
+                                value: store.isSnoozed(sessionID))
                         .motion(Motion.reveal, value: runner.queued(sessionID).isEmpty)
+                        .motion(Motion.leave, value: runner.isNudgeDismissed(sessionID))
     }
 
     // The choices the next turn will run on, on the line the eye is already on when
@@ -2665,6 +2677,20 @@ struct SessionView: View {
             .padding(.vertical, 10)
             .frame(maxWidth: .infinity, alignment: .leading)
             .surface(Theme.field, cornerRadius: 8, border: Theme.attention.opacity(0.4))
+            .transition(dismissal)
+        }
+    }
+
+    // A strip the user puts away fades while the space it held closes. Under Reduce
+    // Motion the space closes at once and only the fade is left.
+    private var dismissal: AnyTransition {
+        .asymmetric(insertion: .fadeIn,
+                    removal: reduceMotion ? AnyTransition.opacity.animation(Motion.leave) : .fold)
+    }
+
+    private func dismissSuggestion() {
+        withAnimation(reduceMotion ? nil : Motion.leave) {
+            runner.dismissSuggestion(sessionID)
         }
     }
 
@@ -2678,7 +2704,8 @@ struct SessionView: View {
                 hasDraft: !runner.composer.draft(sessionID).text.isBlank,
                 edit: editSuggestion,
                 send: sendSuggestion,
-                dismiss: { runner.dismissSuggestion(sessionID) })
+                dismiss: dismissSuggestion)
+                .transition(dismissal)
         }
     }
 
@@ -2708,7 +2735,7 @@ struct SessionView: View {
             guard runner.composer.draft(sessionID).text.isBlank else { return false }
             sendSuggestion()
         case .cancel:
-            runner.dismissSuggestion(sessionID)
+            dismissSuggestion()
         }
         return true
     }
@@ -2720,7 +2747,7 @@ struct SessionView: View {
                 SessionSnoozeMenu.wake(session.id, store: store)
                 composerFocused = true
             }
-                .transition(.fadeIn)
+            .transition(dismissal)
         }
     }
 

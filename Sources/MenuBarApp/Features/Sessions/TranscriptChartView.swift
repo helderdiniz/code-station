@@ -11,6 +11,8 @@ struct TranscriptChartView: View {
     @State private var readoutSize: CGSize = .zero
     @State private var showsSummary = false
 
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
     // Where the pointer is, kept alongside the reading it picked out so the readout can
     // ride the pointer while the marks stay snapped to real measurements.
     private struct Hover: Equatable {
@@ -53,6 +55,7 @@ struct TranscriptChartView: View {
 
             footer
         }
+        .smoothlyResizes(when: showsSummary)
         .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(RoundedRectangle(cornerRadius: 10).fill(Theme.card))
@@ -339,6 +342,7 @@ struct TranscriptChartView: View {
                     Text(showsSummary ? "Hide values" : "Values")
                         .scaledText(10.5, .medium)
                         .foregroundStyle(Theme.accent)
+                        .contentTransition(.opacity)
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
@@ -348,6 +352,7 @@ struct TranscriptChartView: View {
 
         if showsSummary {
             TranscriptChartSummary(spec: spec)
+                .transition(reduceMotion ? AnyTransition.opacity.animation(Motion.reveal) : .fold)
         }
     }
 }

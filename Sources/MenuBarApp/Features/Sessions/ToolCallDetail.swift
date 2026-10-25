@@ -42,32 +42,57 @@ struct ToolCallDetailHost: View {
     private static let gap: CGFloat = 10
     private static let margin: CGFloat = 8
 
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var measurement = OverlayMeasurement()
 
     private var size: CGSize { measurement.size }
 
     var body: some View {
-        if let presented = presenter.current {
-            GeometryReader { geometry in
-                ZStack(alignment: .topLeading) {
-                    Color.clear
-                        .contentShape(Rectangle())
-                        .onTapGesture { presenter.dismiss() }
-
-                    card(presented, bounds: geometry.size)
-                        .id(presenter.generation)
-                        .measuredOverlay(generation: presenter.generation,
-                                         into: $measurement)
-                        .offset(x: x(in: geometry.size), y: y(in: geometry.size))
-
-                    Button("") { presenter.dismiss() }
-                        .buttonStyle(.plain)
-                        .opacity(0)
-                        .keyboardShortcut(.escape, modifiers: [])
-                }
+        ZStack {
+            if let presented = presenter.current {
+                content(presented)
             }
-            .ignoresSafeArea()
         }
+        .motion(presenter.current == nil ? Motion.leave : Motion.reveal,
+                value: presenter.current == nil)
+        // A card on its way out stays in the tree until it has shrunk away, and must not
+        // take the click meant for the row it came from.
+        .allowsHitTesting(presenter.current != nil)
+    }
+
+    private func content(_ presented: PresentedToolCall) -> some View {
+        GeometryReader { geometry in
+            ZStack(alignment: .topLeading) {
+                Color.clear
+                    .contentShape(Rectangle())
+                    .onTapGesture { presenter.dismiss() }
+
+                // The card grows out of the row that opened it and shrinks back into it.
+                // Picking another row swaps only what is inside: the old call goes at
+                // once and the new one fades in, and an update from the agent to the
+                // call already open does not move at all.
+                // The card is moved into place out here rather than on itself, so the
+                // mask it grows from the row sits where the card is drawn.
+                ZStack {
+                    ZStack {
+                        card(presented, bounds: geometry.size)
+                            .id(presented.call.id)
+                            .transition(.asymmetric(insertion: AnyTransition.opacity.animation(Motion.reveal),
+                                                    removal: .identity))
+                    }
+                    .measuredOverlay(generation: presenter.generation, into: $measurement)
+                    .transition(.grow(from: CGPoint(x: presenter.anchor.midX, y: presenter.anchor.midY),
+                                      reduceMotion: reduceMotion))
+                }
+                .offset(x: x(in: geometry.size), y: y(in: geometry.size))
+
+                Button("") { presenter.dismiss() }
+                    .buttonStyle(.plain)
+                    .opacity(0)
+                    .keyboardShortcut(.escape, modifiers: [])
+            }
+        }
+        .ignoresSafeArea()
     }
 
     private func card(_ presented: PresentedToolCall, bounds: CGSize) -> some View {

@@ -384,6 +384,7 @@ struct OrbitMap: View {
     @State private var pointed: OrbitSpotlight?
     @State private var beaconFrame: CGRect?
     @State private var ripples = 0
+    @State private var pillCentres = OrbitPillCentres()
     // False only until a map that opens has appeared. Everything on the map reads it,
     // each part with its own delay, so the opening is one change played in order.
     @State private var built: Bool
@@ -460,6 +461,7 @@ struct OrbitMap: View {
                     toggle(live.id)
                 } point: { point(.session(live.id, group: live.containerID), at: $0) }
                     .frame(width: pill.frame.width, height: pill.frame.height)
+                    .onCentreChange { pillCentres.points[live.id] = $0 }
                     .position(x: pill.frame.midX, y: pill.frame.midY)
                     .opacity(OrbitSpotlight.opacity(spotlight, group: live.containerID, session: live.id))
             }
@@ -485,7 +487,7 @@ struct OrbitMap: View {
         .frame(width: layout.size.width, height: layout.size.height)
         .coordinateSpace(.named(Self.space))
         .motion(HomeWorkMapView.reflow, value: layout.motionKey)
-        .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: spotlight)
+        .motion(Motion.hover, value: spotlight)
         .animation(reduceMotion ? nil : Self.drop, value: phone)
         .onChange(of: phone?.connected == true) { _, now in
             if now && !reduceMotion { ripples += 1 }
@@ -566,8 +568,18 @@ struct OrbitMap: View {
             .position(layout.cardCenter(for: live.id,
                                         size: CGSize(width: OrbitSessionCard.width, height: cardHeight)))
             .zIndex(2)
-            .transition(.opacity)
+            // The card grows out of its session's pill, so the eye knows where it came
+            // from and where to click to put it away.
+            .transition(.grow(from: pillCentres.points[live.id], reduceMotion: reduceMotion))
     }
+}
+
+// Where each session pill sits in the window, for the card to grow out of. Kept outside
+// SwiftUI's state on purpose: a scroll moves every pill, and that must not draw the map
+// again.
+@MainActor
+private final class OrbitPillCentres {
+    var points: [UUID: CGPoint] = [:]
 }
 
 private struct OrbitTileName: View {
@@ -613,9 +625,11 @@ private struct OrbitMoreChip: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
                 .cardSurface(cornerRadius: OrbitLayout.pillHeight / 2)
                 .contentShape(Capsule())
+                .hoverLift(hovering)
         }
         .buttonStyle(.plain)
-        .onHover { hovering = $0 }
+        .onPointerHover { hovering = $0 }
+        .motion(Motion.hover, value: hovering)
         .accessibilityHint("Shows \(name) in the sidebar")
     }
 }
@@ -956,7 +970,7 @@ private struct OrbitProjectTile: View {
                 .animation(entrance, value: built)
         }
         .buttonStyle(.plain)
-        .onHover {
+        .onPointerHover {
             hovering = $0
             point($0)
         }
@@ -1030,7 +1044,7 @@ private struct OrbitSessionPill: View {
             .animation(entrance, value: built)
         }
         .buttonStyle(.plain)
-        .onHover {
+        .onPointerHover {
             hovering = $0
             point($0)
         }

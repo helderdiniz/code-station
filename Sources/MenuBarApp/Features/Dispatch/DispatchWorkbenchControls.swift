@@ -8,7 +8,6 @@ struct DispatchTabs<Item: Hashable>: View {
     var detail: (Item) -> String? = { _ in nil }
     @FocusState private var focused: Item?
     @Environment(\.isEnabled) private var isEnabled
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         HStack(spacing: 22) {
@@ -24,6 +23,8 @@ struct DispatchTabs<Item: Hashable>: View {
                     }
                     .font(.system(size: 12, weight: selection == item ? .semibold : .regular))
                     .foregroundStyle(selection == item ? Theme.accent : .secondary)
+                    // Lifted before the underline is drawn, so the underline stays still.
+                    .hoverLift()
                     .frame(height: 37)
                     .overlay(alignment: .bottom) {
                         if selection == item {
@@ -55,7 +56,7 @@ struct DispatchTabs<Item: Hashable>: View {
                 .accessibilityLabeledPair(role: .label, id: item, in: namespace)
             }
         }
-        .animation(reduceMotion ? nil : Motion.control, value: selection)
+        .motion(Motion.control, value: selection)
         .accessibilityElement(children: .contain)
     }
 }
@@ -89,7 +90,7 @@ struct DispatchResponseGrip: View {
                     dragHeight = nil
                     dragStart = nil
                 })
-            .onHover { hovering = $0 }
+            .onPointerHover { hovering = $0 }
             .cursorOnHover(.resizeUpDown)
             .focusable().focused($focused).focusEffectDisabled()
             .overlay(Rectangle().stroke(focused ? Theme.accent : .clear))
@@ -112,5 +113,15 @@ struct DispatchResponseGrip: View {
         withAnimation(reduceMotion ? nil : Motion.control) {
             store.responseHeight = DispatchSplitLayout.responseHeight(height + change, available: availableHeight)
         }
+    }
+}
+
+extension View {
+    // A pane kept alive behind the one on show, so it keeps its scroll place and does not
+    // have to be laid out again each time it comes back. Only the pane coming into view
+    // fades; the one going out goes at once, so two panes are never drawn over each other.
+    func standbyPane(shown: Bool) -> some View {
+        opacity(shown ? 1 : 0)
+            .transaction { if !shown { $0.animation = nil } }
     }
 }

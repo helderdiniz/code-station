@@ -74,6 +74,7 @@ struct ChangesView: View {
     private var refreshFailed: Bool { model.refreshFailed }
     private var latestCommit: GitCommitSummary? { model.latestCommit }
     @State private var openLatestCommit = false
+    @State private var fetches = 0
     // Until the project is read, it shows the last snapshot taken of its tree, so its
     // files are listed at once instead of after git.
     private var snapshot: GitSnapshot? { model.snapshot ?? gitStats.snapshot(at: root) }
@@ -301,6 +302,7 @@ struct ChangesView: View {
                             Image(systemName: "chevron.right")
                         }.contentShape(Rectangle())
                     }.buttonStyle(.plain)
+                    .hoverFill()
                     if let latestCommit {
                         Text("\(latestCommit.shortHash) · \(latestCommit.author) · \(latestCommit.relativeDate)")
                             .font(.system(size: 11)).foregroundStyle(.secondary)
@@ -332,13 +334,22 @@ struct ChangesView: View {
     }
 
     private func copyButton(_ version: GitInspector.CopyVersion, file: GitChange, label: String) -> some View {
-        Button {
+        let isCopied = copied == version && copiedPath == file.id
+        return Button {
             copy(version, file: file)
         } label: {
-            Label(copied == version && copiedPath == file.id ? "Copied" : label, systemImage: "doc.on.doc")
-                .font(.system(size: 12)).padding(8)
-                .background(Theme.field, in: RoundedRectangle(cornerRadius: 7)).contentShape(Rectangle())
+            Label {
+                Text(isCopied ? "Copied" : label)
+            } icon: {
+                Image(systemName: isCopied ? "checkmark" : "doc.on.doc")
+                    .contentTransition(reduceMotion ? .identity : .symbolEffect(.replace))
+            }
+            .font(.system(size: 12)).padding(8)
+            .foregroundStyle(isCopied ? Theme.addition : Color.primary)
+            .background(Theme.field, in: RoundedRectangle(cornerRadius: 7)).contentShape(Rectangle())
         }.buttonStyle(.plain)
+        .hoverLift()
+        .motion(Motion.pop, value: isCopied)
         .accessibilityLabel(version == .patch ? "Copy unified diff" : version == .before ? "Copy last commit version" : "Copy working tree version")
     }
 
@@ -420,6 +431,7 @@ struct ChangesView: View {
             }
             .padding(8).background(Theme.field, in: RoundedRectangle(cornerRadius: 8))
             .contentShape(Rectangle())
+            .hoverLift()
         }.buttonStyle(.plain)
             .appTooltip("Branches and actions: " + snapshot.branch + " (⌘B)")
             .accessibilityLabel("Branches and actions, current branch " + snapshot.branch)
@@ -440,16 +452,21 @@ struct ChangesView: View {
             }
             pushButton(snapshot, compact: compact)
             Button {
+                fetches += 1
                 Task {
                     await reload(fetchOrigin: true)
                     announce(self.snapshot?.state != .ready ? "Could not read Git status. Try again."
                         : refreshFailed ? "Fetch from origin failed. Try again." : "Git status refreshed.")
                 }
             } label: {
-                Image(systemName: "arrow.clockwise").padding(8).contentShape(Rectangle())
+                Image(systemName: "arrow.clockwise")
+                    .actOut("arrow.clockwise", trigger: fetches)
+                    .padding(8).contentShape(Rectangle())
+                    .hoverLift(amount: Motion.smallLift)
             }.buttonStyle(.plain).disabled(busy)
                 .appTooltip("Fetch from origin").accessibilityLabel("Fetch from origin")
             Image(systemName: "ellipsis").padding(8).contentShape(Rectangle())
+                .hoverLift(amount: Motion.smallLift)
                 .appMenu { repositoryMenu(snapshot) }
                 .accessibilityLabel("Repository actions for " + repositoryName).disabled(busy)
         }
@@ -464,6 +481,7 @@ struct ChangesView: View {
         }
         if repositories.count > 1 {
             label.padding(7).surface(Theme.field, cornerRadius: 7).contentShape(Rectangle())
+                .hoverLift()
                 .appMenu {
                     repositories.map { repository in
                         .item(repository.name, checked: repository.root == root) { selectRepository(repository.root, nil) }
@@ -590,6 +608,7 @@ struct ChangesView: View {
             if mode == .changes, let review { unsentStrip(review) }
             if mode == .changes && !files.isEmpty { commitBar }
         }
+        .motion(Motion.reveal, value: unsentCount)
         .background(Theme.card)
     }
 
@@ -719,6 +738,7 @@ struct ChangesView: View {
                 FileNotesBadge(notes: all, expanded: !navigation.foldedNotes.contains(key)) {
                     if !navigation.foldedNotes.insert(key).inserted { navigation.foldedNotes.remove(key) }
                 }
+                .transition(.fadeIn)
             }
         }
     }
@@ -781,8 +801,10 @@ struct ChangesView: View {
                     Text("\(counted(kept.count, "comment")) not sent yet")
                         .font(.system(size: 12, weight: .medium)).foregroundStyle(Theme.plan)
                         .lineLimit(1).truncationMode(.tail)
+                        .contentTransition(.numericText())
                     Image(systemName: "ellipsis").font(.system(size: 11)).foregroundStyle(.secondary)
                         .padding(.horizontal, 4).frame(height: 22).contentShape(Rectangle())
+                        .hoverLift(amount: Motion.smallLift)
                         .appMenu {
                             var entries: [MenuEntry] = [
                                 .item("Preview message") { previewSend(review, startsOnMessage: true) },
@@ -802,7 +824,9 @@ struct ChangesView: View {
                         Text(unread == 1 ? "1 reply" : "\(unread) replies")
                             .font(.system(size: 12, weight: .semibold)).foregroundStyle(Theme.plan)
                             .lineLimit(1).fixedSize()
+                            .contentTransition(.numericText())
                             .contentShape(Rectangle())
+                            .hoverLift()
                     }
                     .buttonStyle(.plain)
                     .appTooltip("Open the next reply")
@@ -818,7 +842,15 @@ struct ChangesView: View {
             .padding(.horizontal, 14).padding(.vertical, 8)
             .background(Theme.card)
             .overlay(alignment: .top) { Rectangle().fill(Theme.hairline).frame(height: 1) }
+            .transition(.fadeIn)
         }
+    }
+
+    // Only the user's own comments move the strip. Replies arrive from the agent, so the
+    // strip shows them without motion.
+    private var unsentCount: Int {
+        guard let review else { return 0 }
+        return review.reviews.comments(review.sessionID).filter { !$0.isPending }.count
     }
 
     private var filesNavigator: some View {
@@ -1235,29 +1267,36 @@ struct ChangesView: View {
     @ViewBuilder private func content(narrowHistory: Bool) -> some View {
         switch snapshot?.state {
         case .ready:
-            if mode == .history {
-                historyContent(narrow: narrowHistory)
-            } else if files.isEmpty {
-                cleanContent
-            } else {
-                HStack(spacing: 0) {
-                    if let file = shownFile {
-                        diffPane(truncationHint: "Open the file to see the rest.",
-                                 reveal: { reveal(file) }) {
-                            fileName(file)
-                            counts(file)
-                            if fileSelection.ids.count > 1 {
-                                Text("\(fileSelection.ids.count) files selected")
-                                    .font(.system(size: 11))
-                                    .foregroundStyle(.secondary)
+            Group {
+                if mode == .history {
+                    historyContent(narrow: narrowHistory)
+                } else if files.isEmpty {
+                    cleanContent
+                } else {
+                    HStack(spacing: 0) {
+                        if let file = shownFile {
+                            diffPane(truncationHint: "Open the file to see the rest.",
+                                     reveal: { reveal(file) }) {
+                                fileName(file)
+                                counts(file)
+                                if fileSelection.ids.count > 1 {
+                                    Text("\(fileSelection.ids.count) files selected")
+                                        .font(.system(size: 11))
+                                        .foregroundStyle(.secondary)
+                                }
                             }
+                            .transition(.fadeIn)
+                        } else {
+                            PaneMessage(icon: "doc.text", title: "Select a file",
+                                        detail: "Choose a changed file in the workspace navigator.")
+                                .transition(.fadeIn)
                         }
-                    } else {
-                        PaneMessage(icon: "doc.text", title: "Select a file",
-                                    detail: "Choose a changed file in the workspace navigator.")
                     }
+                    .motion(Motion.reveal, value: shownFile == nil)
                 }
             }
+            .id(mode)
+            .transition(.headerPage(reduceMotion: reduceMotion))
         case .notARepo:
             PaneMessage(icon: "folder", title: "Not a git repository",
                         detail: "This folder is not tracked by git, so there is nothing to compare against.")
@@ -1372,6 +1411,7 @@ struct ChangesView: View {
                 if mode == .changes, review != nil, !orderedComments.isEmpty { commentNavigation }
                 if mode == .changes, let file = shownFile {
                     Image(systemName: "ellipsis").padding(8).contentShape(Rectangle())
+                        .hoverLift(amount: Motion.smallLift)
                         .appMenu {
                             var entries: [MenuEntry] = []
                             if !file.isBinary && diff?.images == nil {
@@ -1415,11 +1455,20 @@ struct ChangesView: View {
                 if !placement.unplaced.isEmpty { unplacedComments(placement.unplaced, review: review) }
                 if !placement.onFile.isEmpty { fileComments(placement.onFile, review: review) }
             }
+            // A new file's diff fades in once it has been read. The one before goes at once,
+            // so two diffs are never drawn over each other.
             diffBody(truncationHint: truncationHint)
+                .id(mode == .changes ? shownFile?.id : nil)
+                .transition(.fadeIn)
+                .motion(Motion.reveal, value: mode == .changes ? shownFile?.id : nil)
                 .overlay(alignment: .topLeading) {
-                    if mode == .changes, review != nil, !coachSeen, diff?.lines.isEmpty == false,
-                       orderedComments.isEmpty, commentDraft == nil {
-                        coachMark.padding(.leading, 70).padding(.top, 40)
+                    ZStack(alignment: .topLeading) {
+                        if mode == .changes, review != nil, !coachSeen, diff?.lines.isEmpty == false,
+                           orderedComments.isEmpty, commentDraft == nil {
+                            coachMark.padding(.leading, 70).padding(.top, 40)
+                                .transition(.asymmetric(insertion: .opacity.animation(Motion.reveal),
+                                                        removal: .opacity.animation(Motion.leave)))
+                        }
                     }
                 }
         }
@@ -2873,6 +2922,8 @@ struct ChangesView: View {
         } else {
             NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: url.deletingLastPathComponent().path)
         }
+        // Finder opens outside the window, so the toast is what shows the click landed.
+        showToast("Shown in Finder")
     }
 }
 

@@ -60,7 +60,7 @@ struct NewSessionFooter: View {
         }
         .task {
             try? await Task.sleep(for: Self.longestWait)
-            withAnimation(.easeOut(duration: 0.2)) { gaveUpWaiting = true }
+            gaveUpWaiting = true
         }
     }
 

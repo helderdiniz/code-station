@@ -391,8 +391,6 @@ private struct BoardSessionItem: View {
     let live: HomeLive
     let open: () -> Void
 
-    @State private var hovering = false
-
     var body: some View {
         Button(action: open) {
             HStack(spacing: 8) {
@@ -407,11 +405,10 @@ private struct BoardSessionItem: View {
             }
             .padding(.horizontal, 11)
             .frame(height: 30)
-            .background(hovering ? Theme.field : .clear)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .onHover { hovering = $0 }
+        .hoverFill(cornerRadius: 0)
         .accessibilityLabel("\(live.session.title), \(live.status), \(live.containerName)")
         .accessibilityHint("Opens this session")
     }
@@ -431,11 +428,12 @@ private struct BoardMoreItem: View {
                 .foregroundStyle(hovering ? .primary : .secondary)
                 .padding(.horizontal, 11)
                 .frame(maxWidth: .infinity, minHeight: 30, alignment: .leading)
-                .background(hovering ? Theme.field : .clear)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .onHover { hovering = $0 }
+        .hoverFill(cornerRadius: 0)
+        .onPointerHover { hovering = $0 }
+        .motion(Motion.hover, value: hovering)
         .accessibilityHint("Shows \(name) in the sidebar")
     }
 }
@@ -539,7 +537,8 @@ struct HomeMapActionRow: View {
         .overlay(shape.stroke(needs ? Theme.attention.opacity(0.55)
                               : hovering ? Theme.accent.opacity(0.4) : Theme.border))
         .shadow(color: .black.opacity(0.05), radius: 4.5, y: 3)
-        .onHover { hovering = $0 }
+        .onPointerHover { hovering = $0 }
+        .motion(Motion.hover, value: hovering)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("\(live.session.title), \(live.status), \(live.containerName)")
     }

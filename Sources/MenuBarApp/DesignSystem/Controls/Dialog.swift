@@ -237,7 +237,7 @@ struct DialogHost: View {
             }
             .padding(.horizontal, 20)
             .padding(.bottom, 20)
-            .arrives(after: 0.06, animation: .easeOut(duration: 0.16))
+            .arrives(after: 0.06)
         }
         .floatingCard(cornerRadius: 14)
         .accessibilityElement(children: .contain)
@@ -344,7 +344,7 @@ private struct ImpactDialogCard: View {
                                     .font(.system(size: 12))
                                     .foregroundStyle(.secondary)
                             }
-                            .arrives(after: 0.05, rising: 4, animation: .easeOut(duration: 0.18))
+                            .arrives(after: 0.05, rising: 4)
                         }
                         VStack(alignment: .leading, spacing: compact ? 8 : 10) {
                             Text(dialog.title)
@@ -377,7 +377,7 @@ private struct ImpactDialogCard: View {
                                             .font(.system(size: 12))
                                             .foregroundStyle(.secondary)
                                     }
-                                    .arrives(after: start + 0.06, sliding: 6, animation: .easeOut(duration: 0.22))
+                                    .arrives(after: start + 0.06, sliding: 6)
                                     Spacer(minLength: 0)
                                 }
                                 .padding(.vertical, compact ? 12 : 17)
@@ -418,7 +418,7 @@ private struct ImpactDialogCard: View {
             .padding(.horizontal, compact ? 16 : 20)
             .padding(.vertical, compact ? 12 : 20)
             .background(Theme.field)
-            .arrives(after: 0.06, animation: .easeOut(duration: 0.16))
+            .arrives(after: 0.06)
         }
         .clipShape(RoundedRectangle(cornerRadius: compact ? 14 : 18))
         .floatingCard(cornerRadius: compact ? 14 : 18)
@@ -451,23 +451,19 @@ extension AnyTransition {
     @MainActor
     static func dialogCard(reduceMotion: Bool) -> AnyTransition {
         if reduceMotion {
-            return .asymmetric(insertion: .opacity.animation(.easeInOut(duration: 0.15)),
-                               removal: .opacity.animation(.easeInOut(duration: 0.12)))
+            return .asymmetric(insertion: .opacity.animation(Motion.reveal),
+                               removal: .opacity.animation(Motion.leave))
         }
         return .asymmetric(
-            insertion: .opacity.animation(.easeOut(duration: 0.12))
+            insertion: .opacity.animation(Motion.reveal)
                 .combined(with: .offset(y: 8).animation(Motion.arrive)),
             removal: .opacity.animation(Motion.leave))
     }
 
     @MainActor
     static func dialogBackdrop(reduceMotion: Bool) -> AnyTransition {
-        if reduceMotion {
-            return .asymmetric(insertion: .opacity.animation(.easeInOut(duration: 0.15)),
-                               removal: .opacity.animation(.easeInOut(duration: 0.12)))
-        }
-        return .asymmetric(insertion: .opacity.animation(.easeOut(duration: 0.18)),
-                           removal: .opacity.animation(.easeIn(duration: 0.16).delay(0.02)))
+        .asymmetric(insertion: .opacity.animation(Motion.reveal),
+                    removal: .opacity.animation(Motion.leave))
     }
 }
 
@@ -513,7 +509,7 @@ private struct RuleDraw: ViewModifier {
 // `ActionButton` or anything with a tooltip or a hover lift, can crash its layout.
 extension View {
     func arrives(after delay: Double, rising rise: CGFloat = 0, sliding slide: CGFloat = 0,
-                 growing scale: CGFloat = 1, animation: Animation = .easeOut(duration: 0.2)) -> some View {
+                 growing scale: CGFloat = 1, animation: Animation = Motion.reveal) -> some View {
         modifier(Arrival(delay: delay, rise: rise, slide: slide, scale: scale, animation: animation))
     }
 

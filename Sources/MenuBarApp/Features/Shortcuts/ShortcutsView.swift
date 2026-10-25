@@ -132,9 +132,11 @@ struct ShortcutsView: View {
                     .padding(.vertical, 25)
                 }
                 .id(draft.value.id)
+                .transition(.fadeIn)
                 footer(draft)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .motion(Motion.reveal, value: draft.value.id)
         }
     }
 
@@ -159,12 +161,15 @@ struct ShortcutsView: View {
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+                .hoverLift()
                 .accessibilityLabel("Remove shortcut")
             }
             Text(draft.isDirty ? "Unsaved changes" : saveStatus)
                 .font(.system(size: 11))
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
+                .contentTransition(.interpolate)
+                .motion(Motion.reveal, value: draft.isDirty ? "Unsaved changes" : saveStatus)
         }
     }
 
@@ -258,7 +263,7 @@ struct ShortcutLibraryList: View {
                                                select: { select(shortcut) }, starFocus: $focusedStar) {
                                 movingID = shortcut.id
                                 focusedStar = shortcut.id
-                                withAnimation(reduceMotion ? nil : .timingCurve(0.2, 0.75, 0.25, 1, duration: 0.34)) {
+                                withAnimation(reduceMotion ? nil : Motion.control) {
                                     favorite(shortcut)
                                 }
                                 Task { @MainActor in
@@ -302,7 +307,7 @@ struct ShortcutLibraryList: View {
                 Group {
                     if let first = below.first {
                         Button {
-                            withAnimation(reduceMotion ? nil : .easeOut(duration: 0.2)) {
+                            withAnimation(reduceMotion ? nil : Motion.reveal) {
                                 scroller.scrollTo(first.id, anchor: .top)
                             }
                         } label: {
@@ -315,6 +320,7 @@ struct ShortcutLibraryList: View {
                                 .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
+                        .hoverLift()
                     } else {
                         Label(rows.isEmpty ? "No matching shortcuts"
                               : visibleRect.minY > 2 ? "End of list · \(rows.count) shortcuts"
@@ -337,6 +343,10 @@ struct ShortcutLibraryRow: View {
     let select: () -> Void
     var starFocus: FocusState<Shortcut.ID?>.Binding
     let favorite: (() -> Void)?
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var starHovering = false
+    @State private var starClicks = 0
 
     var body: some View {
         ZStack(alignment: .topTrailing) {
@@ -371,14 +381,21 @@ struct ShortcutLibraryRow: View {
             .buttonStyle(.plain)
             .accessibilityAddTraits(selected ? .isSelected : [])
             if let favorite {
-                Button(action: favorite) {
+                Button {
+                    starClicks += 1
+                    favorite()
+                } label: {
                     Image(systemName: shortcut.favorite ? "star.fill" : "star")
                         .font(.system(size: 14))
                         .foregroundStyle(shortcut.favorite ? Theme.secret : Color.secondary)
+                        .contentTransition(reduceMotion ? .identity : .symbolEffect(.replace))
+                        .actOut("star", trigger: starClicks)
                         .frame(width: 32, height: 32)
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+                .hoverLift(starHovering, amount: Motion.smallLift)
+                .onPointerHover { starHovering = $0 }
                 .focused(starFocus, equals: shortcut.id)
                 .overlay(RoundedRectangle(cornerRadius: 7)
                     .stroke(starFocus.wrappedValue == shortcut.id ? Theme.accent : .clear, lineWidth: 2))
@@ -391,6 +408,8 @@ struct ShortcutLibraryRow: View {
         }
         .surface(selected ? Theme.accent.opacity(0.07) : Theme.sidebar, cornerRadius: 8,
                  border: selected ? Theme.accent.opacity(0.4) : .clear)
+        .hoverFill(cornerRadius: 8)
+        .motion(Motion.control, value: selected)
     }
 }
 
@@ -452,9 +471,7 @@ private struct ShortcutCommandOutput: View {
                     Spacer()
                     Text(status).font(.system(size: 10)).foregroundStyle(.secondary)
                     if !log.isEmpty {
-                        Button("Clear") { if let run { store.clearLog(run) } }
-                            .buttonStyle(.plain)
-                            .font(.system(size: 11)).foregroundStyle(Theme.accent)
+                        InlineLink(title: "Clear", size: 11) { if let run { store.clearLog(run) } }
                             .frame(minHeight: 32)
                     }
                 }

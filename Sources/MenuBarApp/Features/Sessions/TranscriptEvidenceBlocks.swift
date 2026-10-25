@@ -306,14 +306,20 @@ struct InlineAskButton: View {
     let title: String
     let action: () -> Void
 
+    @State private var hovering = false
+
     var body: some View {
         Button(action: action) {
             Text(title + " →")
                 .font(.system(size: 11.5, weight: .semibold))
                 .foregroundStyle(Theme.accent)
+                .opacity(hovering ? 0.75 : 1)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .hoverLift(hovering)
+        .onPointerHover { hovering = $0 }
+        .motion(Motion.hover, value: hovering)
     }
 }
 

@@ -193,6 +193,7 @@ struct TroubleshootProblemEditor: View {
                                 AttachmentChip(url: attachment.url) {
                                     attachments.removeAll { $0.id == attachment.id }
                                 }
+                                .transition(.fold)
                             }
                         }
                         .padding(.vertical, 1)
@@ -223,6 +224,7 @@ struct TroubleshootProblemEditor: View {
                 .buttonStyle(.plain)
                 .hoverLift()
             }
+            .motion(Motion.reveal, value: attachments.map(\.id))
             .padding(10)
 
             if let footer {

@@ -1,5 +1,6 @@
 import AppKit
 import Observation
+import SwiftUI
 
 enum BotPicture: Codable, Equatable {
     case automatic
@@ -72,7 +73,7 @@ final class BotSettingsFlow {
 
     func leave(using dialogs: DialogPresenter, then action: @escaping () -> Void) {
         guard draft?.isDirty == true else {
-            draft = nil
+            close()
             action()
             return
         }
@@ -80,11 +81,18 @@ final class BotSettingsFlow {
             "Leave without saving?",
             message: "Your picture and personality changes haven't been saved.",
             action: "Discard changes", kind: .primary, cancel: "Keep editing") {
-                self.draft = nil
+                self.close()
                 action()
             }
         dialog.isModal = true
         dialogs.show(dialog)
+    }
+
+    // Putting the editor away runs on the quicker leaving curve, so closing never feels
+    // slower than opening.
+    private func close() {
+        let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        withAnimation(reduceMotion ? nil : Motion.leave) { draft = nil }
     }
 
     func announce(_ message: String, undoDefaultName: String? = nil) {
