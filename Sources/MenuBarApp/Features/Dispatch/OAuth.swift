@@ -55,7 +55,7 @@ struct OAuthConfig: Codable, Equatable {
     var state = ""
     // The redirect the identity provider sends the browser back to. It has to be one the
     // provider already allows for this client, which is why it is editable.
-    var callbackURL = "http://127.0.0.1:8234/callback"
+    var callbackURL = "http://localhost:8234/callback"
     var headerPrefix = "Bearer"
     var clientAuth: ClientAuthentication = .body
 

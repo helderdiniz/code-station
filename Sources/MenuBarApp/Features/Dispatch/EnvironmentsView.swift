@@ -339,7 +339,7 @@ struct EnvironmentsView: View {
 
             if config.wrappedValue.grant.usesBrowser {
                 field("AUTH URL", "https://id.example/oauth/authorize", config.authURL)
-                field("CALLBACK URL", "http://127.0.0.1:8234/callback", config.callbackURL)
+                field("CALLBACK URL", "http://localhost:8234/callback", config.callbackURL)
                 Text(config.wrappedValue.usesLoopback
                      ? "The browser is sent back here when you sign in, so the identity provider has to allow this exact URL for the client. If it refuses, put the callback it does allow here instead and paste the code back by hand."
                      : "This callback is not on your machine, so the browser cannot hand the code back on its own. Sign in, then paste the address the browser ends on.")

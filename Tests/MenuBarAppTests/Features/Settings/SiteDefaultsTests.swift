@@ -66,7 +66,7 @@ struct SiteDefaultsTests {
         #expect(defaults.dispatchOAuth.tokenURL == "https://id.example/token")
         #expect(defaults.dispatchOAuth.clientID == "abc")
         // Anything the file leaves out keeps the app's own default.
-        #expect(defaults.dispatchOAuth.callbackURL == "http://127.0.0.1:8234/callback")
+        #expect(defaults.dispatchOAuth.callbackURL == "http://localhost:8234/callback")
 
         #expect(defaults.dispatchRequests.count == 1)
         #expect(defaults.dispatchRequests[0].name == "List things")

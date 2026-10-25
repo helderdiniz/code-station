@@ -445,7 +445,7 @@ final class DispatchAuthStore {
         }
 
         guard let port = config.callbackPort else {
-            throw OAuthError("The callback URL needs a port, such as http://127.0.0.1:8234/callback.")
+            throw OAuthError("The callback URL needs a port, such as http://localhost:8234/callback.")
         }
 
         let server = LoopbackServer()

@@ -469,7 +469,7 @@ private struct SiteConfigurationEditorView: View {
                                            text: oauthText(\.scope))
                     if oauthGrant.wrappedValue.usesBrowser {
                         SiteConfigurationField(caption: "CALLBACK URL",
-                                               placeholder: "http://127.0.0.1:8234/callback",
+                                               placeholder: "http://localhost:8234/callback",
                                                text: oauthText(\.callbackURL))
                     }
                 }
@@ -752,7 +752,7 @@ private struct SiteConfigurationEditorView: View {
             var dispatch = draft.dispatch ?? SiteDefaults.DispatchConfig()
             dispatch.oauth = enabled ? (dispatch.oauth ?? SiteDefaults.DispatchConfig.OAuth(
                 grant: .authorizationCodePKCE,
-                callbackURL: "http://127.0.0.1:8234/callback")) : nil
+                callbackURL: "http://localhost:8234/callback")) : nil
             draft.dispatch = dispatch
         })
     }
