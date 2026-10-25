@@ -156,6 +156,24 @@ struct DockerServiceTests {
         #expect(service.containers.items.map(\.name) == ["api"])
     }
 
+    @Test func removesStoppedContainersByIDWhenThePruneCannotMeasureThem() async {
+        let recorder = DockerCommandRecorder { arguments in
+            if arguments.first == "container" {
+                return DockerService.Output(errorText: "determining size of layer", status: 125)
+            }
+            let lines = [#"{"ID":"stopped-1","Names":"api","State":"exited"}"#,
+                         #"{"ID":"running-1","Names":"db","State":"running"}"#]
+            return DockerService.Output(text: arguments.first == "ps" ? lines.joined(separator: "\n") : "",
+                                        status: 0)
+        }
+        let service = DockerService(runner: { await recorder.run($0) }, availability: { true })
+
+        let result = await service.pruneStoppedContainers()
+
+        #expect(result.failure == nil)
+        #expect(await recorder.commands.last == ["rm", "stopped-1"])
+    }
+
     @Test func keepsTheSizedErrorWhenThePlainListFailsToo() async {
         let service = DockerService(
             runner: { arguments in
@@ -172,9 +190,14 @@ struct DockerServiceTests {
 
 private actor DockerCommandRecorder {
     private(set) var commands: [[String]] = []
+    private let answer: @Sendable ([String]) -> DockerService.Output
+
+    init(answer: @escaping @Sendable ([String]) -> DockerService.Output = { _ in DockerService.Output(status: 0) }) {
+        self.answer = answer
+    }
 
     func run(_ arguments: [String]) -> DockerService.Output {
         commands.append(arguments)
-        return DockerService.Output(status: 0)
+        return answer(arguments)
     }
 }

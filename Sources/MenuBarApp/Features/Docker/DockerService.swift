@@ -557,6 +557,19 @@ final class DockerService {
         return (DockerSize.reclaimed(in: result.text), nil)
     }
 
+    // Podman measures each stopped container before it prunes it, and keeps any it cannot
+    // measure, so a container with a broken layer would never go. `rm` does not measure,
+    // and without `--force` it still leaves a container alone if it has started since.
+    func pruneStoppedContainers() async -> (freed: Int64?, failure: String?) {
+        let pruned = await prune(DockerCleanUp.Choice.stoppedContainers.command)
+        guard pruned.failure != nil else { return pruned }
+        await refreshContainers()
+        let stopped = containers.items.filter { !$0.isRunning }.map(\.id)
+        guard !stopped.isEmpty else { return (nil, nil) }
+        let removed = await runner(["rm"] + stopped)
+        return removed.ok ? (nil, nil) : (nil, removed.failureMessage)
+    }
+
     // MARK: - Reading
 
     private static let diskUsage = ["system", "df", "--format", "{{json .}}"]

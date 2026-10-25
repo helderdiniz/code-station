@@ -303,7 +303,9 @@ struct DockerCleanUpView: View {
         Task {
             for step in steps {
                 run.steps[step] = .running
-                let result = await docker.prune(step.command)
+                let result = step == .stoppedContainers
+                    ? await docker.pruneStoppedContainers()
+                    : await docker.prune(step.command)
                 if let failure = result.failure {
                     run.steps[step] = .failed(failure)
                 } else {
