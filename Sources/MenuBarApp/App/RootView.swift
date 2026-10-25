@@ -596,7 +596,7 @@ private struct AppUpdateBanner: View {
         case .downloading:
             EmptyView()
         case .installing:
-            ProgressView().controlSize(.small)
+            LoopSpinner(size: 14)
         case .ready:
             ActionButton(title: "Restart now", tone: .green, height: 28, size: 11,
                          action: onRestart)

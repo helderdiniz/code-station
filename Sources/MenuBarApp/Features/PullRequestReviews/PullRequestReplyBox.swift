@@ -59,7 +59,7 @@ struct PullRequestReplyBox: View {
     @ViewBuilder private var askButton: some View {
         if drafting {
             HStack(spacing: 6) {
-                ProgressView().controlSize(.small)
+                LoopSpinner(size: 14)
                 if agentNeedsYou {
                     Text("The agent is waiting for you in the chat.").font(.system(size: 11.5))
                     InlineLink(title: "Open chat", size: 11.5) { store.selectSession(sessionID) }
@@ -97,7 +97,7 @@ struct PullRequestReplyBox: View {
                 run(resolves: false) { await PullRequestReviewActions.reply(reply, thread: thread, on: entry) }
             }
             .disabled(reply.trimmed.isEmpty)
-            if working { ProgressView().controlSize(.small) }
+            if working { LoopSpinner(size: 14) }
             Spacer(minLength: 0)
             // Done without a word. A fix is put back first, so nothing stray stays in the checkout.
             InlineLink(title: fix == nil ? "Resolve" : "Discard and resolve", size: 11.5, tint: .secondary) {

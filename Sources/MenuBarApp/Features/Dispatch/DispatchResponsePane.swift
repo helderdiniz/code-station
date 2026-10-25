@@ -8,7 +8,6 @@ struct DispatchResponsePane: View {
     let retry: () -> Void
 
     @Environment(DispatchStore.self) private var store
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Namespace private var tabPanels
     @State private var document = DispatchResponseDocument(body: "")
     @State private var collapsed = false
@@ -106,11 +105,7 @@ struct DispatchResponsePane: View {
     @ViewBuilder private var content: some View {
         if running {
             VStack(spacing: 10) {
-                TimelineView(.animation(minimumInterval: 1.0 / 30, paused: reduceMotion)) { timeline in
-                    Circle().trim(from: 0.1, to: 0.85).stroke(Theme.accent, style: StrokeStyle(lineWidth: 2, lineCap: .round))
-                        .frame(width: 22, height: 22)
-                        .rotationEffect(.degrees(reduceMotion ? 0 : timeline.date.timeIntervalSinceReferenceDate * 300))
-                }.accessibilityHidden(true)
+                LoopSpinner(colour: Theme.accent, size: 22)
                 Text("Sending to \(environment.label)").font(.serif(17))
                 Text("Waiting for the response.").font(.system(size: 12)).foregroundStyle(.secondary)
                 ActionButton(title: "Cancel request", tone: .outlined, action: cancel)

@@ -404,7 +404,7 @@ struct TroubleshootTabView: View {
                     .font(.system(size: 12, weight: .semibold))
                     .foregroundStyle(.tertiary)
             case .checking:
-                ProgressView().controlSize(.mini)
+                LoopSpinner(size: 10)
             case .blocked:
                 Image(systemName: "exclamationmark.triangle.fill")
                     .font(.system(size: 12, weight: .semibold))

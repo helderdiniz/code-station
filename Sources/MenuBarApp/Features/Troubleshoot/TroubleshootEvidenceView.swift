@@ -53,7 +53,7 @@ struct TroubleshootEvidenceView: View {
 
     private var workingNote: some View {
         HStack(spacing: 8) {
-            ProgressView().controlSize(.small)
+            LoopSpinner(size: 14)
             Text("The agent is still investigating. New evidence shows up here as it arrives.")
                 .font(.system(size: 12.5))
                 .foregroundStyle(.secondary)

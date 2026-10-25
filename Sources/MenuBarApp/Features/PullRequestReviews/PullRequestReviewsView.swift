@@ -54,7 +54,7 @@ struct PullRequestReviewsView: View {
     private var emptyState: some View {
         VStack(spacing: 6) {
             if isLoading {
-                ProgressView().controlSize(.small)
+                LoopSpinner(size: 14)
                 Text("Looking for a pull request on this branch…").font(.system(size: 12.5)).foregroundStyle(.secondary)
             } else {
                 Text("No pull request yet.").font(.system(size: 13, weight: .semibold))

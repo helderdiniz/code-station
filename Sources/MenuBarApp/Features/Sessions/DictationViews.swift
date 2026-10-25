@@ -183,8 +183,6 @@ struct DictationNoticeRow: View {
     let openSettings: (DictationFailure) -> Void
     let undo: () -> Void
 
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
     var body: some View {
         HStack(spacing: 10) {
             content
@@ -220,7 +218,7 @@ struct DictationNoticeRow: View {
         switch notice {
         case .listening:
             HStack(spacing: 6) {
-                BreathingDot(reduceMotion: reduceMotion)
+                BreathingDot()
                 Text("Listening in \(languageName)").fontWeight(.semibold)
             }
             Spacer(minLength: 8)
@@ -372,19 +370,9 @@ struct DictationNoticeRow: View {
 }
 
 private struct BreathingDot: View {
-    let reduceMotion: Bool
-    @State private var dim = false
-
     var body: some View {
-        Circle()
-            .fill(Theme.listenInk)
+        BreathingCircle(colour: Theme.listenInk, restingOpacity: 1, fullOpacity: 0.35)
             .frame(width: 7, height: 7)
-            .opacity(dim ? 0.35 : 1)
-            .onAppear {
-                guard !reduceMotion else { return }
-                withAnimation(.easeInOut(duration: 0.8).repeatForever(autoreverses: true)) { dim = true }
-            }
-            .accessibilityHidden(true)
     }
 }
 

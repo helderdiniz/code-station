@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 // The pieces a review is drawn with, shared by both diff layouts, the review list, the
@@ -408,18 +409,72 @@ struct SideCopyAvatar: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1 / 30, paused: !answering || reduceMotion)) { context in
-            let phase = answering && !reduceMotion
-                ? CGFloat(context.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 1.2) / 1.2) * -9 : 0
-            ReviewAvatar(agent: agent, size: size - 6)
-                .frame(width: size, height: size)
-                .overlay {
-                    Circle().strokeBorder(Theme.plan.opacity(0.75),
-                                          style: StrokeStyle(lineWidth: 1.2, dash: [2.5, 2], dashPhase: phase))
-                        .padding(-2)
+        ReviewAvatar(agent: agent, size: size - 6)
+            .frame(width: size, height: size)
+            .overlay {
+                Group {
+                    if answering && !reduceMotion {
+                        MarchingRing(colour: Theme.plan.opacity(0.75))
+                    } else {
+                        Circle().strokeBorder(Theme.plan.opacity(0.75),
+                                              style: StrokeStyle(lineWidth: MarchingRingView.lineWidth,
+                                                                 dash: MarchingRingView.dash))
+                    }
                 }
-        }
-        .accessibilityHidden(true)
+                .padding(-2)
+            }
+            .accessibilityHidden(true)
+    }
+}
+
+private struct MarchingRing: NSViewRepresentable {
+    let colour: Color
+
+    func makeNSView(context: Context) -> MarchingRingView { MarchingRingView() }
+
+    func updateNSView(_ view: MarchingRingView, context: Context) {
+        view.update(colour: colour.resolve(in: context.environment).cgColor)
+    }
+}
+
+// The dashed ring, turning: its dashes travel two whole patterns round the circle each
+// period.
+final class MarchingRingView: LoopLayerView {
+    static let lineWidth: CGFloat = 1.2
+    static let dash: [CGFloat] = [2.5, 2]
+    static let period: CFTimeInterval = 1.2
+
+    private let ring = CAShapeLayer()
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        ring.fillColor = nil
+        ring.lineWidth = Self.lineWidth
+        ring.lineDashPattern = Self.dash.map { NSNumber(value: Double($0)) }
+        layer?.addSublayer(ring)
+    }
+
+    var loops: [String] { ring.animationKeys() ?? [] }
+
+    func update(colour: CGColor) {
+        LayerLoop.still { ring.strokeColor = colour }
+    }
+
+    // Inset by half the line, so the stroke sits inside the frame the way a SwiftUI
+    // stroked border does.
+    override func layoutLayers() {
+        ring.frame = bounds
+        let inset = Self.lineWidth / 2
+        ring.path = CGPath(ellipseIn: bounds.insetBy(dx: inset, dy: inset), transform: nil)
+    }
+
+    override func restartLoops() {
+        ring.removeAnimation(forKey: "march")
+        let march = CABasicAnimation(keyPath: "lineDashPhase")
+        march.fromValue = 0
+        march.toValue = -2 * Self.dash.reduce(0, +)
+        march.duration = Self.period
+        ring.add(LayerLoop.repeating(march, period: Self.period), forKey: "march")
     }
 }
 
@@ -574,7 +629,7 @@ struct QuestionThreadView: View {
                 ForEach(Array(shown.enumerated()), id: \.offset) { index, step in
                     HStack(spacing: 6) {
                         if index == shown.count - 1 {
-                            ProgressView().controlSize(.mini).frame(width: 12)
+                            LoopSpinner(size: 10).frame(width: 12)
                         } else {
                             Image(systemName: "checkmark").font(.system(size: 9, weight: .bold))
                                 .foregroundStyle(Theme.dotOn).frame(width: 12)
@@ -979,7 +1034,7 @@ struct ReviewLane: View {
         HStack(spacing: 7) {
             switch state {
             case .running:
-                ProgressView().controlSize(.mini)
+                LoopSpinner(size: 10)
                 Text(reviewer.agent.title).font(.system(size: 12, weight: .semibold)).fixedSize()
                 if let seat = reviewer.seatLabel {
                     Text(seat)
@@ -1464,7 +1519,7 @@ struct ReviewThreadView: View {
                     }
                     if round.isAwaitingReply(comment.id) {
                         message(agent: agent, when: Text("replying")) {
-                            ProgressView().controlSize(.small).padding(.vertical, 2)
+                            LoopSpinner(size: 14).padding(.vertical, 2)
                         }
                     }
                 }
@@ -1804,7 +1859,7 @@ struct ReviewCard: View {
     @ViewBuilder private var tally: some View {
         if settling {
             HStack(spacing: 6) {
-                ProgressView().controlSize(.mini)
+                LoopSpinner(size: 10)
                 Text("\(agent.title) is working through it")
             }
             .font(.system(size: 11, weight: .semibold)).foregroundStyle(.secondary)

@@ -336,6 +336,101 @@ final class BreathingCopyView: LoopLayerView {
     }
 }
 
+// Content that dips a little and comes back once per period while it is active, the way
+// a head nods while it reads. A delay puts it later in the beat, so a row of them can
+// nod in turn. Held at rest under Reduce Motion.
+//
+// It moves a copy laid over the original, the same way `Breathing` does. Never put a
+// rotation or scale outside it: the copy is an AppKit view, and AppKit cannot lay one
+// out under a transform. Turn the content inside it instead.
+struct Nodding<Content: View>: View {
+    var active = true
+    var period: TimeInterval = Breath.period
+    var delay: TimeInterval = 0
+    // How far down the content dips, in points.
+    var depth: CGFloat
+    // How much of the period the dip takes. The content rests for the remainder.
+    var dip: TimeInterval = 0.34
+    @ViewBuilder let content: Content
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    private var moving: Bool { active && !reduceMotion }
+
+    var body: some View {
+        content
+            .opacity(moving ? 0 : 1)
+            .overlay {
+                if moving {
+                    NoddingCopy(content: content,
+                                look: .init(period: period, delay: delay, depth: depth, dip: dip))
+                        .allowsHitTesting(false)
+                        .accessibilityHidden(true)
+                }
+            }
+    }
+}
+
+private struct NoddingCopy<Content: View>: NSViewRepresentable {
+    let content: Content
+    let look: NoddingCopyView.Look
+
+    func makeNSView(context: Context) -> NoddingCopyView { NoddingCopyView() }
+
+    func updateNSView(_ view: NoddingCopyView, context: Context) {
+        view.show(AnyView(content.environment(\.self, context.environment)), look: look)
+    }
+}
+
+final class NoddingCopyView: LoopLayerView {
+    struct Look: Equatable {
+        var period: TimeInterval = Breath.period
+        var delay: TimeInterval = 0
+        var depth: CGFloat = 0
+        var dip: TimeInterval = 0.34
+    }
+
+    private let host = NSHostingView(rootView: AnyView(EmptyView()))
+    private var look = Look()
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        host.sizingOptions = []
+        host.frame = bounds
+        host.autoresizingMask = [.width, .height]
+        addSubview(host)
+    }
+
+    var loops: [String] { host.layer?.animationKeys() ?? [] }
+
+    func show(_ content: AnyView, look: Look) {
+        host.rootView = content
+        guard look != self.look else { return }
+        self.look = look
+        restartLoops()
+    }
+
+    // The dip is half a sine wave: down softly and back up softly, then a rest. Inside
+    // this view a layer's y runs downwards, the same way SwiftUI's offset does.
+    override func restartLoops() {
+        guard let layer = host.layer else { return }
+        layer.removeAnimation(forKey: "nod")
+        guard look.depth != 0, look.period > 0 else { return }
+        let share = min(1, look.dip / look.period)
+        let nod = CAKeyframeAnimation(keyPath: "transform.translation.y")
+        nod.values = [0, look.depth, 0, 0]
+        nod.keyTimes = [0, NSNumber(value: share / 2), NSNumber(value: share), 1]
+        nod.timingFunctions = [CAMediaTimingFunction(name: .easeOut),
+                               CAMediaTimingFunction(name: .easeIn),
+                               CAMediaTimingFunction(name: .linear)]
+        nod.duration = look.period
+        let looped = LayerLoop.repeating(nod, period: look.period)
+        let shifted = (CACurrentMediaTime() - look.delay).truncatingRemainder(dividingBy: look.period)
+        looped.timeOffset = shifted < 0 ? shifted + look.period : shifted
+        layer.add(looped, forKey: "nod")
+    }
+}
+
 // The same dot, breathing, for the one thing that is happening right now rather than
 // merely recently.
 //

@@ -230,10 +230,10 @@ struct AgentConfiguredServerDetailView: View {
         let source = registration.source
         HStack(spacing: 10) {
             if registration.work == .signingIn {
-                ProgressView().controlSize(.small)
+                LoopSpinner(size: 14)
                 InlineLink(title: "Cancel") { work(for: source).cancel(server.name) }
             } else if registration.work != nil {
-                ProgressView().controlSize(.small)
+                LoopSpinner(size: 14)
             } else if registration.status == .needsSignIn, registration.offersSignIn {
                 ActionButton(title: "Sign in", tone: .green, height: 28, size: 12) {
                     signIn(registration)

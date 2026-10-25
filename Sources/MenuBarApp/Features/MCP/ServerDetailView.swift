@@ -592,7 +592,7 @@ private struct AgentCard: View {
                     Text(reachStatus?.word ?? stateText)
                         .font(.system(size: 12, weight: .semibold))
                         .foregroundStyle(reachStatus?.tint ?? stateTint)
-                    if standing.busy { ProgressView().controlSize(.small) }
+                    if standing.busy { LoopSpinner(size: 14) }
                 }
 
                 Text(caption)

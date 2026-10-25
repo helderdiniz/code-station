@@ -116,15 +116,12 @@ struct LineupTiles: View {
     private var nodding: Bool { !reduceMotion && marks.values.contains(.working) }
 
     var body: some View {
-        // The clock only runs while someone is reading, so a still lineup costs nothing.
-        TimelineView(.animation(paused: !nodding)) { context in
-            HStack(spacing: spacing) {
-                if agents.isEmpty {
-                    emptyTile
-                } else {
-                    ForEach(Array(shown.enumerated()), id: \.element) { index, tile in
-                        self.tile(tile, at: index, time: context.date.timeIntervalSinceReferenceDate)
-                    }
+        HStack(spacing: spacing) {
+            if agents.isEmpty {
+                emptyTile
+            } else {
+                ForEach(Array(shown.enumerated()), id: \.element) { index, tile in
+                    self.tile(tile, at: index)
                 }
             }
         }
@@ -147,13 +144,24 @@ struct LineupTiles: View {
         return fanned && !reduceMotion ? -size * 0.1 : -size * 0.36
     }
 
-    private func tile(_ tile: Tile, at index: Int, time: TimeInterval) -> some View {
+    private func tile(_ tile: Tile, at index: Int) -> some View {
         let isFront = index == shown.count - 1
         let mark: SecondOpinionLineup.Mark? = switch tile {
         case .agent(let agent): gathered ? (isFront ? .done : nil) : marks[agent]
         case .more: nil
         }
-        return Group {
+        // Each reader dips in turn, half a beat apart. The fan's turn sits inside the nod,
+        // since the nod moves an AppKit copy of the tile that cannot itself be turned.
+        return Nodding(active: mark == .working && nodding, delay: Double(index) * 0.8,
+                       depth: size * 0.14) {
+            tileFace(tile, at: index, isFront: isFront, mark: mark)
+        }
+        .zIndex(Double(index))
+    }
+
+    private func tileFace(_ tile: Tile, at index: Int, isFront: Bool,
+                          mark: SecondOpinionLineup.Mark?) -> some View {
+        Group {
             switch tile {
             case .agent(let agent):
                 ReviewAvatar(agent: agent, size: size, hasFindings: mark == .findings, move: deals)
@@ -168,22 +176,12 @@ struct LineupTiles: View {
         }
         .modifier(TileMoves(size: size, index: index, deals: deals, squashes: squashes,
                             shakes: mark == .failed ? shakes : 0, reduceMotion: reduceMotion))
-        .offset(y: mark == .working && nodding ? nod(index: index, time: time) : 0)
         .rotationEffect(.degrees(fanned && !reduceMotion && shown.count > 1 ? (index == 0 ? -10 : isFront ? 9 : 0) : 0))
         // A badge on the front tile sits bottom right; on the others bottom left, so the
         // tile in front never hides it.
         .overlay(alignment: isFront ? .bottomTrailing : .bottomLeading) {
             if let mark { badge(mark).offset(x: isFront ? size * 0.22 : -size * 0.22, y: size * 0.22) }
         }
-        .zIndex(Double(index))
-    }
-
-    // Each reader dips in turn, half a beat apart, on a 1.6 second loop.
-    private func nod(index: Int, time: TimeInterval) -> CGFloat {
-        let phase = (time - Double(index) * 0.8).truncatingRemainder(dividingBy: 1.6)
-        let beat = phase < 0 ? phase + 1.6 : phase
-        guard beat < 0.34 else { return 0 }
-        return size * 0.14 * sin(beat / 0.34 * .pi)
     }
 
     @ViewBuilder

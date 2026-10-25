@@ -942,25 +942,57 @@ private struct LedgerMeter: View {
     }
 }
 
-private struct Shimmer: View {
-    var body: some View {
-        TimelineView(.animation) { timeline in
-            GeometryReader { geometry in
-                let phase = timeline.date.timeIntervalSinceReferenceDate
-                    .truncatingRemainder(dividingBy: 0.9) / 0.9
-                LinearGradient(colors: [.clear, .white.opacity(0.6), .clear],
-                               startPoint: .leading, endPoint: .trailing)
-                    .frame(width: geometry.size.width * 0.5)
-                    .offset(x: geometry.size.width * (phase * 1.5 - 0.5))
-            }
-        }
-        .allowsHitTesting(false)
+private struct Shimmer: NSViewRepresentable {
+    func makeNSView(context: Context) -> ShimmerView { ShimmerView() }
+
+    func updateNSView(_ view: ShimmerView, context: Context) {}
+}
+
+// A band of light half the meter's width that starts just off its left end and runs
+// just past its right one, then starts over.
+final class ShimmerView: LoopLayerView {
+    static let period: CFTimeInterval = 0.9
+    static let bandShare: CGFloat = 0.5
+
+    private let band = CAGradientLayer()
+    private var sweptWidth: CGFloat = 0
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        layer?.masksToBounds = true
+        band.colors = [NSColor.white.withAlphaComponent(0).cgColor,
+                       NSColor.white.withAlphaComponent(0.6).cgColor,
+                       NSColor.white.withAlphaComponent(0).cgColor]
+        band.startPoint = CGPoint(x: 0, y: 0.5)
+        band.endPoint = CGPoint(x: 1, y: 0.5)
+        layer?.addSublayer(band)
+    }
+
+    var loops: [String] { band.animationKeys() ?? [] }
+
+    // How far the band travels depends on the width, so a new width needs a new sweep.
+    override func layoutLayers() {
+        let width = bounds.width * Self.bandShare
+        band.frame = CGRect(x: -width, y: 0, width: width, height: bounds.height)
+        guard bounds.width != sweptWidth else { return }
+        sweptWidth = bounds.width
+        restartLoops()
+    }
+
+    override func restartLoops() {
+        band.removeAnimation(forKey: "sweep")
+        guard sweptWidth > 0 else { return }
+        let sweep = CABasicAnimation(keyPath: "transform.translation.x")
+        sweep.fromValue = 0
+        sweep.toValue = sweptWidth * (1 + Self.bandShare)
+        sweep.duration = Self.period
+        band.add(LayerLoop.repeating(sweep, period: Self.period), forKey: "sweep")
     }
 }
 
-// The usage band's refresh. The glyph turns while a check is out and the button will not
-// take a second one. The turn is on the glyph alone, since AppKit cannot lay out a
-// rotated button that carries a tooltip.
+// The usage band's refresh. While a check is out the glyph gives way to a turning arc and
+// the button will not take a second one. The arc is drawn by Core Animation, so it costs
+// nothing between frames, and it never turns the button itself, which carries a tooltip.
 private struct UsageRefreshButton: View {
     let checking: Bool
     let action: () -> Void
@@ -970,18 +1002,13 @@ private struct UsageRefreshButton: View {
     @State private var hovering = false
 
     private static let side: CGFloat = 22
-    private static let period = 0.7
 
     var body: some View {
         let shape = RoundedRectangle(cornerRadius: 6)
         Button(action: action) {
             Group {
                 if checking && !reduceMotion {
-                    TimelineView(.animation) { timeline in
-                        let turn = timeline.date.timeIntervalSinceReferenceDate
-                            .truncatingRemainder(dividingBy: Self.period) / Self.period
-                        glyph.rotationEffect(.degrees(turn * 360))
-                    }
+                    LoopSpinner(colour: Theme.accent, size: 10)
                 } else {
                     glyph
                 }
@@ -1190,12 +1217,8 @@ struct ContextHairline: View {
 
                 if Self.showsFuse(at: fraction) {
                     if Self.animatesFuse(at: fraction, whileActive: animated), !reduceMotion {
-                        TimelineView(.animation(minimumInterval: 1.0 / 24.0)) { timeline in
-                            FuseSpark(
-                                progressWidth: width,
-                                phase: timeline.date.timeIntervalSinceReferenceDate,
-                                intensity: clamped)
-                        }
+                        FuseSpark(progressWidth: width, phase: nil, intensity: clamped)
+                            .overlay { FuseEmbers(progressWidth: width, intensity: clamped) }
                     } else {
                         FuseSpark(progressWidth: width, phase: 0.35, intensity: clamped)
                     }
@@ -1210,24 +1233,18 @@ struct ContextHairline: View {
     }
 }
 
+// The burning tip of the fuse. It always draws the glow and the tip. Given a phase it
+// also draws the embers where they are at that moment, which is how a fuse that is not
+// burning holds still; a burning one leaves them to `FuseEmbers`.
 private struct FuseSpark: View {
     let progressWidth: CGFloat
-    let phase: TimeInterval
+    let phase: TimeInterval?
     let intensity: Double
-
-    private static let embers = [
-        Ember(angle: -2.55, distance: 5.2, size: 1.2, speed: 1.31, offset: 0.08),
-        Ember(angle: -2.02, distance: 7.2, size: 1.0, speed: 1.73, offset: 0.43),
-        Ember(angle: -1.57, distance: 6.2, size: 1.4, speed: 1.49, offset: 0.71),
-        Ember(angle: -1.12, distance: 7.7, size: 0.9, speed: 1.91, offset: 0.24),
-        Ember(angle: -0.66, distance: 5.5, size: 1.1, speed: 1.57, offset: 0.59),
-    ]
 
     var body: some View {
         Canvas { context, size in
-            let tip = CGPoint(x: min(size.width - 1, progressWidth), y: size.height - 1)
-            let heat = min(1, max(0, (intensity - ContextHairline.fuseThreshold)
-                / (1 - ContextHairline.fuseThreshold)))
+            let tip = FuseEmber.tip(progressWidth: progressWidth, in: size)
+            let heat = FuseEmber.heat(at: intensity)
 
             context.drawLayer { glow in
                 glow.addFilter(.blur(radius: 2.4))
@@ -1243,30 +1260,160 @@ private struct FuseSpark: View {
                                       width: 3.2, height: 3.2)),
                 with: .color(Theme.deletion))
 
-            for ember in Self.embers {
-                let life = (phase * ember.speed * (1 + heat * 0.65) + ember.offset)
-                    .truncatingRemainder(dividingBy: 1)
-                let fade = pow(1 - life, 1.7)
-                let distance = ember.distance * life
-                let point = CGPoint(
-                    x: tip.x + cos(ember.angle) * distance,
-                    y: tip.y + sin(ember.angle) * distance - life * life * 1.5)
-                let diameter = ember.size * (0.55 + fade * 0.7)
-                context.opacity = fade
+            guard let phase else { return }
+            for ember in FuseEmber.all {
+                let life = ember.life(at: phase, heat: heat)
+                let point = ember.point(at: life, from: tip)
+                let diameter = ember.diameter(at: life)
+                context.opacity = FuseEmber.fade(at: life)
                 context.fill(
                     Path(ellipseIn: CGRect(x: point.x - diameter / 2,
                                           y: point.y - diameter / 2,
                                           width: diameter, height: diameter)),
-                    with: .color(life < 0.45 ? Theme.attention : Theme.deletion))
+                    with: .color(FuseEmber.isYoung(life) ? Theme.attention : Theme.deletion))
             }
         }
     }
+}
 
-    private struct Ember {
-        let angle: Double
-        let distance: Double
-        let size: Double
-        let speed: Double
-        let offset: Double
+// One spark thrown off the fuse's tip. Over its life it flies out along its angle, drops
+// a little, shrinks, fades and cools from amber to red, then starts again from the tip.
+struct FuseEmber {
+    let angle: Double
+    let distance: Double
+    let size: Double
+    let speed: Double
+    let offset: Double
+
+    static let all = [
+        FuseEmber(angle: -2.55, distance: 5.2, size: 1.2, speed: 1.31, offset: 0.08),
+        FuseEmber(angle: -2.02, distance: 7.2, size: 1.0, speed: 1.73, offset: 0.43),
+        FuseEmber(angle: -1.57, distance: 6.2, size: 1.4, speed: 1.49, offset: 0.71),
+        FuseEmber(angle: -1.12, distance: 7.7, size: 0.9, speed: 1.91, offset: 0.24),
+        FuseEmber(angle: -0.66, distance: 5.5, size: 1.1, speed: 1.57, offset: 0.59),
+    ]
+
+    static func tip(progressWidth: CGFloat, in size: CGSize) -> CGPoint {
+        CGPoint(x: min(size.width - 1, progressWidth), y: size.height - 1)
+    }
+
+    // How far past the threshold the window is, from 0 to 1. A hotter fuse throws its
+    // sparks faster.
+    static func heat(at intensity: Double) -> Double {
+        min(1, max(0, (intensity - ContextHairline.fuseThreshold) / (1 - ContextHairline.fuseThreshold)))
+    }
+
+    static func fade(at life: Double) -> Double { pow(1 - life, 1.7) }
+
+    static func isYoung(_ life: Double) -> Bool { life < 0.45 }
+
+    // Lives each second, so one life lasts the inverse of this.
+    func rate(heat: Double) -> Double { speed * (1 + heat * 0.65) }
+
+    func life(at time: TimeInterval, heat: Double) -> Double {
+        (time * rate(heat: heat) + offset).truncatingRemainder(dividingBy: 1)
+    }
+
+    func point(at life: Double, from tip: CGPoint) -> CGPoint {
+        let travelled = distance * life
+        return CGPoint(x: tip.x + cos(angle) * travelled,
+                       y: tip.y + sin(angle) * travelled - life * life * 1.5)
+    }
+
+    func diameter(at life: Double) -> Double {
+        size * (0.55 + Self.fade(at: life) * 0.7)
+    }
+}
+
+// The sparks of a burning fuse, played by Core Animation. Each spark's whole life is laid
+// out as keyframes once, then repeats on its own, so the window is not drawn again for
+// every frame while a long turn runs near the end of its window.
+private struct FuseEmbers: NSViewRepresentable {
+    let progressWidth: CGFloat
+    let intensity: Double
+
+    func makeNSView(context: Context) -> FuseEmbersView { FuseEmbersView() }
+
+    func updateNSView(_ view: FuseEmbersView, context: Context) {
+        view.update(look: .init(progressWidth: progressWidth, heat: FuseEmber.heat(at: intensity),
+                                young: Theme.attention.resolve(in: context.environment).cgColor,
+                                old: Theme.deletion.resolve(in: context.environment).cgColor))
+    }
+}
+
+final class FuseEmbersView: LoopLayerView {
+    struct Look: Equatable {
+        var progressWidth: CGFloat = 0
+        var heat: Double = 0
+        var young: CGColor = .clear
+        var old: CGColor = .clear
+    }
+
+    // Enough points along a life that the curve of the flight and the fade read smooth.
+    private static let steps = 16
+
+    private var embers: [CAShapeLayer] = []
+    private var look = Look()
+    private var laidOut = CGSize.zero
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        for ember in FuseEmber.all {
+            let layer = CAShapeLayer()
+            let side = ember.diameter(at: 0)
+            layer.bounds = CGRect(x: 0, y: 0, width: side, height: side)
+            layer.path = CGPath(ellipseIn: layer.bounds, transform: nil)
+            layer.opacity = 0
+            self.layer?.addSublayer(layer)
+            embers.append(layer)
+        }
+    }
+
+    var loops: [String] { embers.flatMap { $0.animationKeys() ?? [] } }
+
+    func update(look: Look) {
+        guard look != self.look else { return }
+        self.look = look
+        restartLoops()
+    }
+
+    // The tip moves with the window's size, so a new size needs new flights.
+    override func layoutLayers() {
+        guard bounds.size != laidOut else { return }
+        laidOut = bounds.size
+        restartLoops()
+    }
+
+    override func restartLoops() {
+        let tip = FuseEmber.tip(progressWidth: look.progressWidth, in: bounds.size)
+        let now = CACurrentMediaTime()
+        for (ember, layer) in zip(FuseEmber.all, embers) {
+            layer.removeAnimation(forKey: "life")
+            guard bounds.width > 0 else { continue }
+            let lives = (0...Self.steps).map { Double($0) / Double(Self.steps) }
+            let side = ember.diameter(at: 0)
+
+            let flight = CAKeyframeAnimation(keyPath: "position")
+            flight.values = lives.map { NSValue(point: ember.point(at: $0, from: tip)) }
+            let shrink = CAKeyframeAnimation(keyPath: "transform.scale")
+            shrink.values = lives.map { ember.diameter(at: $0) / side }
+            let fade = CAKeyframeAnimation(keyPath: "opacity")
+            fade.values = lives.map { FuseEmber.fade(at: $0) }
+            let cool = CAKeyframeAnimation(keyPath: "fillColor")
+            cool.calculationMode = .discrete
+            cool.values = [look.young, look.old]
+            cool.keyTimes = [0, 0.45, 1]
+
+            let period = 1 / ember.rate(heat: look.heat)
+            let life = CAAnimationGroup()
+            life.animations = [flight, shrink, fade, cool]
+            life.duration = period
+            life.repeatCount = .infinity
+            life.isRemovedOnCompletion = false
+            // Picks the spark up where the clock says it is, the same as the still fuse
+            // and every other loop, rather than starting each one at the tip.
+            life.timeOffset = ember.life(at: now, heat: look.heat) * period
+            layer.add(life, forKey: "life")
+        }
     }
 }

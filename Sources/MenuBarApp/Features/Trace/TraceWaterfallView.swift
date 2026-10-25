@@ -1434,10 +1434,15 @@ struct TraceOverview: View {
 // What draws while the agent is still writing the block out, so the space it will take
 // is held rather than the reply jumping when it lands.
 struct TraceArrivingCard: View {
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var pulse = false
-
     var body: some View {
+        Breathing(period: 1.8) { skeleton }
+            .surface(Theme.card, cornerRadius: 11)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("Trace arriving")
+            .accessibilityValue("The agent is writing out the trace")
+    }
+
+    private var skeleton: some View {
         VStack(alignment: .leading, spacing: 10) {
             line(width: 0.46, height: 13)
             line(width: 0.22, height: 9)
@@ -1468,15 +1473,6 @@ struct TraceArrivingCard: View {
         }
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .opacity(pulse ? 0.55 : 1)
-        .surface(Theme.card, cornerRadius: 11)
-        .onAppear {
-            guard !reduceMotion else { return }
-            withAnimation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true)) { pulse = true }
-        }
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel("Trace arriving")
-        .accessibilityValue("The agent is writing out the trace")
     }
 
     private static let bars: [(label: CGFloat, offset: CGFloat, width: CGFloat)] = [

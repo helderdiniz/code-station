@@ -36,7 +36,7 @@ struct NewSessionFooter: View {
             Divider().overlay(Theme.hairline)
             VStack(alignment: .leading, spacing: 14) {
                 HStack(spacing: 8) {
-                    if waitingOn != nil { ProgressView().controlSize(.small) }
+                    if waitingOn != nil { LoopSpinner(size: 14) }
                     Text(waitingOn ?? (chosenAgent == nil ? "No coding agent found on PATH." : note))
                         .font(.system(size: 12))
                         .foregroundStyle(chosenAgent == nil ? Theme.deletion : Theme.accent)

@@ -113,13 +113,7 @@ private struct ReviewerSpinner: View {
                 Image(systemName: "clock").font(.system(size: size * 0.7, weight: .bold))
                     .foregroundStyle(Theme.accent)
             } else {
-                TimelineView(.animation) { context in
-                    let turn = context.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 1)
-                    Circle().trim(from: 0.2, to: 1)
-                        .stroke(Theme.accent, style: StrokeStyle(lineWidth: max(1.5, size * 0.16), lineCap: .round))
-                        .rotationEffect(.degrees(turn * 360))
-                        .padding(size * 0.12)
-                }
+                LoopSpinner(colour: Theme.accent, size: size * 0.76)
             }
         }
         .frame(width: size, height: size)

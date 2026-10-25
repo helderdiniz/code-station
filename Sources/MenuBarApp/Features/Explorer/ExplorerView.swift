@@ -439,7 +439,7 @@ struct ExplorerView: View {
                     ActionButton(title: "Try again", tone: .outlined, height: 28, size: 12) { Task { await reopenFolders() } }
                 }.padding(12)
             } else if loadingFolders.contains(root) && children[root] == nil {
-                ProgressView("Reading files…").controlSize(.small).frame(maxWidth: .infinity, maxHeight: .infinity)
+                ChangesProgressLabel(title: "Reading files…").foregroundStyle(Theme.secondaryText).frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if repositories.isEmpty && children[root]?.isEmpty == true {
                 PaneMessage(icon: "folder", title: "Empty folder", detail: showHidden ? "" : "Hidden files are off.")
             }
@@ -533,7 +533,7 @@ struct ExplorerView: View {
                     .opacity(node.isDirectory ? 1 : 0)
 
                 if loadingFolders.contains(node.path) {
-                    ProgressView().controlSize(.mini).frame(width: 14, height: 14)
+                    LoopSpinner(size: 10).frame(width: 14, height: 14)
                 } else {
                     Image(systemName: icon(node))
                         .font(.system(size: 11))
@@ -832,7 +832,7 @@ struct ExplorerView: View {
                 .lineLimit(2)
                 .contentTransition(.interpolate)
             Spacer(minLength: 0)
-            if saving { ProgressView().controlSize(.mini).transition(.fadeIn) }
+            if saving { LoopSpinner(size: 10).transition(.fadeIn) }
             Text("⌘ S").font(.mono(10))
         }
         .motion(Motion.reveal, value: dirty)
@@ -947,7 +947,7 @@ struct ExplorerView: View {
                 PaneMessage(icon: "folder", title: "Folder selected",
                             detail: "Use the left and right arrow keys to close and open folders.")
             } else {
-                ProgressView("Reading file…").controlSize(.small).frame(maxWidth: .infinity, maxHeight: .infinity)
+                ChangesProgressLabel(title: "Reading file…").foregroundStyle(Theme.secondaryText).frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
     }

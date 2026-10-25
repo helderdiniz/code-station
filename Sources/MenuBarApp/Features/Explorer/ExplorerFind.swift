@@ -239,7 +239,7 @@ struct ExplorerFindDialog: View {
                 .transition(.fadeIn)
         case .loading:
             HStack(spacing: 8) {
-                ProgressView().controlSize(.small)
+                LoopSpinner(size: 14)
                 Text("Reading files...")
             }
             .font(.system(size: 12))
@@ -418,7 +418,7 @@ struct ExplorerFindDialog: View {
 
     private var loadingMoreRow: some View {
         HStack(spacing: 8) {
-            ProgressView().controlSize(.small)
+            LoopSpinner(size: 14)
             Text("Finding more...")
         }
         .font(.system(size: 11))

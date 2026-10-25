@@ -405,7 +405,7 @@ struct WorkspaceDetailView: View {
     @ViewBuilder private func freshnessChip(_ project: Project) -> some View {
         if updating.contains(project.id) {
             HStack(spacing: 5) {
-                ProgressView().controlSize(.mini)
+                LoopSpinner(size: 10)
                 Text("UPDATING…")
                     .font(.mono(9, .semibold))
                     .kerning(0.6)
