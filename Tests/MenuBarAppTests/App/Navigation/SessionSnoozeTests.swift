@@ -140,54 +140,72 @@ struct SessionSnoozeTests {
         #expect(fixture.store.session(fixture.session.id)?.projectID == fixture.session.projectID)
     }
 
-    @Test func choicesLandOnTheNextMorningAndTheNextMonday() throws {
+    @Test func choicesLandOnTheNextMorningAndAMondayAfterIt() throws {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = try #require(TimeZone(identifier: "UTC"))
-        func date(_ year: Int, _ month: Int, _ day: Int, _ hour: Int) -> Date {
-            calendar.date(from: DateComponents(year: year, month: month, day: day, hour: hour))!
+        func date(_ year: Int, _ month: Int, _ day: Int, _ hour: Int, _ minute: Int = 0) -> Date {
+            calendar.date(from: DateComponents(year: year, month: month, day: day, hour: hour, minute: minute))!
         }
 
         // A Saturday mid-morning: 8:00 is tomorrow, Monday is two days on.
         let saturday = date(2026, 10, 24, 10)
         #expect(SessionSnooze.Choice.morning.snooze(now: saturday, calendar: calendar)
             == .until(date(2026, 10, 25, 8)))
-        #expect(SessionSnooze.Choice.monday.snooze(now: saturday, calendar: calendar)
+        #expect(SessionSnooze.Choice.nextWeek.snooze(now: saturday, calendar: calendar)
             == .until(date(2026, 10, 26, 8)))
 
-        // Early on a Monday both land on 8:00 the same morning.
-        let earlyMonday = date(2026, 10, 26, 7)
+        // Early on a Monday the morning is today, so the week waits for the next Monday.
+        let earlyMonday = date(2026, 10, 26, 6, 40)
         #expect(SessionSnooze.Choice.morning.snooze(now: earlyMonday, calendar: calendar)
             == .until(date(2026, 10, 26, 8)))
-        #expect(SessionSnooze.Choice.monday.snooze(now: earlyMonday, calendar: calendar)
-            == .until(date(2026, 10, 26, 8)))
-
-        // At 8:00 sharp the choice means the next one, not this one.
-        #expect(SessionSnooze.Choice.monday.snooze(now: date(2026, 10, 26, 8), calendar: calendar)
+        #expect(SessionSnooze.Choice.nextWeek.snooze(now: earlyMonday, calendar: calendar)
             == .until(date(2026, 11, 2, 8)))
-        #expect(SessionSnooze.Choice.untilReply.snooze().endsOnReply)
+
+        // Later on a Monday it is a week away.
+        #expect(SessionSnooze.Choice.nextWeek.snooze(now: date(2026, 10, 26, 10, 30), calendar: calendar)
+            == .until(date(2026, 11, 2, 8)))
+
+        // On a Sunday evening the morning is Monday, so the week skips to the Monday after.
+        let sundayEvening = date(2026, 11, 1, 21)
+        #expect(SessionSnooze.Choice.morning.snooze(now: sundayEvening, calendar: calendar)
+            == .until(date(2026, 11, 2, 8)))
+        #expect(SessionSnooze.Choice.nextWeek.snooze(now: sundayEvening, calendar: calendar)
+            == .until(date(2026, 11, 9, 8)))
+
         #expect(SessionSnooze.Choice.untilWoken.snooze().deadline == nil)
+        #expect(SessionSnooze.Choice.allCases == [.morning, .nextWeek, .untilWoken])
     }
 
     @Test func timedChoicesNameTheirDay() throws {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = try #require(TimeZone(identifier: "UTC"))
         calendar.locale = Locale(identifier: "en_GB")
-        func date(_ year: Int, _ month: Int, _ day: Int, _ hour: Int) -> Date {
-            calendar.date(from: DateComponents(year: year, month: month, day: day, hour: hour))!
+        func date(_ year: Int, _ month: Int, _ day: Int, _ hour: Int, _ minute: Int = 0) -> Date {
+            calendar.date(from: DateComponents(year: year, month: month, day: day, hour: hour, minute: minute))!
         }
 
-        let saturdayEvening = date(2026, 10, 24, 20)
-        #expect(SessionSnooze.Choice.morning.title(now: saturdayEvening, calendar: calendar)
-            .hasSuffix("tomorrow"))
-        #expect(SessionSnooze.Choice.morning.note(now: saturdayEvening, calendar: calendar)
-            .hasPrefix("Comes back tomorrow, "))
-        #expect(SessionSnooze.Choice.monday.note(now: saturdayEvening, calendar: calendar)
-            .hasPrefix("Comes back on "))
+        let lateMonday = date(2026, 10, 26, 10, 30)
+        // The hour follows the locale's own clock, so only the day is pinned down here.
+        #expect(SessionSnooze.Choice.morning.title(now: lateMonday, calendar: calendar).hasSuffix(":00 tomorrow"))
+        #expect(SessionSnooze.Choice.morning.note(now: lateMonday, calendar: calendar)
+            .hasPrefix("Comes back tomorrow, Tuesday 27 October, at "))
+        #expect(SessionSnooze.Choice.nextWeek.title(now: lateMonday, calendar: calendar) == "Until Monday 2 Nov")
+        #expect(SessionSnooze.Choice.nextWeek.note(now: lateMonday, calendar: calendar)
+            .hasPrefix("Comes back on Monday 2 November at "))
 
-        let earlyMonday = date(2026, 10, 26, 7)
-        #expect(SessionSnooze.Choice.morning.title(now: earlyMonday, calendar: calendar)
-            .hasSuffix("today"))
-        #expect(SessionSnooze.Choice.monday.note(now: earlyMonday, calendar: calendar)
-            .hasPrefix("Comes back today, "))
+        let earlyMonday = date(2026, 10, 26, 6, 40)
+        #expect(SessionSnooze.Choice.morning.title(now: earlyMonday, calendar: calendar).hasSuffix(":00 today"))
+        #expect(SessionSnooze.Choice.nextWeek.title(now: earlyMonday, calendar: calendar) == "Until Monday 2 Nov")
+
+        let sundayEvening = date(2026, 11, 1, 21)
+        #expect(SessionSnooze.Choice.morning.title(now: sundayEvening, calendar: calendar).hasSuffix(":00 tomorrow"))
+        #expect(SessionSnooze.Choice.nextWeek.title(now: sundayEvening, calendar: calendar) == "Until Monday 9 Nov")
+    }
+
+    @Test func aSavedUntilReplySnoozeStillEndsOnTheReplyButOpensOnTheMorning() {
+        #expect(SessionSnooze.untilReply.endsOnReply)
+        #expect(SnoozeChoice(snooze: .untilReply).choice == .morning)
+        #expect(SnoozeChoice().choice == .morning)
+        #expect(SnoozeChoice(snooze: .untilWoken).choice == .untilWoken)
     }
 }
