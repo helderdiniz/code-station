@@ -788,6 +788,14 @@
           }
           if (listItem.test(line)) {
             const items = [];
+            // Indented text after a blank line is a paragraph of the nearest item it sits
+            // inside, so it lines up with that item's text instead of leaving the list.
+            const owner = current => {
+              const indent = current.match(/^\s*/)[0].length;
+              if (indent < 2 || isBlockStart(current)) return null;
+              return items.findLast(item => !item.paragraph && item.indent < indent) ?? null;
+            };
+            let afterBlank = false;
             while (index < lines.length) {
               const current = lines[index];
               const match = current.match(listItem);
@@ -796,7 +804,15 @@
                 if (first && match[1].length <= first.indent
                   && /\d/.test(match[2]) !== /\d/.test(first.marker)) break;
                 items.push({ indent: match[1].length, marker: match[2], lines: [match[3]] });
-              } else if (current.trim() && items.length && /^\s/.test(current) && !isBlockStart(current)) {
+                afterBlank = false;
+              } else if (!current.trim()) {
+                const next = lines.slice(index + 1).find(next => next.trim());
+                if (!next || !(listItem.test(next) || owner(next))) break;
+                afterBlank = true;
+              } else if (afterBlank && owner(current)) {
+                items.push({ indent: owner(current).indent, paragraph: true, lines: [current.trim()] });
+                afterBlank = false;
+              } else if (!afterBlank && items.length && /^\s/.test(current) && !isBlockStart(current)) {
                 items[items.length - 1].lines.push(current.trim());
               } else break;
               index += 1;
@@ -820,10 +836,15 @@
         if (ordered && parseInt(items[0].marker, 10) !== 1) node.start = parseInt(items[0].marker, 10);
         const base = items[0].indent;
         let index = 0;
+        let entry = null;
         while (index < items.length) {
           const item = items[index];
-          const entry = wrapped('li', item.lines.join('\n'));
           index += 1;
+          if (item.paragraph) {
+            entry.append(wrapped('p', item.lines.join('\n')));
+            continue;
+          }
+          entry = wrapped('li', item.lines.join('\n'));
           const children = [];
           while (index < items.length && items[index].indent > base) {
             children.push(items[index]);

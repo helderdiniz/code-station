@@ -100,6 +100,44 @@ struct MarkdownBlockTests {
         #expect(items.map(\.depth) == [0, 1, 0])
     }
 
+    @Test func keepsAnIndentedParagraphInsideItsItem() {
+        let text = """
+        - **First option:**
+          - inner step
+
+          Why this one works.
+
+        - **Second option:** the other way
+
+        Which one?
+        """
+        guard case .list(let items) = kinds(text).first else {
+            Issue.record("expected a list")
+            return
+        }
+        #expect(items.map(\.text) == ["**First option:**", "inner step",
+                                      "Why this one works.", "**Second option:** the other way"])
+        #expect(items.map(\.depth) == [0, 1, 0, 0])
+        #expect(items.map(\.marker) == ["•", "◦", "", "•"])
+        #expect(kinds(text).last == .paragraph("Which one?"))
+        #expect(kinds(text).count == 2)
+    }
+
+    @Test func joinsAnIndentedLineToTheItemAboveIt() {
+        let text = "1. first line\n   still the first\n2. second"
+        guard case .list(let items) = kinds(text).first else {
+            Issue.record("expected a list")
+            return
+        }
+        #expect(items.map(\.text) == ["first line\nstill the first", "second"])
+    }
+
+    @Test func endsAListAtABlankLineBeforePlainText() {
+        let text = "- one\n- two\n\nAfter the list."
+        #expect(kinds(text).count == 2)
+        #expect(kinds(text).last == .paragraph("After the list."))
+    }
+
     @Test func keepsOrderedMarkersAsWritten() {
         let text = "1. first\n2) second"
         guard case .list(let items) = kinds(text).first else {

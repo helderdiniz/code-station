@@ -69,8 +69,31 @@ struct MarkdownBlock: Identifiable, Equatable {
             } else if listItem(lines[index]) != nil {
                 flushParagraph()
                 var items: [MarkdownListItem] = []
-                while index < lines.count, let item = listItem(lines[index]) {
-                    items.append(item)
+                var afterBlank = false
+                while index < lines.count {
+                    let line = lines[index]
+                    if let item = listItem(line) {
+                        items.append(item)
+                        afterBlank = false
+                    } else if line.trimmingCharacters(in: .whitespaces).isEmpty {
+                        // A blank line ends the list only when what follows is no part of it.
+                        guard let next = lines[(index + 1)...].first(where: { !$0.trimmed.isEmpty }),
+                              listItem(next) != nil || continuationDepth(next) != nil else { break }
+                        afterBlank = true
+                    } else if let depth = continuationDepth(line), let last = items.last {
+                        // Indented text under an item belongs to it. After a blank line it is
+                        // a paragraph of its own, lined up with the item's text.
+                        let text = line.trimmingCharacters(in: .whitespaces)
+                        if afterBlank {
+                            items.append(MarkdownListItem(depth: min(depth, last.depth), marker: "", text: text))
+                        } else {
+                            items[items.count - 1] = MarkdownListItem(depth: last.depth, marker: last.marker,
+                                                                      text: last.text + "\n" + text)
+                        }
+                        afterBlank = false
+                    } else {
+                        break
+                    }
                     index += 1
                 }
                 kinds.append(.list(items))
@@ -144,6 +167,18 @@ struct MarkdownBlock: Identifiable, Equatable {
 
     private static let bullets = ["•", "◦", "▪"]
 
+    // An item's text starts two spaces in for each level ("- " or "1. "), so plain text
+    // indented that far sits under the item one level up. Anything with block syntax of
+    // its own is left for the main parser.
+    private static func continuationDepth(_ line: String) -> Int? {
+        let indent = line.prefix(while: { $0 == " " }).count
+        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        guard indent >= 2, listItem(line) == nil,
+              headingLevel(trimmed) == nil, !isRule(trimmed),
+              !trimmed.hasPrefix("|"), !trimmed.hasPrefix(">"),
+              HTMLPreviewReference.parse(trimmed) == nil else { return nil }
+        return min(indent / 2 - 1, bullets.count - 1)
+    }
 
     private static func listItem(_ line: String) -> MarkdownListItem? {
         let indent = line.prefix(while: { $0 == " " }).count
@@ -429,6 +464,7 @@ struct MarkdownListItem: Equatable {
     static let plainBullets: Set<String> = ["•", "◦", "▪"]
 
     let depth: Int
+    // Empty for a paragraph that carries on the item above it.
     let marker: String
     let text: String
 }
@@ -1677,7 +1713,9 @@ struct MarkdownBlockView: View, Equatable {
     // reads as part of the app instead of as typed punctuation. Numbers and tick boxes
     // still say what they say, so those keep their marker.
     @ViewBuilder private func marker(_ item: MarkdownListItem) -> some View {
-        if MarkdownListItem.plainBullets.contains(item.marker) {
+        if item.marker.isEmpty {
+            Color.clear.frame(width: 0, height: 0)
+        } else if MarkdownListItem.plainBullets.contains(item.marker) {
             Circle()
                 .fill(Theme.dotOn)
                 .frame(width: 5, height: 5)

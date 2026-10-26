@@ -45,6 +45,62 @@ struct MobileAccessTests {
         ])
     }
 
+    @Test func mobilePageKeepsAnIndentedParagraphInsideItsListItem() throws {
+        let outline = try mobileMarkdownOutline("""
+        - **First option:**
+          - inner step
+
+          Why this one works.
+
+        - **Second option:** the other way
+
+        Which one?
+        """)
+
+        #expect(outline == [
+            "ul",
+            "  li **First option:**",
+            "    ul",
+            "      li inner step",
+            "    p Why this one works.",
+            "  li **Second option:** the other way",
+            "p Which one?",
+        ])
+    }
+
+    @Test func mobilePageEndsAListAtABlankLineBeforePlainText() throws {
+        let outline = try mobileMarkdownOutline("- one\n- two\n\nAfter the list.")
+
+        #expect(outline == ["ul", "  li one", "  li two", "p After the list."])
+    }
+
+    private func mobileMarkdownOutline(_ text: String) throws -> [String] {
+        let url = try #require(AppResources.bundle.url(
+            forResource: "mobile-session", withExtension: "js"))
+        let html = try String(contentsOf: url, encoding: .utf8)
+        let start = try #require(html.range(of: "const listItem"))
+        let end = try #require(html.range(
+            of: "\n\n      const renderProse", range: start.upperBound..<html.endIndex))
+        let function = html[start.lowerBound..<end.lowerBound]
+        let argument = String(decoding: try JSONEncoder().encode(text), as: UTF8.self)
+        let context = try #require(JSContext())
+        let value = try #require(context.evaluateScript("""
+        const element = (tag, className, text) => ({
+          tag, text: text ?? '', children: [],
+          append(...children) { this.children.push(...children); }
+        });
+        const wrapped = (tag, text) => element(tag, '', text);
+        \(function)
+        const outline = (node, depth) => [
+          ('  '.repeat(depth) + node.tag + ' ' + node.text).trimEnd(),
+          ...node.children.flatMap(child => outline(child, depth + 1))
+        ];
+        JSON.stringify(markdownBlocks(\(argument)).flatMap(block => outline(block, 0)));
+        """))
+        let data = try #require(value.toString().data(using: .utf8))
+        return try JSONDecoder().decode([String].self, from: data)
+    }
+
     @Test func mobilePageRendersQueuedMessageDetails() throws {
         let url = try #require(AppResources.bundle.url(
             forResource: "mobile-session", withExtension: "js"))

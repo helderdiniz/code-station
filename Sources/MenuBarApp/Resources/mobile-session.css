@@ -333,6 +333,7 @@
     .prose ul, .prose ol { padding-left: 22px; }
     .prose li { margin: 3px 0; }
     .prose li > ul, .prose li > ol { margin: 3px 0 0; }
+    .prose li > p { margin: 6px 0 0; }
     .prose li::marker { color: var(--faint); }
     .prose code {
       padding: 1px 5px;
