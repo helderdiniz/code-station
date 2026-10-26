@@ -17,6 +17,7 @@ struct TroubleshootTests {
         let request = TroubleshootRequest(
             problem: "Payments return 503 after deployment",
             environment: Self.prod,
+            liveEnvironments: [Self.prod],
             projects: ["payments-api", "merchant-web"],
             skills: ["postgres-specialist", "grafana-specialist"],
             mcpServersEnabled: true,
@@ -34,7 +35,7 @@ struct TroubleshootTests {
         #expect(request.customInstructions.contains("grafana-platform-prd, grafana-shared-shared"))
         #expect(request.customInstructions.contains("Search the available tool catalogue"))
         #expect(request.customInstructions.contains("before concluding that a server or tool is unavailable"))
-        #expect(request.customInstructions.contains("Treat this environment as live"))
+        #expect(request.customInstructions.contains("Treat the environment Prod (prd) as live"))
         #expect(request.customInstructions.contains("do not mutate data, configuration, deployments, or running services"))
         #expect(request.customInstructions.contains("wait for a follow-up before applying it"))
         #expect(request.customInstructions.contains("Chart the measurements"))
@@ -211,42 +212,33 @@ struct TroubleshootTests {
         #expect(!arguments.contains { $0.contains("mcp_servers") })
     }
 
-    @Test func anEnvironmentOffersOnlyTheServersTaggedForIt() {
-        let servers = [
-            server("grafana-platform-dev", tag: "dev"),
-            server("grafana-platform-prd", tag: "prd"),
-            server("grafana-shared-shared", tag: "shared"),
-            server("node_repl"),
-        ]
+    // The environment only says where to look first, so the agent is told it may follow
+    // the evidence elsewhere, and is told to work it out when none was picked.
+    @Test func theEnvironmentIsAHintNotALimit() {
+        let picked = TroubleshootRequest(problem: "Latency doubled", environment: Self.dev,
+                                         liveEnvironments: [], projects: ["api"],
+                                         mcpServersEnabled: true, agent: .claudeCode)
+        #expect(picked.customInstructions.contains("Environment: dev. Look there first"))
+        #expect(picked.customInstructions.contains("follow the evidence if it leads to another environment"))
 
-        #expect(servers.filter { Self.dev.includes($0, in: Self.site) }.map(\.name)
-            == ["grafana-platform-dev", "node_repl"])
-        #expect(servers.filter { Self.prod.includes($0, in: Self.site) }.map(\.name)
-            == ["grafana-platform-prd", "node_repl"])
-        #expect(servers.filter { Self.shared.includes($0, in: Self.site) }.map(\.name)
-            == ["grafana-shared-shared", "node_repl"])
+        let none = TroubleshootRequest(problem: "Latency doubled", liveEnvironments: [],
+                                       projects: ["api"], mcpServersEnabled: true,
+                                       agent: .claudeCode)
+        #expect(none.customInstructions.contains("Environment: not given."))
+        #expect(!none.customInstructions.contains("as live"))
     }
 
-    // A tag the file no longer names says nothing about where the server belongs, so
-    // hiding it everywhere would lose it without telling anybody.
-    @Test func aTagNothingNamesLeavesTheServerInEveryEnvironment() {
-        let servers = [server("grafana-sandbox-sbx", tag: "sbx"), server("node_repl")]
-
-        #expect(servers.filter { Self.dev.includes($0, in: Self.site) }.map(\.name)
-            == ["grafana-sandbox-sbx", "node_repl"])
-        #expect(servers.filter { Self.prod.includes($0, in: Self.site) }.map(\.name)
-            == ["grafana-sandbox-sbx", "node_repl"])
-    }
-
-    // With no site file there is nothing saying which environment a server belongs to,
-    // so filtering must not quietly drop every one of them.
-    @Test func everyServerSurvivesWithoutASiteFile() {
-        let servers = [server("grafana-platform-dev", tag: "dev"), server("node_repl")]
-        let environment = TroubleshootEnvironment.first(in: SiteDefaults())
-
-        #expect(environment.name == "staging")
-        #expect(servers.filter { environment.includes($0, in: SiteDefaults()) }.map(\.name)
-            == ["grafana-platform-dev", "node_repl"])
+    // Servers for every environment reach every diagnosis, so the live ones stay
+    // read-only even when the brief points somewhere else or nowhere at all.
+    @Test func liveEnvironmentsStayReadOnlyWhicheverEnvironmentIsPicked() {
+        for environment in [nil, Self.dev, Self.shared] {
+            let request = TroubleshootRequest(problem: "Latency doubled", environment: environment,
+                                              liveEnvironments: TroubleshootEnvironment.live(in: Self.site),
+                                              projects: ["api"], mcpServersEnabled: true,
+                                              agent: .claudeCode)
+            #expect(request.customInstructions.contains(
+                "Treat the environment Prod (prd) as live: do not mutate data, configuration, deployments, or running services there."))
+        }
     }
 
     // The pills come from the file, and the prompt names the deployment the way the
@@ -254,7 +246,6 @@ struct TroubleshootTests {
     @Test func thePickerAndThePromptFollowTheSiteFile() {
         #expect(TroubleshootEnvironment.all(in: Self.site).map(\.title)
             == ["Dev", "Prod", "Shared"])
-        #expect(TroubleshootEnvironment.first(in: Self.site) == Self.dev)
         #expect(Self.prod.promptTitle == "Prod (prd)")
         #expect(Self.dev.promptTitle == "dev")
         #expect(!Self.shared.isDangerous)
@@ -322,7 +313,7 @@ struct TroubleshootTests {
         #expect(Set(configuration.mcpServers.keys) == ["grafana-platform-dev"])
     }
 
-    @Test func codexDisablesServersOutsideTheSelectedEnvironment() {
+    @Test func codexDisablesOnlyTheServersTheSessionTurnsOff() {
         let arguments = AgentLaunchConfiguration(
             agent: .codex,
             settings: SessionSettings(
@@ -567,6 +558,7 @@ struct TroubleshootBriefTests {
         #expect(brief.problem.isEmpty)
         #expect(brief.incidentTime.isEmpty)
         #expect(brief.attachments.isEmpty)
+        #expect(brief.environment == nil)
         #expect(brief.mcpServersEnabled)
     }
 

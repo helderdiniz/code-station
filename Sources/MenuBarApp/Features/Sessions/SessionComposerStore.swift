@@ -47,7 +47,7 @@ final class SessionComposerStore {
         var problem: String = ""
         var incidentTime: String = ""
         var attachments: [Attachment] = []
-        var environment = TroubleshootEnvironment.first()
+        var environment: TroubleshootEnvironment?
         var mcpServersEnabled = true
         var dictated = false
     }

@@ -27,30 +27,22 @@ struct TroubleshootEnvironment: Identifiable, Equatable, Sendable {
         title.lowercased() == name.lowercased() ? name : "\(title) (\(name))"
     }
 
-    // A server tagged with an environment the site file no longer names is left in rather
-    // than hidden everywhere, the same way a server nobody has tagged is.
-    func includes(_ server: Server, in defaults: SiteDefaults = .current) -> Bool {
-        guard let tag = server.deployEnvironment else { return true }
-        guard defaults.deployEnvironment(named: tag) != nil else { return true }
-        return tag == name
-    }
-
     static func all(in defaults: SiteDefaults = .current) -> [TroubleshootEnvironment] {
         defaults.deployEnvironments.map(TroubleshootEnvironment.init)
     }
 
-    // Never nil: a file that names no environment leaves the app on its own two.
-    static func first(in defaults: SiteDefaults = .current) -> TroubleshootEnvironment {
-        all(in: defaults).first ?? TroubleshootEnvironment(name: "production",
-                                                           title: "Production",
-                                                           isDangerous: true)
+    static func live(in defaults: SiteDefaults = .current) -> [TroubleshootEnvironment] {
+        all(in: defaults).filter(\.isDangerous)
     }
 }
 
 struct TroubleshootRequest {
     let problem: String
     let incidentTime: String
-    let environment: TroubleshootEnvironment
+    // Only a hint for where to look first. Every server goes with every diagnosis, since
+    // one problem often spans deployments, and the shared Grafana belongs to none of them.
+    let environment: TroubleshootEnvironment?
+    let liveEnvironments: [TroubleshootEnvironment]
     let projects: [String]
     let skills: [String]
     let mcpServersEnabled: Bool
@@ -58,12 +50,15 @@ struct TroubleshootRequest {
     let agent: AgentKind
 
     init(problem: String, incidentTime: String = "",
-         environment: TroubleshootEnvironment, projects: [String],
+         environment: TroubleshootEnvironment? = nil,
+         liveEnvironments: [TroubleshootEnvironment] = TroubleshootEnvironment.live(),
+         projects: [String],
          skills: [String] = [], mcpServersEnabled: Bool, mcpServerNames: [String] = [],
          agent: AgentKind) {
         self.problem = problem
         self.incidentTime = incidentTime
         self.environment = environment
+        self.liveEnvironments = liveEnvironments
         self.projects = projects
         self.skills = skills
         self.mcpServersEnabled = mcpServersEnabled
@@ -124,18 +119,25 @@ struct TroubleshootRequest {
             let start = traceIDs.count == 1 ? "Start from trace \(ids)." : "Start from traces \(ids)."
             traceText = "\n\n\(start) Fetch each whole trace with the Grafana MCP tools and the skills you have, and follow a skill's guidance on which Grafana holds traces. Draw each one as a ```\(TranscriptTraceSpec.fenceLanguage) block before going further. Then, for each service whose spans failed, read its logs for that trace ID on the Grafana that holds that service's logs, and put the lines the diagnosis rests on in a ```\(TranscriptLogsSpec.fenceLanguage) block."
         }
-        let dangerText = environment.isDangerous
-            ? " Treat this environment as live: do not mutate data, configuration, deployments, or running services."
-            : ""
+        let environmentText = environment.map {
+            "Environment: \($0.promptTitle). Look there first, but follow the evidence if it leads to another environment."
+        } ?? "Environment: not given. Work out where the problem is from the problem text and the evidence."
+        // Servers for every environment are always there, so the live ones are named
+        // whichever environment was picked.
+        let liveText = liveEnvironments.isEmpty ? "" : {
+            let names = liveEnvironments.map(\.promptTitle).joined(separator: ", ")
+            let noun = liveEnvironments.count == 1 ? "environment" : "environments"
+            return " Treat the \(noun) \(names) as live: do not mutate data, configuration, deployments, or running services there."
+        }()
 
         return """
         Troubleshooting context:
-        - Environment: \(environment.promptTitle)
+        - \(environmentText)
         - Projects: \(projectText)
         - \(skillText)
         - \(mcpText)
 
-        Investigate the problem and use read-only checks first. Do not change code or configuration.\(dangerText) Explain the likely root cause, cite the evidence you found, and give concrete next steps. If a fix is needed, propose it and wait for a follow-up before applying it. Chart the measurements the root cause rests on.\(chartText)\(traceText)
+        Investigate the problem and use read-only checks first. Do not change code or configuration.\(liveText) Explain the likely root cause, cite the evidence you found, and give concrete next steps. If a fix is needed, propose it and wait for a follow-up before applying it. Chart the measurements the root cause rests on.\(chartText)\(traceText)
 
         \(TranscriptEvidenceBlocks.agentInstructions)
         """

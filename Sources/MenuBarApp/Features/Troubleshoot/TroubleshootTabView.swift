@@ -157,22 +157,25 @@ struct TroubleshootTabView: View {
 
     // MARK: Environment
 
+    // The environment only tells the agent where to look first; it never hides a server.
     // A dangerous deployment carries the amber dot on the pill and an amber edge, so the
     // consequence is on the control rather than only in the line under the card.
     private var environmentPill: some View {
         let environment = brief.environment
-        return SetupPill(title: environment.title,
-                         dot: environment.isDangerous ? Theme.attention : nil,
-                         live: environment.isDangerous)
+        let title = environment?.title ?? "Any environment"
+        let isDangerous = environment?.isDangerous ?? false
+        return SetupPill(title: title,
+                         dot: isDangerous ? Theme.attention : nil,
+                         live: isDangerous)
             .appMenu { environmentMenu }
-            .accessibilityLabel("Environment: \(environment.title)")
-            .accessibilityHint(environment.isDangerous
+            .accessibilityLabel("Environment: \(title)")
+            .accessibilityHint(isDangerous
                                ? "Live deployment. The diagnosis stays read-only."
-                               : "Choose where the problem is happening.")
+                               : "Optional. Tells the agent where to look first.")
     }
 
     private var environmentMenu: [MenuEntry] {
-        TroubleshootEnvironment.all().map { option in
+        let options: [MenuEntry] = TroubleshootEnvironment.all().map { option in
             let name = option.title.lowercased() == option.name.lowercased() ? nil : option.name
             let danger = option.isDangerous
                 ? "the agent is told to keep every check read-only" : nil
@@ -185,6 +188,11 @@ struct TroubleshootTabView: View {
                 runner.composer.editBrief(sessionID) { $0.environment = option }
             }
         }
+        let any: MenuEntry = .item("Any environment", checked: brief.environment == nil,
+                                   subtitle: "The agent works out where to look") {
+            runner.composer.editBrief(sessionID) { $0.environment = nil }
+        }
+        return [any, .separator] + options
     }
 
     // MARK: Time window
@@ -261,14 +269,12 @@ struct TroubleshootTabView: View {
     // thing here that stops the brief from going.
     private func serversPill(_ session: ChatSession) -> some View {
         let state = mcpConfigurationState(session)
-        let servers = environmentMCPServers
+        let servers = configs.servers
         let title: String
         if !brief.mcpServersEnabled {
             title = "MCP off"
-        } else if configs.servers.isEmpty {
-            title = "\(session.agent.title)’s servers"
         } else if servers.isEmpty {
-            title = "No servers for \(brief.environment.title)"
+            title = "\(session.agent.title)’s servers"
         } else {
             title = servers[0].name
         }
@@ -281,11 +287,10 @@ struct TroubleshootTabView: View {
     }
 
     private func serversMenu(_ session: ChatSession, state: TroubleshootMCPState) -> [MenuEntry] {
-        let environment = brief.environment
         var entries: [MenuEntry] = [
             .item("Use MCP servers",
                   checked: brief.mcpServersEnabled,
-                  subtitle: "Logs, metrics and traces for \(environment.title)") {
+                  subtitle: "Logs, metrics and traces from every environment") {
                 runner.composer.editBrief(sessionID) { $0.mcpServersEnabled.toggle() }
             },
         ]
@@ -296,23 +301,12 @@ struct TroubleshootTabView: View {
                     label: "Any server configured for \(session.agent.title)",
                     icon: "server.rack")))
             } else {
-                for server in environmentMCPServers {
+                for server in configs.servers {
                     let status = state.configurationLabel(for: server.name)
                     entries.append(.item(MenuItem(
                         label: server.name, icon: "server.rack",
                         detail: status,
                         detailColour: status == "Configured" ? Theme.accent : Theme.attentionText)))
-                }
-                if environmentMCPServers.isEmpty {
-                    entries.append(.item(MenuItem(
-                        label: "No managed server is tagged for \(environment.title)",
-                        icon: "server.rack")))
-                }
-                for server in configs.servers where !environment.includes(server) {
-                    entries.append(.item(MenuItem(
-                        label: server.name, icon: "server.rack",
-                        subtitle: "Tagged \(server.environmentTag), left out for \(environment.title)",
-                        detail: "Hidden")))
                 }
             }
         }
@@ -365,33 +359,33 @@ struct TroubleshootTabView: View {
             return Readiness(mood: .blocked, lead: "\(agent) CLI was not found on PATH.",
                              rest: "Sessions cannot run until it is installed.")
         }
-        switch mcpConfigurationState(session) {
-        case .checking:
+        let state = mcpConfigurationState(session)
+        if state == .checking {
             return Readiness(mood: .checking, lead: "Checking \(agent) MCP configuration…", rest: "")
-        case .unavailable(let configuration):
-            let missing = configuration.missing + configuration.disabled
-            return Readiness(mood: .blocked,
-                             lead: "\(agent) cannot reach \(missing.joined(separator: ", ")).",
-                             rest: "Sync the server in MCP Servers, or leave it out of this diagnosis.")
-        case .ready:
-            break
         }
         if brief.problem.isBlank && brief.attachments.isEmpty {
             return Readiness(mood: .waiting, lead: "Describe the problem, or attach the evidence for it.",
                              rest: "")
         }
-        let environment = brief.environment
         var rest = "Findings arrive in this tab as the conversation. The traces, log lines and charts behind them are pinned to Evidence."
+        // Every server goes with every diagnosis, so one the agent cannot reach is left
+        // behind rather than stopping the rest.
+        if case .unavailable(let configuration) = state {
+            let missing = configuration.missing + configuration.disabled
+            rest = "\(agent) cannot reach \(missing.joined(separator: ", ")), so the diagnosis goes without it. Sync it in MCP Servers to include it. " + rest
+        }
         // A brief sent during a turn waits its turn like any other prompt, so the line
         // says so rather than refusing the click.
         if runner.state(sessionID).isBusy {
             rest += " The brief joins the queue after the running turn."
         }
-        return Readiness(mood: .ready,
-                         lead: environment.isDangerous
-                             ? "\(environment.title) is live, so the agent only reads."
-                             : "Ready in \(environment.title).",
-                         rest: rest)
+        let lead = switch brief.environment {
+        case .some(let environment) where environment.isDangerous:
+            "\(environment.title) is live, so the agent only reads."
+        case .some(let environment): "Ready, starting in \(environment.title)."
+        case .none: "Ready."
+        }
+        return Readiness(mood: .ready, lead: lead, rest: rest)
     }
 
     private func readinessLine(_ readiness: Readiness) -> some View {
@@ -431,18 +425,14 @@ struct TroubleshootTabView: View {
         !isStarting
             && dictation?.isListening(dictationID) != true
             && dictation?.isPreparing(dictationID) != true
-            && mcpConfigurationState(session) == .ready
+            && mcpConfigurationState(session) != .checking
             && (!brief.problem.isBlank || !brief.attachments.isEmpty)
             && runner.isAvailable(session.agent)
     }
 
-    private var environmentMCPServers: [Server] {
-        configs.servers.filter { brief.environment.includes($0) }
-    }
-
     private func mcpConfigurationState(_ session: ChatSession) -> TroubleshootMCPState {
         .resolve(agent: session.agent, enabled: brief.mcpServersEnabled,
-                 servers: environmentMCPServers,
+                 servers: configs.servers,
                  hasStartedCheck: hasStartedMCPConfigurationCheck,
                  claude: claude, codex: codex, copilot: copilot)
     }
@@ -456,14 +446,13 @@ struct TroubleshootTabView: View {
 
     // MARK: - Starting
 
-    // Three steps, each of which can stop the start: work out which servers to hide, save
-    // them onto the session, then send the brief. The session already exists, so a failure
+    // Three steps, each of which can stop the start: work out which servers to hide while
+    // MCP is off, save that onto the session, then send the brief. The session already exists, so a failure
     // here leaves the tab as it was rather than a half-made conversation.
     private func startDiagnosis(_ session: ChatSession) {
         guard canStart(session) else { return }
         isStarting = true
         let sent = brief
-        let chosenEnvironment = sent.environment
         let chosenSkillNames = TroubleshootSkills.chosen(skills, for: session.agent,
                                                          selected: selectedSkills)
         let enableMCPServers = sent.mcpServersEnabled
@@ -471,18 +460,20 @@ struct TroubleshootTabView: View {
             store.project($0.projectID)
         }
         let directory = store.workingDirectories(for: session).first
+        let unreachable: Set<String> = if case .unavailable(let configuration)
+            = mcpConfigurationState(session) {
+            Set(configuration.missing + configuration.disabled)
+        } else { [] }
 
         Task {
             defer { isStarting = false }
             let managedServers = configs.servers
-            let selectedServers = managedServers.filter { chosenEnvironment.includes($0) }
             var disabledServers: [DisabledMCPServer] = []
-            if session.agent != .claudeCode, let directory,
-               !enableMCPServers || !managedServers.isEmpty {
+            if session.agent != .claudeCode, let directory, !enableMCPServers {
                 do {
-                    disabledServers = try await serversToDisable(
-                        for: session.agent, in: directory, managed: managedServers,
-                        keeping: selectedServers, mcpEnabled: enableMCPServers)
+                    disabledServers = try await session.agent == .copilot
+                        ? copilot.enabledServers(in: directory)
+                        : codex.enabledServers(in: directory)
                 } catch {
                     dialogs.show(.notice("Could not filter MCP servers",
                                          message: error.localizedDescription))
@@ -500,22 +491,24 @@ struct TroubleshootTabView: View {
             var settings = store.session(sessionID)?.settings ?? SessionSettings()
             settings.mcpServersEnabled = enableMCPServers
             settings.allowedMCPServerNames = enableMCPServers && !managedServers.isEmpty
-                ? selectedServers.map(\.name)
+                ? managedServers.map(\.name)
                 : nil
             settings.disabledMCPServers = disabledServers.isEmpty ? nil : disabledServers
             settings.disabledMCPServerNames = nil
             store.setSettings(settings, for: sessionID)
-            store.markTroubleshooting(sessionID, environment: chosenEnvironment.name,
+            store.markTroubleshooting(sessionID, environment: sent.environment?.name,
                                       timeWindow: sent.incidentTime)
 
             let request = TroubleshootRequest(
                 problem: sent.problem,
                 incidentTime: sent.incidentTime,
-                environment: chosenEnvironment,
+                environment: sent.environment,
                 projects: projects.map(\.name),
                 skills: chosenSkillNames,
                 mcpServersEnabled: enableMCPServers,
-                mcpServerNames: enableMCPServers ? selectedServers.map(\.name) + ownServerNames : [],
+                mcpServerNames: enableMCPServers
+                    ? managedServers.map(\.name).filter { !unreachable.contains($0) } + ownServerNames
+                    : [],
                 agent: session.agent)
             runner.send(request.userInput,
                         attachments: sent.attachments,
@@ -528,22 +521,6 @@ struct TroubleshootTabView: View {
             dictation?.sent(dictationID)
             openConversation()
         }
-    }
-
-    // The servers the agent has switched on that the diagnosis must not see: all of them
-    // while MCP is off, otherwise the managed ones outside the chosen environment. A
-    // server added to the agent by hand has no environment, so it stays on. Claude Code
-    // is handed a filtered configuration instead, so it never comes through here.
-    private func serversToDisable(for agent: AgentKind, in directory: String,
-                                  managed: [Server], keeping selected: [Server],
-                                  mcpEnabled: Bool) async throws -> [DisabledMCPServer] {
-        let enabled = agent == .copilot
-            ? try await copilot.enabledServers(in: directory)
-            : try await codex.enabledServers(in: directory)
-        guard mcpEnabled else { return enabled }
-        let managedNames = Set(managed.map(\.name))
-        let selectedNames = Set(selected.map(\.name))
-        return enabled.filter { managedNames.contains($0.name) && !selectedNames.contains($0.name) }
     }
 }
 
