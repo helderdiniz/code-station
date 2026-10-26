@@ -12,6 +12,8 @@ enum MenuBarApp {
 
     @MainActor
     static func main() {
+        // Before the delegate, whose stores read their files as they are made.
+        AppBackup.applyPending()
         let app = NSApplication.shared
         let appDelegate = AppDelegate()
         delegate = appDelegate

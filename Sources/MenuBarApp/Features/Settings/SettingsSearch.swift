@@ -29,6 +29,7 @@ enum SettingsSearchTarget: String, Hashable {
     case agentFiles
     case advancedConfiguration
     case advancedReset
+    case advancedMove
     case experimentalFeatures
 
     var id: String { rawValue }
@@ -120,6 +121,8 @@ enum SettingsSearchIndex {
                "claude settings json codex config toml copilot reveal"),
         result("Current configuration", .advanced, .advancedConfiguration,
                "json environments api access credentials oauth shared defaults starter requests mcp presets skills marketplace shortcuts"),
+        result("Move to another Mac", .advanced, .advancedMove,
+               "export import backup restore laptop migrate transfer new computer"),
         result("Reset from file", .advanced, .advancedReset,
                "repository url github load choose file restore aspects"),
         result("Mobile access", .experimental, .experimentalFeatures,

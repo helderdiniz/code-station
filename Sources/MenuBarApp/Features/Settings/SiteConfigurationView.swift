@@ -21,6 +21,8 @@ struct SiteConfigurationSection: View {
     @Environment(DispatchStore.self) private var dispatch
     @Environment(DispatchAuthStore.self) private var dispatchAuth
     @Environment(ShortcutStore.self) private var shortcuts
+    @Environment(DialogPresenter.self) private var dialogs
+    @Environment(\.settingsNote) private var settingsNote
 
     let skills: SkillsManager
 
@@ -34,10 +36,15 @@ struct SiteConfigurationSection: View {
     @State private var showingSkills = false
     @State private var showingShortcuts = false
     @State private var showingJSON = false
+    @State private var backup: AppBackup?
+    @State private var backupChosen: Set<AppBackup.Part> = []
+    @State private var backupFailure: String?
+    @State private var pendingBackup: AppBackup?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
             configuration.id(SettingsSearchTarget.advancedConfiguration.id)
+            move.id(SettingsSearchTarget.advancedMove.id)
             reset.id(SettingsSearchTarget.advancedReset.id)
         }
         .sheet(item: $editor) { aspect in
@@ -64,7 +71,10 @@ struct SiteConfigurationSection: View {
         .sheet(isPresented: $showingJSON) {
             SiteConfigurationJSONView(defaults: loaded).appOverlays()
         }
-        .onAppear(perform: refreshConfiguration)
+        .onAppear {
+            refreshConfiguration()
+            pendingBackup = AppBackup.pending()
+        }
         // A freshly loaded file offers everything it holds; unticking is the user's move.
         .onChange(of: loader.selection) { _, selection in
             chosen = selection?.plan.everything ?? []
@@ -189,6 +199,162 @@ struct SiteConfigurationSection: View {
         case .skills: loaded.skills?.name ?? "Not configured"
         default: aspect.detail(in: loaded)
         }
+    }
+
+    private var move: some View {
+        ChoiceBlock("MOVE TO ANOTHER MAC",
+                    note: "Save your preferences, bots, configuration, shortcuts, requests and project list to one file, then import it on the new Mac. Sessions, history and secrets stay on this Mac, so sign in again after the move.") {
+            SettingsCard {
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack(spacing: 8) {
+                        ActionButton(title: "Export backup…", tone: .outlined,
+                                     icon: "square.and.arrow.up", action: exportBackup)
+                        ActionButton(title: "Import backup…", tone: .outlined,
+                                     icon: "square.and.arrow.down", action: chooseBackup)
+                        Spacer(minLength: 0)
+                    }
+                    if let pendingBackup {
+                        pendingImport(pendingBackup).transition(.fadeIn)
+                    } else if let backup {
+                        backupPreview(backup).transition(.fadeIn)
+                    }
+                    if let backupFailure { SourceFailure(backupFailure).transition(.fadeIn) }
+                }
+                .padding(14)
+                .smoothlyResizes(when: [backup?.createdAt.description,
+                                        pendingBackup?.createdAt.description, backupFailure])
+            }
+        }
+    }
+
+    private func backupPreview(_ backup: AppBackup) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Divider().overlay(Theme.border)
+            HStack(alignment: .top, spacing: 10) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Backup from \(backup.createdAt.formatted(date: .abbreviated, time: .shortened))")
+                        .font(.system(size: 12.5, weight: .semibold))
+                    Text("\(backupChosen.count) of \(backup.parts.count) parts will be imported.")
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 0)
+                ActionButton(title: "Import and restart", action: { confirmImport(backup) })
+                    .disabled(backupChosen.isEmpty)
+            }
+
+            ForEach(backup.parts) { part in
+                Toggle(isOn: binding(for: part)) {
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(part.title).font(.system(size: 12, weight: .medium))
+                        Text(backup.detail(for: part))
+                            .font(.system(size: 11))
+                            .foregroundStyle(.secondary)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .toggleStyle(.appCheckbox)
+            }
+        }
+        .sourceResult(Theme.addition)
+    }
+
+    private func pendingImport(_ pending: AppBackup) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "clock.arrow.circlepath")
+                .foregroundStyle(Theme.addition)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Import waiting for a restart")
+                    .font(.system(size: 12.5, weight: .semibold))
+                Text("\(pending.parts.map(\.title).joined(separator: ", ")) will be applied the next time Code Station opens.")
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 0)
+            ActionButton(title: "Cancel import", tone: .sunken, height: 28, size: 11.5) {
+                AppBackup.cancelPending()
+                pendingBackup = nil
+            }
+            ActionButton(title: "Restart now", height: 28, size: 11.5, action: restart)
+        }
+        .sourceResult(Theme.addition)
+    }
+
+    private func binding(for part: AppBackup.Part) -> Binding<Bool> {
+        Binding(get: { backupChosen.contains(part) },
+                set: { selected in
+                    if selected { backupChosen.insert(part) } else { backupChosen.remove(part) }
+                })
+    }
+
+    private func exportBackup() {
+        guard let url = FilePicker.saveFile(
+            suggestedName: "Code Station backup \(Date.now.formatted(.iso8601.year().month().day())).json",
+            prompt: "Export",
+            message: "Save a backup to import on another Mac.",
+            types: [.json]) else { return }
+        do {
+            let configuration = try SiteConfigurationImporter.configurationData(for: currentConfiguration())
+            try AppBackup.make(configuration: configuration).encoded().write(to: url, options: .atomic)
+            backupFailure = nil
+            settingsNote("Backup saved", "checkmark")
+        } catch {
+            backupFailure = "The backup could not be saved: \(error.localizedDescription)"
+        }
+    }
+
+    private func chooseBackup() {
+        guard let url = FilePicker.chooseFile(prompt: "Import",
+                                              message: "Choose a Code Station backup.",
+                                              types: [.json]) else { return }
+        do {
+            let loaded = try AppBackup.read(url)
+            backup = loaded
+            backupChosen = Set(loaded.parts)
+            backupFailure = nil
+        } catch {
+            backup = nil
+            backupFailure = error.localizedDescription
+        }
+    }
+
+    private func confirmImport(_ backup: AppBackup) {
+        let chosen = backup.parts.filter(backupChosen.contains)
+        var rows = chosen.map { part in
+            Dialog.Impact.Row(title: part.title,
+                              detail: part.replaces
+                                ? "What is on this Mac is replaced by the backup."
+                                : "Added beside the ones already here.",
+                              kept: !part.replaces)
+        }
+        rows.append(.init(title: "Sessions, history and secrets",
+                          detail: "Not touched.", kept: true))
+        dialogs.show(.impact("Import this backup?",
+                             message: "Code Station restarts to finish the import.",
+                             rows: rows,
+                             warning: chosen.contains(where: \.replaces)
+                                ? "Replaced settings cannot be restored." : nil,
+                             action: "Import and restart") {
+            do {
+                try AppBackup.stage(backup.keeping(Set(chosen)))
+                self.backup = nil
+                restart()
+            } catch {
+                backupFailure = "The import could not be prepared: \(error.localizedDescription)"
+            }
+        })
+    }
+
+    // Quitting can still be turned down, for example while sessions are running. The
+    // import then stays set aside and is applied whenever the app next opens.
+    private func restart() {
+        pendingBackup = AppBackup.pending()
+        let bundle = Bundle.main.bundleURL
+        if bundle.pathExtension == "app" {
+            try? AppUpdateInstall.relaunchAfterExit(bundle)
+        }
+        NSApp.terminate(nil)
     }
 
     private var reset: some View {

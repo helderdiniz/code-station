@@ -148,13 +148,16 @@ final class ProjectStore {
         var removals: [PendingSessionRemoval]
     }
 
+    nonisolated static var defaultStoreURL: URL {
+        (ProcessInfo.processInfo.environment["CODE_STATION_STORE"]
+            ?? ProcessInfo.processInfo.environment["CONDUCTOR_STORE"])
+            .map { URL(fileURLWithPath: $0) }
+            ?? AppPaths.supportFile("projects.json", movedFrom: AppPaths.legacy("projects.json"))
+    }
+
     init(preferences: UserDefaults = .standard, storeURL: URL? = nil, files: PersistentFileClient = .live) {
         navigation = ProjectNavigation(preferences: preferences)
-        self.storeURL = storeURL
-            ?? (ProcessInfo.processInfo.environment["CODE_STATION_STORE"]
-                ?? ProcessInfo.processInfo.environment["CONDUCTOR_STORE"])
-                .map { URL(fileURLWithPath: $0) }
-            ?? AppPaths.supportFile("projects.json", movedFrom: AppPaths.legacy("projects.json"))
+        self.storeURL = storeURL ?? Self.defaultStoreURL
         self.files = files
         persistence = ProjectPersistence(storeURL: self.storeURL, files: files)
         // Named after the index rather than fixed, so a store pointed somewhere else -
