@@ -553,7 +553,7 @@ private struct AppUpdateRestartPrompt: View {
     }
 
     private var message: String {
-        let busy = store.sessions.count { runner.state($0.id).isBusy }
+        let busy = store.sessions.count { $0.designSourceSessionID == nil && runner.isBusy($0.id, store: store) }
         guard busy > 0 else { return "Restarting the app finishes the update." }
         return "Restarting the app finishes the update and stops "
             + "\(counted(busy, "session")) still running."

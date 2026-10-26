@@ -198,7 +198,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     private var runningSessions: Int {
-        projects.sessions.count { runner.isBusy($0.id, store: projects) }
+        projects.sessions.count { $0.designSourceSessionID == nil && runner.isBusy($0.id, store: projects) }
     }
 
     func windowWillClose(_ notification: Notification) {
