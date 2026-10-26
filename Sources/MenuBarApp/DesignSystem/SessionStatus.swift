@@ -466,8 +466,10 @@ struct ElapsedTime: View {
     @Environment(\.textScale) private var textScale
 
     var body: some View {
-        TimelineView(.periodic(from: .now, by: 1)) { context in
-            Text(Self.reading(context.date.timeIntervalSince(since)))
+        TickingReading(since: since, reading: { since, now in
+            Self.reading(now.timeIntervalSince(since))
+        }) { text in
+            Text(text)
                 .font(.mono(size * (scaled ? textScale : 1)))
                 .foregroundStyle(.tertiary)
                 .monospacedDigit()

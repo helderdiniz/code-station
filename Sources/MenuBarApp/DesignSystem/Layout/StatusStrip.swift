@@ -84,8 +84,8 @@ enum RelativeTime {
     // count seconds. Seconds are kept because the first minute of a build is the part
     // being watched, which is exactly where `short` says only "now". It stops at days:
     // a run that has lasted weeks is stuck, and "16d" says so better than "2w".
-    static func duration(since date: Date) -> String {
-        reading(max(0, Date().timeIntervalSince(date)), weeks: false)
+    static func duration(since date: Date, now: Date = Date()) -> String {
+        reading(max(0, now.timeIntervalSince(date)), weeks: false)
     }
 
     // "today 09:41", "yesterday 16:18", "3 Aug 11:02": what a row shows when the reader

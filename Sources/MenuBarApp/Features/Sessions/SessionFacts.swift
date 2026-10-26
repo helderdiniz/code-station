@@ -271,14 +271,14 @@ struct SessionFactsChip: View {
                 VStack(alignment: .leading, spacing: 1) {
                     HStack(spacing: 5) {
                         StatusCaps(text: state.word, tint: state.tone.wordColour, size: 9.5)
-                        if state.since != nil {
+                        if let since = state.since {
                             StatusDot(size: 9.5)
                             if state.ticks {
-                                TimelineView(.periodic(from: .now, by: 1)) { _ in
-                                    elapsed
+                                TickingReading(since: since, reading: RelativeTime.duration(since:now:)) {
+                                    elapsedLabel($0)
                                 }
                             } else {
-                                elapsed
+                                elapsedLabel(state.shortElapsed ?? "")
                             }
                         }
                     }
@@ -313,8 +313,8 @@ struct SessionFactsChip: View {
         .contentShape(shape)
     }
 
-    private var elapsed: some View {
-        StatusValue(text: state.shortElapsed ?? "", size: 9.5)
+    private func elapsedLabel(_ text: String) -> some View {
+        StatusValue(text: text, size: 9.5)
             .monospacedDigit()
             .fixedSize()
     }
@@ -366,11 +366,11 @@ struct SessionFactsChip: View {
                 StatusCaps(text: state.word, tint: state.tone.wordColour)
                 if let since = state.since {
                     if state.ticks {
-                        TimelineView(.periodic(from: .now, by: 1)) { context in
-                            preciseElapsed(since, now: context.date)
-                        }
+                        TickingReading(since: since, reading: { since, now in
+                            SessionStateReading.preciseElapsed(now.timeIntervalSince(since))
+                        }) { preciseElapsed($0) }
                     } else {
-                        preciseElapsed(since, now: .now)
+                        preciseElapsed(SessionStateReading.preciseElapsed(Date().timeIntervalSince(since)))
                     }
                     Spacer(minLength: 6)
                     Text(SessionStateReading.sinceLine(since, tone: state.tone))
@@ -433,8 +433,8 @@ struct SessionFactsChip: View {
         }
     }
 
-    private func preciseElapsed(_ since: Date, now: Date) -> some View {
-        StatusValue(text: SessionStateReading.preciseElapsed(now.timeIntervalSince(since)))
+    private func preciseElapsed(_ text: String) -> some View {
+        StatusValue(text: text)
             .monospacedDigit()
             .fixedSize()
     }
