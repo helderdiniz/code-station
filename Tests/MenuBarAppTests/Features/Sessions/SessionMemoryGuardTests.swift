@@ -130,17 +130,18 @@ struct SessionMemoryGuardTests {
     @Test func stoppingMonitoringLeavesAnUnderBudgetProcessAlone() async throws {
         let watched = try sleeper()
         defer { reap(watched) }
-        var guardrail: SessionMemoryGuard? = try #require(SessionMemoryGuard(
+        var guardrail = SessionMemoryGuard(
             processGroup: watched.pid, limit: 64 * 1_024 * 1_024) { _ in
                 Issue.record("An idle process should stay below its memory budget")
-            })
-        weak var released: SessionMemoryGuard? = guardrail
+            }
+        _ = try #require(guardrail)
+        let isReleased = { [weak guardrail] in guardrail == nil }
         try await Task.sleep(for: .milliseconds(600))
         #expect(guardrail?.stop() == nil)
         #expect(watched.isAlive)
         // A stopped guard must release its timer and process history with the turn.
         guardrail = nil
-        #expect(await waitUntil { released == nil })
+        #expect(await waitUntil(isReleased))
     }
 
     private func sleeper() throws -> ProcessIdentity {

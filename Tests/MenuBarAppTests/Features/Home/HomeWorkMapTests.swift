@@ -156,7 +156,7 @@ struct HomeWorkMapTests {
         expectNoOverlaps(layout)
     }
 
-    @Test func phoneBandPushesTheWholeMapDownWithoutReshapingIt() {
+    @MainActor @Test func phoneBandPushesTheWholeMapDownWithoutReshapingIt() {
         let map = HomeWorkMap(sessions: day([2, 1, 3]))
         let plain = OrbitLayout(map: map, width: 1100)
         let banded = OrbitLayout(map: map, width: 1100, phoneBand: OrbitLayout.phoneBand)

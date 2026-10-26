@@ -92,7 +92,7 @@ struct ChatSecondOpinionTests {
         #expect(PermissionAnswer.allowOnce.allows)
     }
 
-    @MainActor @Test func nothingReachesTheAuthorUntilItIsSent() async {
+    @MainActor @Test func nothingReachesTheAuthorUntilItIsSent() async throws {
         let store = ChatOpinionStore()
         store.askReviewer = { _, reviewer, _, _ in
             reviewer.agent == .codex
@@ -106,14 +106,14 @@ struct ChatSecondOpinionTests {
                            anchor: nil, in: session)
         #expect(store.opinions(session).first?.lanes.count == 2)
         #expect(await waitUntil { store.opinions(session).first?.isRunning == false })
-        let opinion = try? #require(store.opinions(session).first)
-        #expect(opinion?.id == id)
-        #expect(opinion?.lanes.first?.state == .finished(.agrees, summary: "Sound."))
-        #expect(opinion?.lanes.last?.state == .failed("Its answer was not a verdict."))
-        #expect(opinion?.ticked.isEmpty == true)
-        #expect(opinion?.sent == nil)
+        let opinion = try #require(store.opinions(session).first)
+        #expect(opinion.id == id)
+        #expect(opinion.lanes.first?.state == .finished(.agrees, summary: "Sound."))
+        #expect(opinion.lanes.last?.state == .failed("Its answer was not a verdict."))
+        #expect(opinion.ticked.isEmpty)
+        #expect(opinion.sent == nil)
 
-        if let id, let point = opinion?.points.first {
+        if let id, let point = opinion.points.first {
             store.toggle(point.id, of: id, in: session)
             #expect(store.opinions(session).first?.ticked.count == 1)
             store.markSent(id, count: 1, in: session)

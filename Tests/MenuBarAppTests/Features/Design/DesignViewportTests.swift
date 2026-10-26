@@ -395,6 +395,8 @@ struct DesignWebViewportTests {
         for unit in [CGScrollEventUnit.line, .pixel] {
             let cgEvent = try #require(CGEvent(scrollWheelEvent2Source: nil, units: unit,
                                               wheelCount: 2, wheel1: delta, wheel2: 0, wheel3: 0))
+            // Held keys must not change the fixture; Shift redirects line scrolling horizontally.
+            cgEvent.flags = []
             let event = try #require(NSEvent(cgEvent: cgEvent))
             for bottom in [false, true] {
                 _ = try await pane.webView.evaluateJavaScript(
@@ -440,6 +442,7 @@ struct DesignWebViewportTests {
         pane.webView.addSubview(receiver)
         let cgEvent = try #require(CGEvent(scrollWheelEvent2Source: nil, units: .pixel,
                                           wheelCount: 2, wheel1: 120, wheel2: 0, wheel3: 0))
+        cgEvent.flags = []
         let event = try #require(NSEvent(cgEvent: cgEvent))
         let point = CGPoint(x: 360, y: 300)
 

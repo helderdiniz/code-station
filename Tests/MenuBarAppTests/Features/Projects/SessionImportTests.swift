@@ -128,6 +128,7 @@ struct ClaudeTranscriptImportTests {
 struct ClaudeSessionCatalogTests {
     private let scratch = ScratchDirectory(prefix: "claude-history")
 
+    @discardableResult
     private func write(_ lines: [String], id: String = UUID().uuidString,
                        folder: String = "-work-app") throws -> String {
         let directory = scratch.url.appendingPathComponent(folder, isDirectory: true)

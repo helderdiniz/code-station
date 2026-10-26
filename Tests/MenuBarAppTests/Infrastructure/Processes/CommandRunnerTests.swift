@@ -134,13 +134,13 @@ struct CommandRunnerTests {
     @Test func cancellationInterruptsBeforeItForcesTheChild() async throws {
         let ready = scratch.path("ready")
         let tidied = scratch.path("tidied")
-        // The shell is kept alive past the sleep, since one left with nothing to do after
-        // it replaces itself with the sleep and takes the trap with it.
+        // The wait builtin lets the shell run its trap as soon as it is interrupted.
+        // A foreground sleep can delay the trap until the child exits.
         let script = """
         trap 'echo yes > \(tidied.path); exit 0' INT
+        sleep 30 &
         echo yes > \(ready.path)
-        sleep 30
-        exit 0
+        wait
         """
         let task = Task {
             try await CommandRunner.run(

@@ -45,7 +45,7 @@ struct TranscriptEvidenceBlocksTests {
         #expect(spec.omittedSpans == 5)
     }
 
-    @Test func placesTheSpansAtTheTracesClockTime() {
+    @MainActor @Test func placesTheSpansAtTheTracesClockTime() {
         let text = #"{"time":"2026-10-23T14:02:08.240Z","spans":[{"id":"a","service":"api","start":5,"duration":1}]}"#
         guard case .success(let spec) = TranscriptTraceSpec.parse(text) else {
             Issue.record("not read"); return
@@ -57,7 +57,7 @@ struct TranscriptEvidenceBlocksTests {
 
     // Without a clock time the spans count from zero, and the waterfall shows no clock
     // rather than one in 1970.
-    @Test func aTraceWithoutAClockTimeShowsNone() {
+    @MainActor @Test func aTraceWithoutAClockTimeShowsNone() {
         guard case .success(let spec) = TranscriptTraceSpec.parse(Self.trace) else {
             Issue.record("not read"); return
         }

@@ -176,7 +176,7 @@ struct AccountUsageTests {
         #expect(!AccountUsageWindow.resetLine(nextMonth, now: now, calendar: calendar).contains(":"))
     }
 
-    @Test func theUsageBandSaysHowOldTheReadingIs() {
+    @MainActor @Test func theUsageBandSaysHowOldTheReadingIs() {
         #expect(SessionFactsChip.usageStatus(checkedAt: nil, checking: false, hasProblem: false)
                 == "not checked yet")
         #expect(SessionFactsChip.usageStatus(checkedAt: nil, checking: false, hasProblem: true)
@@ -194,7 +194,7 @@ struct AccountUsageTests {
                 == "couldn't check")
     }
 
-    @Test func aFailedCheckSaysHowOldTheLastGoodReadingIs() {
+    @MainActor @Test func aFailedCheckSaysHowOldTheLastGoodReadingIs() {
         #expect(SessionFactsChip.problemLine("Claude's usage could not be reached.", lastReading: nil)
                 == "Claude's usage could not be reached.")
         #expect(SessionFactsChip.problemLine("Claude's usage could not be reached.",
@@ -245,7 +245,7 @@ struct AccountUsageTests {
         #expect(window(used: 4, resetsIn: nil, length: nil, now: now).resetsLine(now: now) == nil)
     }
 
-    @Test func speaksAWindowWithItsPaceAndReset() {
+    @MainActor @Test func speaksAWindowWithItsPaceAndReset() {
         let now = Date()
         let busy = window(used: 71, resetsIn: 2 * 3_600 + 24 * 60, length: 5 * 3_600, now: now)
         #expect(SessionFactsChip.windowSpoken(busy, pace: busy.pace(now: now),
