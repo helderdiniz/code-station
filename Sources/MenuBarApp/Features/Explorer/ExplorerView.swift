@@ -922,7 +922,7 @@ struct ExplorerView: View {
                     MarkdownDocumentView(text: draft,
                                          basePath: node.url.deletingLastPathComponent().path,
                                          textScale: 1)
-                        .environment(\.htmlPreviewLinkOpened, noteLinkOpened)
+                        .environment(\.htmlPreviewLinkOpened, HTMLPreviewLinkOpenedAction(perform: noteLinkOpened))
                         .padding(28)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }

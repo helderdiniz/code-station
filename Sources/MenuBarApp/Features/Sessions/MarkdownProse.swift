@@ -485,6 +485,12 @@ extension AttributedString {
     }
 }
 
+struct LinkHoverAction {
+    let perform: (URL?) -> Void
+
+    func callAsFunction(_ url: URL?) { perform(url) }
+}
+
 extension EnvironmentValues {
     // The folders whose files a transcript link opens in the explorer. Empty wherever
     // there is no explorer to send them to, so those links keep going to Finder.
@@ -493,7 +499,7 @@ extension EnvironmentValues {
     @Entry var previewsLocalServers = false
     // Told which link the pointer is over, and nil when it leaves, where a screen lights
     // what a link points at before it is clicked.
-    @Entry var linkHovered: ((URL?) -> Void)? = nil
+    @Entry var linkHovered: LinkHoverAction? = nil
 }
 
 enum TranscriptLink {

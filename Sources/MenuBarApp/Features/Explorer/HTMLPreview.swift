@@ -157,7 +157,7 @@ struct HTMLPreview: View {
                     .padding(16)
             } else if let document {
                 HTMLPreviewWebContent(html: document.html, onHeight: { height = $0 },
-                                      onFailure: { failure = $0 }, onOpen: linkOpened)
+                                      onFailure: { failure = $0 }, onOpen: linkOpened?.perform)
                     .frame(height: min(max(height, 96), reference.mode == "wide" ? 720 : 560))
             } else {
                 Text("Loading preview…")
@@ -297,8 +297,12 @@ struct HTMLPreviewWebContent: NSViewRepresentable {
     }
 }
 
+struct HTMLPreviewLinkOpenedAction {
+    let perform: (URL) -> Void
+}
+
 extension EnvironmentValues {
     // A link in a preview opens outside the window, so the screen showing the preview can
     // leave a note that the click did something.
-    @Entry var htmlPreviewLinkOpened: ((URL) -> Void)? = nil
+    @Entry var htmlPreviewLinkOpened: HTMLPreviewLinkOpenedAction? = nil
 }

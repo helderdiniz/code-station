@@ -35,7 +35,7 @@ You need macOS 15 or later and at least one supported coding agent installed and
 You need:
 
 - macOS 15 or later
-- Xcode 16 or another Swift 6 toolchain
+- Xcode 26 or another Swift 6.2 toolchain
 - Git
 - At least one supported coding agent installed and signed in: `claude`, `codex` or `copilot`
 
@@ -53,7 +53,7 @@ The build script creates an ad-hoc signed release bundle at `build/Teya Code Sta
 For a quick development run without creating an app bundle:
 
 ```bash
-swift run --disable-sandbox
+./Scripts/swiftpm.sh run --disable-sandbox
 ```
 
 ## Team configuration

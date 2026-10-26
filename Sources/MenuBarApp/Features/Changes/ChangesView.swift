@@ -2753,9 +2753,9 @@ struct ChangesView: View {
                             wholeChangeThread(question, expanded: expanded, review: review)
                         }
                         .environment(\.openURL, OpenURLAction { citeFile($0) })
-                        .environment(\.linkHovered) { url in
+                        .environment(\.linkHovered, LinkHoverAction { url in
                             navigation.citeHover = url.flatMap(resolveCitation)
-                        }
+                        })
                         .padding(.trailing, 20).padding(.top, 7)
                         .transition(.popover(reduceMotion: reduceMotion))
                 }

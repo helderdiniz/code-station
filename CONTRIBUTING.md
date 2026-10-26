@@ -7,7 +7,7 @@ This guide covers the development workflow and the technical details behind the 
 You need:
 
 - macOS 15 or later
-- Xcode 16 or another Swift 6 toolchain
+- Xcode 26 or another Swift 6.2 toolchain
 - Git
 
 The app has one Swift package dependency, [SwiftTerm](https://github.com/migueldeicaza/SwiftTerm), which Swift Package Manager resolves automatically.
@@ -15,9 +15,11 @@ The app has one Swift package dependency, [SwiftTerm](https://github.com/migueld
 Build and run the executable:
 
 ```bash
-swift build --build-system native --disable-sandbox
-swift run --build-system native --disable-sandbox
+./Scripts/swiftpm.sh build --disable-sandbox
+./Scripts/swiftpm.sh run --disable-sandbox
 ```
+
+`Scripts/swiftpm.sh` uses SwiftPM's default build system and records the installed SDK version in the binary, which keeps AppKit's sheet resizing behaviour consistent. It forwards extra options to SwiftPM.
 
 Create the app bundle used for normal manual testing:
 
@@ -28,21 +30,23 @@ open "build/Teya Code Station.app"
 
 `build-app.sh` builds the `MenuBarApp` executable, copies its SwiftPM resource bundle into the app, adds the icon and `Info.plist`, and applies an ad-hoc signature. The result is written to `build/Teya Code Station.app`.
 
+Pass `debug` or `release` as its first argument. Any following options go to SwiftPM, such as `./build-app.sh debug --disable-sandbox`.
+
 ## Tests
 
 Run the full test suite after changing code:
 
 ```bash
-swift test --build-system native --disable-sandbox --no-parallel
+./Scripts/swiftpm.sh test --disable-sandbox --no-parallel
 ```
 
 Run a focused test while iterating:
 
 ```bash
-swift test --build-system native --disable-sandbox --no-parallel --filter GitActionsTests
+./Scripts/swiftpm.sh test --disable-sandbox --no-parallel --filter GitActionsTests
 ```
 
-Run the suite serially because the AppKit, WebKit, process, and preference fixtures share host resources. The native build system avoids requiring the separate Metal shader toolchain.
+Run the suite serially because the AppKit, WebKit, process, and preference fixtures share host resources. SwiftTerm embeds its shader source, so builds do not need the separate Metal shader toolchain.
 
 Pull requests and pushes to `main` run the suite on macOS. Tests live in `Tests/MenuBarAppTests`. They cover session and transcript behavior, CLI stream parsing, Git and worktree operations, terminal and PTY integration, file browsing, Dispatch and OAuth flows, skills, settings, persistence, and UI-facing presentation logic.
 
@@ -130,8 +134,8 @@ Prefer existing controls and patterns before adding another variation. Comments 
 
 ## Before submitting a change
 
-1. Build the package with `swift build --build-system native --disable-sandbox`.
-2. Run `swift test --build-system native --disable-sandbox --no-parallel`.
+1. Build the package with `./Scripts/swiftpm.sh build --disable-sandbox`.
+2. Run `./Scripts/swiftpm.sh test --disable-sandbox --no-parallel`.
 3. For UI changes, build the app bundle and check the affected flow in the running app.
 4. Review the diff for unrelated generated files or local configuration.
 

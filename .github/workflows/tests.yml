@@ -24,7 +24,7 @@ jobs:
           persist-credentials: false
       - name: Test
         run: >-
-          swift test --build-system native --disable-sandbox --no-parallel
+          ./Scripts/swiftpm.sh test --disable-sandbox --no-parallel
           --cache-path /private/tmp/teya-swiftpm-cache
           --config-path /private/tmp/code-station-ci-configuration
           --security-path /private/tmp/code-station-ci-security

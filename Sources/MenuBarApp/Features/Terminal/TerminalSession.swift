@@ -82,7 +82,7 @@ final class TerminalSession: Identifiable {
         environment["LANG"] = environment["LANG"] ?? "en_US.UTF-8"
 
         do {
-            let screen = surface.getTerminal()
+            let screen = surface.terminalDimensions
             // -i so the shell reads the user's rc files and behaves like their terminal.
             try terminal.start(shell: Self.shell, arguments: ["-i"], directory: directory,
                                environment: environment,
@@ -158,13 +158,13 @@ final class TerminalSession: Identifiable {
     func paste(_ text: String) {
         guard !text.isEmpty, isRunning else { return }
         Task { @MainActor in
-            let terminal = surface.getTerminal()
             let deadline = Date().addingTimeInterval(2)
-            while !terminal.bracketedPasteMode, isRunning, Date() < deadline {
+            while surface.terminalInputStateSnapshot()?.bracketedPasteMode != true,
+                  isRunning, Date() < deadline {
                 try? await Task.sleep(for: .milliseconds(50))
             }
             guard isRunning else { return }
-            if terminal.bracketedPasteMode {
+            if surface.terminalInputStateSnapshot()?.bracketedPasteMode == true {
                 send("\u{1b}[200~\(text)\u{1b}[201~")
             } else {
                 // Older line editors use Control-V to insert control characters literally.
@@ -178,13 +178,13 @@ final class TerminalSession: Identifiable {
     }
 
     func clear() {
-        surface.getTerminal().resetToInitialState()
+        surface.resetToInitialState()
         surface.setNeedsDisplay(surface.bounds)
     }
 
     // What the screen currently shows; read by tests.
     func screenText() -> String {
-        let data = surface.getTerminal().getBufferAsData()
+        let data = surface.getBufferAsData()
         return String(decoding: data, as: UTF8.self)
     }
 
@@ -256,7 +256,7 @@ final class TerminalOutputBuffer: @unchecked Sendable {
 }
 
 // The surface calls back on the main thread, which is where the session lives.
-extension TerminalSession: @preconcurrency TerminalViewDelegate {
+extension TerminalSession: TerminalViewDelegate {
     func send(source: TerminalView, data: ArraySlice<UInt8>) {
         pty?.write(Data(data))
     }

@@ -1,4 +1,4 @@
-// swift-tools-version: 6.0
+// swift-tools-version: 6.2
 import PackageDescription
 
 let package = Package(
@@ -7,7 +7,7 @@ let package = Package(
         .macOS(.v15)
     ],
     dependencies: [
-        .package(url: "https://github.com/migueldeicaza/SwiftTerm", from: "1.15.0")
+        .package(url: "https://github.com/migueldeicaza/SwiftTerm", from: "1.99.1")
     ],
     targets: [
         .executableTarget(

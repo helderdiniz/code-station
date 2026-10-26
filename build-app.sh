@@ -3,6 +3,7 @@
 set -euo pipefail
 
 CONFIG="${1:-release}"
+if [ "$#" -gt 0 ]; then shift; fi
 APP_NAME="Teya Code Station"
 BUNDLE_ID="com.teya.code-station"
 
@@ -10,12 +11,8 @@ BUNDLE_ID="com.teya.code-station"
 # file; a build with no file is left unconfigured.
 SITE_DEFAULTS="${SITE_DEFAULTS:-site-defaults.json}"
 
-# The native build system records the SDK the app was really built against. The default
-# one records the deployment target instead, and AppKit then falls back to its macOS 14
-# behaviour, where a sheet is sized once as it opens and never follows its content.
-BUILD_SYSTEM=(--build-system native)
-swift build "${BUILD_SYSTEM[@]}" -c "$CONFIG"
-BIN="$(swift build "${BUILD_SYSTEM[@]}" -c "$CONFIG" --show-bin-path)/MenuBarApp"
+./Scripts/swiftpm.sh build -c "$CONFIG" "$@"
+BIN="$(./Scripts/swiftpm.sh build -c "$CONFIG" "$@" --show-bin-path)/MenuBarApp"
 
 APP="build/$APP_NAME.app"
 rm -rf "$APP"
@@ -29,8 +26,11 @@ cp -R "$(dirname "$BIN")/MenuBarApp_MenuBarApp.bundle" "$APP/Contents/Resources/
 # A bundle carrying settings is an app that is already set up for whoever it is handed
 # to. The app looks for one fixed name, so whichever file was chosen arrives under it.
 if [ -f "$SITE_DEFAULTS" ]; then
-    cp "$SITE_DEFAULTS" \
-        "$APP/Contents/Resources/MenuBarApp_MenuBarApp.bundle/site-defaults.json"
+    RESOURCE_BUNDLE="$APP/Contents/Resources/MenuBarApp_MenuBarApp.bundle"
+    if [ -d "$RESOURCE_BUNDLE/Contents/Resources" ]; then
+        RESOURCE_BUNDLE="$RESOURCE_BUNDLE/Contents/Resources"
+    fi
+    cp "$SITE_DEFAULTS" "$RESOURCE_BUNDLE/site-defaults.json"
 fi
 
 # Regenerate the icon if it is missing, so a fresh clone still gets a Dock icon.
