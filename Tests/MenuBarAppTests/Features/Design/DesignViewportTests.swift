@@ -4,6 +4,74 @@ import WebKit
 @testable import MenuBarApp
 
 struct DesignViewportTests {
+    @Test func fittedTallArtboardOverlapsOneThirdOfTheMinimizedConversation() {
+        var viewport = DesignViewport()
+        let artboard = CGSize(width: 1440, height: 1142)
+        let gutter = DesignConversationLayout.minimizedCanvasGutter
+        let pillHeight = DesignConversationLayout.minimizedSize.height
+        for size in [CGSize(width: 1440, height: 831), CGSize(width: 600, height: 400)] {
+            viewport.resize(to: size, contentSize: artboard, fitBottomInset: gutter)
+            let pillTop = size.height - DesignConversationLayout.minimizedBottomInset - pillHeight
+            #expect(abs(viewport.contentFrame.maxY - pillTop - pillHeight / 3) < 0.001)
+            #expect(abs(viewport.contentFrame.midY - (size.height / 2 - gutter / 2)) < 0.001)
+            #expect(abs(viewport.contentFrame.minY) < 0.001)
+            #expect(viewport.contentFrame.minX >= 0)
+            #expect(viewport.contentFrame.maxX <= size.width)
+            #expect(viewport.contentSize == artboard)
+        }
+    }
+
+    @Test func widthLimitedArtboardStaysCenteredAboveTheGutterWithoutForcingOverlap() {
+        var viewport = DesignViewport()
+        let size = CGSize(width: 480, height: 700)
+        let gutter = DesignConversationLayout.minimizedCanvasGutter
+        viewport.resize(to: size, contentSize: CGSize(width: 1440, height: 900), fitBottomInset: gutter)
+        #expect(viewport.scale == 1.0 / 3)
+        #expect(abs(viewport.contentFrame.midY - (size.height - gutter) / 2) < 0.001)
+        #expect(viewport.contentFrame.maxY < size.height - 12 - 56)
+    }
+
+    @Test func conversationGutterPreservesManualNavigationUntilFit() {
+        var viewport = DesignViewport()
+        let artboard = CGSize(width: 1440, height: 1142)
+        let size = CGSize(width: 1000, height: 700)
+        let gutter = DesignConversationLayout.minimizedCanvasGutter
+        viewport.resize(to: size, contentSize: artboard, fitBottomInset: gutter)
+        let fitted = viewport.contentFrame
+        viewport.zoom(by: 2, at: CGPoint(x: 400, y: 300))
+        viewport.pan(by: CGSize(width: 60, height: 30))
+        let manual = viewport.contentFrame
+        for inset: CGFloat in [0, gutter, 0, gutter] {
+            viewport.resize(to: size, contentSize: artboard, fitBottomInset: inset)
+            #expect(viewport.contentFrame == manual)
+            #expect(!viewport.isFitted)
+        }
+        viewport.fit()
+        #expect(viewport.contentFrame == fitted)
+        viewport.resize(to: size, contentSize: artboard)
+        #expect(abs(viewport.contentFrame.height - size.height) < 0.001)
+        viewport.resize(to: size, contentSize: artboard, fitBottomInset: gutter)
+        #expect(viewport.contentFrame == fitted)
+
+        viewport.pan(by: CGSize(width: 60, height: 30))
+        let origin = viewport.origin
+        let scale = viewport.scale
+        viewport.resize(to: CGSize(width: 1200, height: 800), contentSize: artboard, fitBottomInset: gutter)
+        #expect(viewport.scale == scale)
+        #expect(viewport.origin == CGPoint(x: origin.x + 100, y: origin.y + 50))
+    }
+
+    @Test func gutterInAShortWorkspaceKeepsFittingAndZoomFinite() {
+        var viewport = DesignViewport()
+        viewport.resize(to: CGSize(width: 200, height: 20),
+                        contentSize: CGSize(width: 1440, height: 900),
+                        fitBottomInset: DesignConversationLayout.minimizedCanvasGutter)
+        #expect(viewport.scale > 0)
+        #expect(viewport.contentFrame.minY >= 0)
+        viewport.zoom(by: 2, at: CGPoint(x: 100, y: 10))
+        #expect(viewport.origin.x.isFinite && viewport.origin.y.isFinite)
+    }
+
     @Test func theWholeArtboardFitsAndStaysCenteredOnResize() {
         var viewport = DesignViewport()
         let artboard = CGSize(width: 1440, height: 900)
@@ -454,6 +522,7 @@ struct DesignWebViewportTests {
     func selectingAnElementUsesArtboardSnapshotCoordinatesAndDoesNotPan(scale: Double) async throws {
         let pane = Pane()
         defer { pane.close() }
+        pane.view.fitBottomInset = DesignConversationLayout.minimizedCanvasGutter
         var selection: DesignElementSelection?
         pane.coordinator.onSelection = { selection = $0 }
         try await pane.load(html)

@@ -123,15 +123,22 @@ struct DesignConversationDismissalTests {
 }
 
 @MainActor
+@Suite(.serialized)
 struct DesignConversationViewTests {
     private let testPreferences = TestPreferences()
-    @Test func foldingKeepsTheComposerTranscriptAndReadingPosition() async throws {
+    @Test(arguments: [false, true])
+    func foldingKeepsTheComposerTranscriptAndReadingPosition(reduceMotion: Bool) async throws {
         let (store, scratch) = TestStore.make()
         let project = try TestStore.project(in: store)
         let session = store.newSession(in: project.id, seed: .init(agent: .codex, mode: .design))
         let artifact = try #require(store.designArtifactURL(for: session))
         try FileManager.default.createDirectory(at: artifact.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try "<!doctype html><html><body><h1>Design canvas</h1><input value='Keep canvas state'></body></html>"
+        try """
+            <!doctype html><html><style>
+            html, body { margin: 0; width: 1440px; height: 1400px; overflow: hidden; }
+            </style>
+            <body><h1>Design canvas</h1><input value='Keep canvas state'></body></html>
+            """
             .write(to: artifact, atomically: true, encoding: .utf8)
         for index in 0..<20 {
             store.append(ChatMessage(role: .assistant, text: "Message \(index)\n\n" +
@@ -142,6 +149,7 @@ struct DesignConversationViewTests {
         let preferences = try #require(UserDefaults(suiteName: "design-floating-\(UUID().uuidString)"))
         let hosting = NSHostingController(rootView:
             DesignView(sessionID: session.id)
+                .environment(\._accessibilityReduceMotion, reduceMotion)
                 .environment(store)
                 .environment(runner)
                 .environment(AppSettings(agentAvatarURL: scratch.path("avatar.png"), preferences: preferences))
@@ -184,18 +192,31 @@ struct DesignConversationViewTests {
         }.first)
         #expect(observer.minimized)
         let openingTab = observer.convert(observer.bounds, to: nil)
+        let viewport = try #require(descendants(hosting.view).compactMap { $0 as? DesignCanvasViewport }.first)
+        #expect(await waitUntil {
+            viewport.layoutSubtreeIfNeeded()
+            return viewport.viewport.contentSize.height == 1400
+        })
+        let canvasFrame = viewport.convert(viewport.bounds, to: nil)
+        let artboardFrame = viewport.convert(viewport.viewport.contentFrame, to: nil)
+        #expect(abs(openingTab.minY - canvasFrame.minY - 12) < 1)
+        #expect(abs(openingTab.maxY - artboardFrame.minY - 56.0 / 3) < 1)
+        #expect(abs(canvasFrame.minY - DesignWebView.toolbarHeight) < 1)
+        viewport.zoom(by: 1.5, at: CGPoint(x: 400, y: 300))
+        viewport.pan(by: CGSize(width: 40, height: 20))
+        let manualFrame = viewport.viewport.contentFrame
         try click(CGPoint(x: openingTab.midX, y: openingTab.midY))
         try await settle()
         #expect(!observer.minimized)
         #expect(!observer.expanded)
         #expect(observer.bounds.size == CGSize(width: 880, height: 326))
+        #expect(viewport.viewport.contentFrame == manualFrame)
+        #expect(viewport.viewport.fitBottomInset == 0)
         let composer = try #require(descendants(hosting.view).compactMap { $0 as? NSTextView }.first { $0.isEditable })
         let composerFrame = composer.convert(composer.bounds, to: nil)
         let transcript = try #require(descendants(hosting.view).compactMap { $0 as? NSScrollView }.first {
             !($0.documentView is NSTextView) && $0.contentView.documentRect.height > 1000
         })
-        let viewport = try #require(descendants(hosting.view).compactMap { $0 as? DesignCanvasViewport }.first)
-        let canvasFrame = viewport.convert(viewport.bounds, to: nil)
         let compactFrame = observer.convert(observer.bounds, to: nil)
         let transcriptPress = try #require(NSEvent.mouseEvent(with: .leftMouseDown,
             location: CGPoint(x: compactFrame.midX, y: compactFrame.maxY - 26),
@@ -204,7 +225,11 @@ struct DesignConversationViewTests {
         #expect(observer.handle(transcriptPress, frontmost: window) === transcriptPress)
         try await settle()
         #expect(observer.expanded)
-        #expect(abs(composer.convert(composer.bounds, to: nil).minY - composerFrame.minY) < 1)
+        #expect(viewport.viewport.contentFrame == manualFrame)
+        #expect(await waitUntil {
+            hosting.view.layoutSubtreeIfNeeded()
+            return abs(composer.convert(composer.bounds, to: nil).minY - composerFrame.minY) < 1
+        })
         #expect(viewport.convert(viewport.bounds, to: nil) == canvasFrame)
         let selectedText = try #require(descendants(transcript).compactMap { $0 as? NSTextView }.first)
         selectedText.setSelectedRange(NSRange(location: 2, length: 4))
@@ -261,12 +286,17 @@ struct DesignConversationViewTests {
         try await settle()
         #expect(!observer.expanded)
         #expect(observer.minimized)
+        #expect(viewport.viewport.contentFrame == manualFrame)
         #expect(observer.bounds.height == DesignConversationLayout.minimizedSize.height)
         #expect((DesignConversationLayout.minimizedSize.width...DesignConversationLayout.minimizedMaxWidth)
                 .contains(observer.bounds.width))
         #expect(window.firstResponder !== composer)
         #expect(descendants(hosting.view).contains { $0 === composer })
         let tab = observer.convert(observer.bounds, to: nil)
+        #expect(abs(tab.minY - canvasFrame.minY - 12) < 1)
+        viewport.fit()
+        #expect(abs(viewport.viewport.contentFrame.maxY
+                    - viewport.bounds.height + DesignConversationLayout.minimizedCanvasGutter) < 1)
         try click(CGPoint(x: tab.midX, y: tab.midY))
         try await settle()
         #expect(!observer.minimized)
@@ -281,6 +311,18 @@ struct DesignConversationViewTests {
             let canvas = viewport.convert(viewport.bounds, to: nil)
             #expect(panel.minX >= canvas.minX && panel.maxX <= canvas.maxX)
             #expect(panel.minY >= canvas.minY && panel.maxY <= canvas.maxY)
+            let outside = try #require(NSEvent.mouseEvent(with: .leftMouseDown,
+                location: CGPoint(x: canvas.minX + 10, y: canvas.maxY - 10),
+                modifierFlags: [], timestamp: 0, windowNumber: window.windowNumber,
+                context: nil, eventNumber: 0, clickCount: 1, pressure: 1))
+            _ = observer.handle(outside, frontmost: window)
+            try await settle()
+            let pill = observer.convert(observer.bounds, to: nil)
+            #expect(observer.minimized)
+            #expect(abs(pill.minY - canvas.minY - 12) < 1)
+            #expect(pill.minX >= canvas.minX && pill.maxX <= canvas.maxX)
+            try click(CGPoint(x: pill.midX, y: pill.midY))
+            try await settle()
         }
     }
 

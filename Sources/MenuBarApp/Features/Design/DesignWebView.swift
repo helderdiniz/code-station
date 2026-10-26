@@ -15,6 +15,7 @@ struct DesignWebView: View {
     let onSelection: (DesignElementSelection) -> Void
     let onSnapshot: (NSImage?, DesignSnapshotRequest) -> Void
     var onViewport: ((Double) -> Void)? = nil
+    var fitBottomInset: CGFloat = 0
     // A second opinion's notes on this screen, drawn as pins on the spots they are about.
     var pins: [DesignPin] = []
     var hotPin: String? = nil
@@ -33,6 +34,7 @@ struct DesignWebView: View {
                 fitGeneration: fitGeneration,
                 onSelection: onSelection, onSnapshot: onSnapshot,
                 onViewport: onViewport, onScale: { scale = $0 },
+                fitBottomInset: fitBottomInset,
                 pins: pins, hotPin: hotPin, onPin: onPin, onPinHover: onPinHover)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             HStack(spacing: 10) {
@@ -86,6 +88,7 @@ struct DesignWebContent: NSViewRepresentable {
     // right whatever sits between the view's bounds and the layout viewport.
     var onViewport: ((Double) -> Void)? = nil
     var onScale: ((CGFloat) -> Void)? = nil
+    var fitBottomInset: CGFloat = 0
     var pins: [DesignPin] = []
     var hotPin: String? = nil
     var onPin: ((String) -> Void)? = nil
@@ -123,6 +126,7 @@ struct DesignWebContent: NSViewRepresentable {
     }
 
     func updateNSView(_ viewport: DesignCanvasViewport, context: Context) {
+        viewport.fitBottomInset = fitBottomInset
         let webView = viewport.webView
         context.coordinator.onSelection = onSelection
         context.coordinator.onSnapshot = onSnapshot

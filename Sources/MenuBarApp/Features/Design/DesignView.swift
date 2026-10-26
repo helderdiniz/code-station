@@ -166,11 +166,16 @@ struct DesignView: View {
                         ? DesignWebView.toolbarHeight : 0
                     let workspace = CGSize(width: geometry.size.width,
                                            height: max(0, geometry.size.height - toolbarHeight))
+                    let minimized = conversationMinimized && !designEmpty
+                    let panelInset = DesignConversationLayout.inset(in: workspace)
+                    let bottomInset = minimized
+                        ? min(panelInset, DesignConversationLayout.minimizedBottomInset) : panelInset
                     // A sibling rather than an overlay of the canvas: an overlay is rebuilt each
                     // time the canvas switches between its placeholders and the page, which would
                     // throw away the composer, its focus and the transcript's scroll position.
                     ZStack(alignment: .bottom) {
-                        canvasContent(session, directory: directory, busy: busy)
+                        canvasContent(session, directory: directory, busy: busy,
+                                      fitBottomInset: minimized ? DesignConversationLayout.minimizedCanvasGutter : 0)
                             .frame(width: geometry.size.width, height: geometry.size.height)
                         DesignConversation(session: session, size: workspace,
                                            conversationExpanded: $conversationExpanded,
@@ -181,8 +186,9 @@ struct DesignView: View {
                                            selectionEnabled: selectionEnabled,
                                            placeholder: composerPlaceholder(session),
                                                showsDesignAmbition: true)
-                            .padding(DesignConversationLayout.inset(in: workspace))
-                            .padding(.bottom, toolbarHeight)
+                            .padding([.top, .horizontal], panelInset)
+                            .padding(.bottom, bottomInset + toolbarHeight)
+                            .motion(Motion.reveal, value: minimized)
                     }
                 }
                 if let opinion = runner.designOpinions.opinion(sessionID) {
@@ -196,7 +202,8 @@ struct DesignView: View {
     }
 
     @ViewBuilder
-    private func canvasContent(_ session: ChatSession, directory: URL, busy: Bool) -> some View {
+    private func canvasContent(_ session: ChatSession, directory: URL, busy: Bool,
+                               fitBottomInset: CGFloat) -> some View {
         if let revision = canvas.revision, let url = canvas.screenURL(in: directory) {
             // The agent cannot see the canvas it draws into, so the canvas tells it how
             // much room there is.
@@ -210,6 +217,7 @@ struct DesignView: View {
                           onSelection: selectElement,
                           onSnapshot: receiveSnapshot,
                           onViewport: { runner.recordCanvasWidth($0, for: sessionID) },
+                          fitBottomInset: fitBottomInset,
                           pins: pins,
                           hotPin: hotNote?.uuidString,
                           onPin: { id in

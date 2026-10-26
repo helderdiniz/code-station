@@ -4,6 +4,8 @@ import SwiftUI
 enum DesignConversationLayout {
     static let minimizedSize = CGSize(width: 210, height: 56)
     static let minimizedMaxWidth: CGFloat = 320
+    static let minimizedBottomInset: CGFloat = 12
+    static let minimizedCanvasGutter = minimizedBottomInset + minimizedSize.height * 2 / 3
     // The expand button sits in the top-right corner, this far in from both edges.
     static let cornerButtonSize: CGFloat = 28
     static let cornerButtonInset: CGFloat = 10

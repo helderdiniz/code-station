@@ -5,6 +5,7 @@ import WebKit
 struct DesignViewport: Equatable {
     private(set) var size = CGSize.zero
     private(set) var contentSize = CGSize.zero
+    private(set) var fitBottomInset: CGFloat = 0
     private(set) var scale: CGFloat = 1
     private(set) var origin = CGPoint.zero
     private(set) var isFitted = true
@@ -14,18 +15,23 @@ struct DesignViewport: Equatable {
                                            height: contentSize.height * scale))
     }
 
+    // The gutter changes only fitting, not the artboard or the coordinates used to navigate it.
+    private var fitHeight: CGFloat { max(min(1, size.height), size.height - fitBottomInset) }
+
     private var fitScale: CGFloat {
         guard size.width > 0, size.height > 0,
               contentSize.width > 0, contentSize.height > 0 else { return 1 }
-        return min(1, size.width / contentSize.width, size.height / contentSize.height)
+        return min(1, size.width / contentSize.width, fitHeight / contentSize.height)
     }
 
-    mutating func resize(to size: CGSize, contentSize: CGSize) {
-        guard size != self.size || contentSize != self.contentSize else { return }
+    mutating func resize(to size: CGSize, contentSize: CGSize, fitBottomInset: CGFloat = 0) {
+        guard size != self.size || contentSize != self.contentSize
+                || fitBottomInset != self.fitBottomInset else { return }
         let change = CGSize(width: (size.width - self.size.width) / 2,
                             height: (size.height - self.size.height) / 2)
         self.size = size
         self.contentSize = contentSize
+        self.fitBottomInset = fitBottomInset
         if isFitted {
             fit()
         } else {
@@ -39,7 +45,7 @@ struct DesignViewport: Equatable {
         isFitted = true
         scale = fitScale
         origin = CGPoint(x: (size.width - contentSize.width * scale) / 2,
-                         y: (size.height - contentSize.height * scale) / 2)
+                         y: (fitHeight - contentSize.height * scale) / 2)
     }
 
     mutating func zoom(by factor: CGFloat, at point: CGPoint) {
@@ -80,6 +86,11 @@ final class DesignCanvasViewport: NSView {
     private let artboard = ArtboardView()
     private(set) var viewport = DesignViewport()
     var onScale: ((CGFloat) -> Void)?
+    var fitBottomInset: CGFloat = 0 {
+        didSet {
+            if fitBottomInset != oldValue { needsLayout = true }
+        }
+    }
     private var screen: DesignScreen?
     private var overflowWidth: CGFloat?
     private var overflowHeight: CGFloat?
@@ -136,7 +147,8 @@ final class DesignCanvasViewport: NSView {
         let height = max(screen?.height.flatMap { $0 > 0 ? CGFloat($0) : nil } ?? bounds.height,
                          overflowHeight ?? 0)
         viewport.resize(to: bounds.size,
-                        contentSize: Self.boundedContentSize(CGSize(width: width, height: height)))
+                        contentSize: Self.boundedContentSize(CGSize(width: width, height: height)),
+                        fitBottomInset: fitBottomInset)
         applyViewport()
     }
 
@@ -153,6 +165,7 @@ final class DesignCanvasViewport: NSView {
     }
 
     func fit() {
+        layoutSubtreeIfNeeded()
         viewport.fit()
         applyViewport()
     }
