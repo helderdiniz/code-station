@@ -461,7 +461,7 @@ private final class DiffDocumentView: NSTextView {
     // The rows of the new text that the old one did not have, merged into runs, leaving
     // out the gap row itself, whose count changes as it shrinks.
     private func arrivedRows(since before: String, in storage: NSTextStorage) -> [NSRect] {
-        guard let layoutManager, let textContainer else { return [] }
+        guard let layoutManager else { return [] }
         let new = storage.string.components(separatedBy: "\n")
         let arrived = DiffText.arrivedLines(old: before.components(separatedBy: "\n"), new: new)
         guard !arrived.isEmpty else { return [] }
