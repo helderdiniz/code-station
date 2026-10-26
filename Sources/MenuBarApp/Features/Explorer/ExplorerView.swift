@@ -135,6 +135,7 @@ struct ExplorerView: View {
     @State private var draft = ""
     @State private var original = ""
     @State private var saving = false
+    @State private var fileWasSaved = false
     // When the file was last written at the moment it was read. An agent works in the same
     // folder, so a pane left open on a file it has since rewritten would save over it.
     @State private var loadedAt: Date?
@@ -284,6 +285,7 @@ struct ExplorerView: View {
         // Typing moves every match after the caret, so the results are only right for the
         // text as it stands now.
         .onChange(of: draft) {
+            fileWasSaved = false
             if findPresented { refreshFind() }
             if draft != original { revealedMatches = [] }
         }
@@ -665,19 +667,24 @@ struct ExplorerView: View {
     private func detail(navigatorVisible: Bool) -> some View {
         GeometryReader { geometry in
             let inlineDetails = ExplorerSplitLayout.showsInlineDetails(availableWidth: geometry.size.width)
+            let editorWidth = max(0, geometry.size.width
+                - (detailsPresented && selected != nil && inlineDetails ? ExplorerSplitLayout.detailsWidth : 0))
+            let compact = editorWidth < 530
+            let inset: CGFloat = compact ? 16 : 20
             HStack(spacing: 0) {
                 VStack(alignment: .leading, spacing: 0) {
                     editorTabs(navigatorVisible: navigatorVisible)
                     if let node = selected {
-                        breadcrumbs(node)
-                        ViewThatFits(in: .horizontal) {
-                            HStack(spacing: 10) { fileTitle(node); Spacer(minLength: 8); fileActions(node) }
-                            VStack(alignment: .leading, spacing: 8) {
-                                fileTitle(node)
-                                HStack { Spacer(minLength: 0); fileActions(node) }
-                            }
+                        breadcrumbs(node, inset: inset)
+                        let header = compact
+                            ? AnyLayout(VStackLayout(alignment: .trailing, spacing: 9))
+                            : AnyLayout(HStackLayout(spacing: 16))
+                        header {
+                            fileTitle(node, compact: compact)
+                            fileActions(node, compact: compact)
                         }
-                        .padding(.horizontal, 14).padding(.vertical, 10)
+                        .padding(.horizontal, inset).padding(.vertical, 12)
+                        .frame(minWidth: 0, maxWidth: .infinity, minHeight: 60, alignment: .leading)
                         if findPresented {
                             findBar.transition(reduceMotion ? AnyTransition.opacity.animation(Motion.reveal) : .fold)
                         }
@@ -685,14 +692,18 @@ struct ExplorerView: View {
                         // moving between two text files keeps the same editor.
                         fileBody(node)
                             .id(bodyKind(node))
+                            .frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity)
+                            .clipped()
                             .transition(AnyTransition.fadeIn.animation(Motion.reveal))
-                        if isEditable { editStatus }
+                        if isEditable { editStatus(node, width: editorWidth, inset: inset) }
                     } else {
                         PaneMessage(icon: "sidebar.left", title: "Pick a file",
                                     detail: "Choose one from the list, or press Shift twice to find it.")
                     }
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                // Source lines and long names must not set the minimum width of the header and footer.
+                .frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                .frame(width: editorWidth, alignment: .leading)
                 if detailsPresented, let node = selected, inlineDetails {
                     fileDetails(node).frame(width: ExplorerSplitLayout.detailsWidth)
                         .transition(.popover(reduceMotion: reduceMotion))
@@ -776,7 +787,7 @@ struct ExplorerView: View {
         .overlay(alignment: .bottom) { Rectangle().fill(Theme.hairline).frame(height: 1) }
     }
 
-    private func breadcrumbs(_ node: FileNode) -> some View {
+    private func breadcrumbs(_ node: FileNode, inset: CGFloat) -> some View {
         ScrollView(.horizontal) {
             HStack(spacing: 7) {
                 let parts = relativePath(node).split(separator: "/").map(String.init)
@@ -786,27 +797,37 @@ struct ExplorerView: View {
                 }
                 if let target = node.linkDestination { Text("→ \(target)").foregroundStyle(.secondary) }
             }
-            .font(.system(size: 11)).padding(.horizontal, 14).frame(height: 36)
+            .font(.system(size: 11)).padding(.horizontal, inset).frame(height: 36)
         }
+        .frame(minWidth: 0, maxWidth: .infinity)
         .scrollIndicators(.hidden)
         .accessibilityElement(children: .combine)
         .overlay(alignment: .bottom) { Rectangle().fill(Theme.hairline).frame(height: 1) }
     }
 
-    private func fileTitle(_ node: FileNode) -> some View {
+    private func fileTitle(_ node: FileNode, compact: Bool) -> some View {
         HStack(spacing: 8) {
-            Image(systemName: icon(node)).foregroundStyle(Theme.accent)
-            Text(node.name).font(.serif(16, .semibold)).lineLimit(1).truncationMode(.middle)
+            Image(systemName: icon(node)).foregroundStyle(Theme.accent).accessibilityHidden(true)
+            Text(node.name)
+                .font(.system(size: compact ? 14 : 15, weight: .semibold))
+                .lineLimit(1).truncationMode(.middle)
+                .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
+                .accessibilityLabel(node.name)
+                .accessibilityAddTraits(.isHeader)
+                .accessibilityIdentifier("explorer.fileTitle")
+                .appTooltip(node.name)
             if let status = git.statuses[node.path] {
-                ExplorerStatusMark(status: status, spelledOut: true)
+                ExplorerStatusMark(status: status, spelledOut: !compact)
+                    .fixedSize()
                     .padding(.horizontal, 7).padding(.vertical, 4)
                     .background(Theme.field, in: RoundedRectangle(cornerRadius: 6))
             }
         }
+        .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
     }
 
-    private func fileActions(_ node: FileNode) -> some View {
-        HStack(spacing: 5) {
+    private func fileActions(_ node: FileNode, compact: Bool) -> some View {
+        HStack(spacing: compact ? 2 : 5) {
             if isEditable { saveButtons(node) }
             ExplorerIcon(symbol: "magnifyingglass", label: "Find in file (Cmd+F or Ctrl+F)", action: showFind)
                 .disabled(!canFind)
@@ -830,22 +851,43 @@ struct ExplorerView: View {
         }.fixedSize()
     }
 
-    private var editStatus: some View {
-        HStack(spacing: 6) {
+    private var editStatusMessage: String {
+        if saving { return "Saving changes…" }
+        if dirty { return "Your edits are kept here until you save." }
+        if fileWasSaved { return "Saved. Your file is up to date." }
+        return "Changes are written only when you save."
+    }
+
+    private func editStatus(_ node: FileNode, width: CGFloat, inset: CGFloat) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
             Image(systemName: dirty ? "info.circle" : "checkmark.circle").accessibilityHidden(true)
                 .contentTransition(.symbolEffect(.replace))
-            Text(dirty ? "Your edits are kept here until you save." : "Changes are written only when you save.")
-                .lineLimit(2)
+            Text(editStatusMessage)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
                 .contentTransition(.interpolate)
-            Spacer(minLength: 0)
-            if saving { LoopSpinner(size: 10).transition(.fadeIn) }
-            Text("⌘ S").font(.mono(10))
+                .accessibilityIdentifier("explorer.saveMessage")
+                .onChange(of: editStatusMessage) { _, message in
+                    NSAccessibility.post(element: NSApp as Any, notification: .announcementRequested,
+                                         userInfo: [.announcement: message,
+                                                    .priority: NSAccessibilityPriorityLevel.medium.rawValue])
+                }
+            HStack(spacing: 14) {
+                if width >= 530, !node.kind.isEmpty {
+                    Text(node.kind.uppercased()).foregroundStyle(Theme.secondaryText)
+                }
+                if width >= 650 { Text("UTF-8").foregroundStyle(Theme.secondaryText) }
+                if saving { LoopSpinner(size: 10).transition(.fadeIn) }
+                Text("⌘ S").font(.mono(10)).accessibilityLabel("Save, Command-S")
+            }
+            .font(.system(size: 10)).fixedSize()
         }
-        .motion(Motion.reveal, value: dirty)
-        .motion(Motion.reveal, value: saving)
-        .font(.system(size: 11)).foregroundStyle(Theme.accent)
-        .padding(9).background(Theme.accent.opacity(0.06), in: RoundedRectangle(cornerRadius: 6))
-        .padding(12)
+        .motion(Motion.reveal, value: editStatusMessage)
+        .font(.system(size: 11)).foregroundStyle(dirty ? Theme.attention : Theme.accent)
+        .padding(.horizontal, inset).padding(.vertical, 11)
+        .frame(minWidth: 0, maxWidth: .infinity, minHeight: 46, alignment: .leading)
+        .background(Theme.statusBand)
+        .overlay(alignment: .top) { Rectangle().fill(Theme.border).frame(height: 1) }
     }
 
     private func fileDetails(_ node: FileNode) -> some View {
@@ -1680,6 +1722,7 @@ struct ExplorerView: View {
             if openedRoot == writtenRoot {
                 if selected?.path == node.path {
                     original = saved
+                    fileWasSaved = draft == saved
                     loadedAt = modified
                     if let fresh { selected = fresh }
                     rememberDraft()
@@ -1703,6 +1746,7 @@ struct ExplorerView: View {
         let generation = previewGeneration
         resetFind()
         selected = node
+        fileWasSaved = false
         documents.open(node)
         lineToReveal = line
         preview = nil
