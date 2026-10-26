@@ -20,7 +20,7 @@ final class DesignWindow {
             return
         }
 
-        let hosting = NSHostingController(rootView: content.frame(minWidth: 640, minHeight: 420))
+        let hosting = NSHostingController(rootView: WindowMinimum(width: 640, height: 420) { content })
         // The window owns its size instead of shrinking to the view's ideal size. The
         // minimum comes from the view, because the hosting controller resets the
         // window's own contentMinSize to zero.

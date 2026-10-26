@@ -217,9 +217,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     func showManager() {
         if window == nil {
-            let hosting = NSHostingController(rootView:
+            let hosting = NSHostingController(rootView: WindowMinimum(width: 960, height: 640) {
                 RootView()
-                    .frame(minWidth: 960, minHeight: 640)
                     .environment(store)
                     .environment(processes)
                     .environment(claude)
@@ -246,7 +245,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                     .environment(shortcuts)
                     .environment(appUpdates)
                     .environment(accountUsage)
-                    .environment(quitGuard))
+                    .environment(quitGuard)
+            })
             // The window owns its size instead of shrinking to the view's ideal size. The
             // minimum comes from the view, because the hosting controller resets the
             // window's own contentMinSize to zero.
