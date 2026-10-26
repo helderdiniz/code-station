@@ -562,7 +562,10 @@ struct DockerView: View {
                 }
                 // Room for the selection bar, so the last line is never hidden under it.
                 .padding(.bottom, selection.isEmpty ? 0 : 64)
-                .animation(animatesRows && !reduceMotion ? Motion.leave : nil, value: visibleIDs)
+                // Keyed on the rows only while a delete runs. Keyed on them all the time, it
+                // would wipe out the animation of every other change to the rows, such as a
+                // group folding shut.
+                .motion(Motion.leave, value: animatesRows ? visibleIDs : [])
             }
             .scrollBounceBehavior(.basedOnSize)
         }
@@ -802,7 +805,9 @@ struct DockerView: View {
                 if ids.allSatisfy(selection.contains) { selection.subtract(ids) } else { selection.formUnion(ids) }
             },
             collapse: {
-                withAnimation(reduceMotion ? nil : Motion.reveal) {
+                // The rows only fade, so with Reduce Motion they keep the fade at a gentle pace.
+                let closing = !collapsed.contains(group.key)
+                withAnimation(closing && !reduceMotion ? Motion.leave : Motion.reveal) {
                     collapsed.formSymmetricDifference([group.key])
                 }
             },

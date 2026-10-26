@@ -423,14 +423,14 @@ struct DockerGroupHeader: View {
                         .foregroundStyle(Theme.secondaryText)
                         .contentTransition(.opacity)
                     if project != nil { DockerBadge(text: "Compose") }
+                    Spacer(minLength: 8)
                 }
+                .frame(maxHeight: .infinity)
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .accessibilityLabel("\(project ?? "Standalone containers"), \(state)")
             .accessibilityHint(collapsed ? "Expand" : "Collapse")
-
-            Spacer(minLength: 8)
 
             if project != nil {
                 HStack(spacing: 6) {
@@ -450,6 +450,7 @@ struct DockerGroupHeader: View {
         .padding(.horizontal, DockerColumns.inset)
         .frame(height: 38)
         .background(Theme.sunken)
+        .hoverFill(cornerRadius: 0)
         .overlay(alignment: .bottom) { Rectangle().fill(Theme.hairline).frame(height: 1) }
     }
 }
