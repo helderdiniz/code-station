@@ -269,6 +269,7 @@ private final class SidebarHarness {
     var hosting: NSHostingController<AnyView>?
 
     init() throws {
+        _ = NSApplication.shared
         (store, scratch) = TestStore.make()
         preferences = try #require(UserDefaults(suiteName: "sidebar-ui-\(UUID().uuidString)"))
         settings = AppSettings(agentAvatarURL: scratch.path("avatar.png"), preferences: preferences)
@@ -301,6 +302,8 @@ private final class SidebarHarness {
             .environment(DispatchAuthStore(storeURL: scratch.path("dispatch-auth.json"),
                                            keychain: KeychainClient(read: { [:] }, write: { _ in }),
                                            siteDefaults: SiteDefaults()))
+            // Explicit scroll animations bypass the view transaction and need AppKit's animation clock.
+            .environment(\._accessibilityReduceMotion, true)
             .transaction { $0.disablesAnimations = true }
             .appOverlays()
         let hosting = NSHostingController(rootView: AnyView(view))
@@ -311,7 +314,7 @@ private final class SidebarHarness {
         window.contentViewController = hosting
         window.setContentSize(NSSize(width: 318, height: 820))
         hosting.view.frame = NSRect(x: 0, y: 0, width: 318, height: 820)
-        window.setFrameOrigin(NSPoint(x: -10_000, y: -10_000))
+        window.center()
         window.orderFront(nil)
         self.hosting = hosting
         self.window = window
