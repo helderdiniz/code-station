@@ -530,10 +530,12 @@ struct EnvironmentTokenControls: View {
     @Environment(DispatchAuthStore.self) private var auth
 
     @State private var pasted = ""
+    @State private var revealed = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             tokenRow
+            if revealed, let token = auth.tokens[env] { revealedToken(token.accessToken).transition(.fold) }
             if auth.awaitingPaste.contains(env) { paste }
             if let failure = auth.failures[env] {
                 Text(failure)
@@ -542,6 +544,11 @@ struct EnvironmentTokenControls: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
+        .smoothlyResizes(when: revealed)
+        // A token stays hidden until it is asked for again, so a fresh sign-in or another
+        // environment does not put a secret on screen by itself.
+        .onChange(of: env) { revealed = false }
+        .onChange(of: auth.tokens[env] == nil) { revealed = false }
     }
 
     private var tokenRow: some View {
@@ -555,6 +562,9 @@ struct EnvironmentTokenControls: View {
                 .motion(Motion.reveal, value: auth.tokenStatus(for: env))
 
             if auth.tokens[env] != nil, !auth.busy.contains(env) {
+                InlineLink(title: revealed ? "Hide" : "Reveal", size: 11, tint: env.accent) {
+                    revealed.toggle()
+                }
                 InlineLink(title: "Clear", size: 11, tint: .secondary) { auth.clearToken(for: env) }
             }
 
@@ -576,6 +586,21 @@ struct EnvironmentTokenControls: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
         .cardSurface(cornerRadius: 9)
+    }
+
+    private func revealedToken(_ token: String) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            Text(token)
+                .font(.mono(11))
+                .foregroundStyle(.secondary)
+                .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            CopyButton("Copy") { token }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .fieldSurface(cornerRadius: 8)
     }
 
     private var buttonLabel: String {
