@@ -2735,7 +2735,7 @@ struct ChangesView: View {
     }
 
     // The card hangs off the top of the screen, just under the header button that opens
-    // it, and grows out of that button.
+    // it.
     private var wholeChangeCard: some View {
         GeometryReader { proxy in
             ZStack(alignment: .topTrailing) {
@@ -2757,7 +2757,7 @@ struct ChangesView: View {
                             navigation.citeHover = url.flatMap(resolveCitation)
                         }
                         .padding(.trailing, 20).padding(.top, 7)
-                        .transition(.grow(from: navigation.askOrigin, reduceMotion: reduceMotion))
+                        .transition(.popover(reduceMotion: reduceMotion))
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)

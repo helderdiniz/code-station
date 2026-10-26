@@ -10,7 +10,7 @@ struct WholeChangeAskScope: Identifiable {
     var lines: Int { added + removed }
 }
 
-// Questions about the whole change, in a card that grows out of the header button that
+// Questions about the whole change, in a card that hangs under the header button that
 // asks them. It hangs over the diff rather than sitting in the file list, so the answer
 // shows where the click was and the code it points at stays in view beside it.
 struct WholeChangeAskCard<Thread: View>: View {

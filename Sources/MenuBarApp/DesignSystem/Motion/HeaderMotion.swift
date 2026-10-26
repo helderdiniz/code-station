@@ -2,15 +2,16 @@ import SwiftUI
 
 // How the session header moves. Every tab change and every panel shows where it came
 // from: the underline stretches to the new tab before it lets go of the old one, the page
-// lifts in under it, and a panel grows out of the button that opened it, so the eye
-// already knows where to click to put it away. Under Reduce Motion all of it is a fade.
+// lifts in under it, and a panel lifts into place by the button that opened it. Under
+// Reduce Motion all of it is a fade.
 enum HeaderMotion {
     // The underline's two legs: reaching over to the new tab, then letting go of the old
     // one. Together they run just under half a second, slow in, fast across, soft out.
     static let stretch = Animation.timingCurve(0.45, 0, 0.7, 0.6, duration: 0.21)
     static let release = Animation.timingCurve(0.2, 0.5, 0.2, 1, duration: 0.25)
     static let page = Animation.timingCurve(0.2, 0.8, 0.2, 1, duration: 0.28)
-    // A popover overshoots by a hair, so it reads as thrown from the button.
+    // Something growing in place overshoots by a hair, so it reads as thrown rather than
+    // set down.
     static let grow = Animation.timingCurve(0.2, 0.9, 0.3, 1.12, duration: 0.34)
     static let shrink = Animation.timingCurve(0.4, 0, 0.6, 1, duration: 0.2)
     // Panels that come in from a window edge travel further, so they take longer.
@@ -19,8 +20,10 @@ enum HeaderMotion {
     static let sink = Animation.timingCurve(0.4, 0, 0.8, 0.6, duration: 0.24)
 
     static let pageLift: CGFloat = 8
-    // The share of its size a popover starts from. Small enough to read as growing, and
-    // never zero, since a singular scale is a NaN waiting to happen in AppKit layout.
+    static let popoverLift: CGFloat = 4
+    // The share of its size a short run of words grows from. Small enough to read as
+    // growing, and never zero, since a singular scale is a NaN waiting to happen in AppKit
+    // layout.
     static let seed: CGFloat = 0.55
 }
 
@@ -34,16 +37,14 @@ extension AnyTransition {
         return .asymmetric(insertion: insertion, removal: .identity)
     }
 
-    // A panel that grows out of the point it was opened from and shrinks back into it.
-    // `origin` is in window coordinates; without one the panel only fades.
-    static func grow(from origin: CGPoint?, reduceMotion: Bool) -> AnyTransition {
-        guard !reduceMotion, let origin else {
-            return .opacity.animation(reduceMotion ? Motion.reveal : HeaderMotion.grow)
-        }
-        let modifier = AnyTransition.modifier(active: GrowFromPoint(progress: 0, origin: origin),
-                                              identity: GrowFromPoint(progress: 1, origin: origin))
-        return .asymmetric(insertion: modifier.animation(HeaderMotion.grow),
-                           removal: modifier.animation(HeaderMotion.shrink))
+    // A panel opened from a button fades in and lifts the last few points into place, in
+    // one movement. It is never scaled or masked: panels hold buttons with tooltips, which
+    // are AppKit views that cannot be laid out under a scale.
+    static func popover(reduceMotion: Bool) -> AnyTransition {
+        let insertion: AnyTransition = reduceMotion
+            ? .opacity.animation(Motion.reveal)
+            : .opacity.combined(with: .offset(y: HeaderMotion.popoverLift)).animation(Motion.reveal)
+        return .asymmetric(insertion: insertion, removal: .opacity.animation(Motion.leave))
     }
 
     // A drawer that comes in from one edge of the window and goes back out of it.
@@ -55,42 +56,9 @@ extension AnyTransition {
     }
 }
 
-// The panel itself is never scaled. Panels hold buttons with tooltips, and those are
-// AppKit views that cannot be laid out under a scale. A mask grows from the origin
-// instead and uncovers the panel where it already stands.
-nonisolated private struct GrowFromPoint: ViewModifier, Animatable {
-    var progress: CGFloat
-    let origin: CGPoint
-
-    // Room for the panel's shadow, which the mask would otherwise cut off at rest.
-    private static let bleed: CGFloat = 40
-
-    var animatableData: CGFloat {
-        get { progress }
-        set { progress = newValue }
-    }
-
-    func body(content: Content) -> some View {
-        content
-            // The panel is solid well before it has finished growing, so it is never a
-            // faint ghost of itself.
-            .opacity(min(1, max(0, progress * 2)))
-            .mask {
-                GeometryReader { proxy in
-                    let frame = proxy.frame(in: .global).insetBy(dx: -Self.bleed, dy: -Self.bleed)
-                    Rectangle()
-                        .padding(-Self.bleed)
-                        .scaleEffect(HeaderMotion.seed + (1 - HeaderMotion.seed) * progress,
-                                     anchor: UnitPoint(x: (origin.x - frame.minX) / max(frame.width, 1),
-                                                       y: (origin.y - frame.minY) / max(frame.height, 1)))
-                }
-            }
-    }
-}
-
 extension View {
-    // Keeps track of where a button's centre is in the window, so a panel can grow out of
-    // it and go back into it.
+    // Keeps track of where a button's centre is in the window, so a panel can point back
+    // at it.
     func onCentreChange(_ action: @escaping (CGPoint) -> Void) -> some View {
         onGeometryChange(for: CGPoint.self) { proxy in
             let frame = proxy.frame(in: .global)

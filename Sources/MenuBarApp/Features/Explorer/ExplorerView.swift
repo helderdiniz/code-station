@@ -109,8 +109,6 @@ struct ExplorerView: View {
     @State private var focusEditor = false
     @State private var narrowNavigator = false
     @State private var detailsPresented = false
-    // Where the details button sits, so the panel grows out of it and goes back into it.
-    @State private var detailsOrigin: CGPoint?
     @Namespace private var tabUnderline
     // A click whose work happens outside the window, such as opening Finder, moves
     // nothing in it, so a short note is all the window shows of it.
@@ -697,7 +695,7 @@ struct ExplorerView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                 if detailsPresented, let node = selected, inlineDetails {
                     fileDetails(node).frame(width: ExplorerSplitLayout.detailsWidth)
-                        .transition(.grow(from: detailsOrigin, reduceMotion: reduceMotion))
+                        .transition(.popover(reduceMotion: reduceMotion))
                 }
             }
             .overlay(alignment: .trailing) {
@@ -710,7 +708,7 @@ struct ExplorerView: View {
                     if overlaid, let node = selected {
                         fileDetails(node).frame(width: min(ExplorerSplitLayout.detailsWidth, geometry.size.width))
                             .shadow(color: .black.opacity(0.08), radius: 12, x: -4)
-                            .transition(.grow(from: detailsOrigin, reduceMotion: reduceMotion))
+                            .transition(.popover(reduceMotion: reduceMotion))
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .trailing)
@@ -817,7 +815,6 @@ struct ExplorerView: View {
                              selected: isPinned(node)) { togglePin(node) }
             }
             ExplorerIcon(symbol: "info.circle", label: "File details", selected: detailsPresented) { detailsPresented.toggle() }
-                .onCentreChange { detailsOrigin = $0 }
             ExplorerIcon(symbol: "ellipsis", label: "File actions")
                 .appMenu {
                     var items: [MenuEntry] = []

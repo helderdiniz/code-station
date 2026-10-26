@@ -67,12 +67,9 @@ struct ToolCallDetailHost: View {
                     .contentShape(Rectangle())
                     .onTapGesture { presenter.dismiss() }
 
-                // The card grows out of the row that opened it and shrinks back into it.
                 // Picking another row swaps only what is inside: the old call goes at
                 // once and the new one fades in, and an update from the agent to the
                 // call already open does not move at all.
-                // The card is moved into place out here rather than on itself, so the
-                // mask it grows from the row sits where the card is drawn.
                 ZStack {
                     ZStack {
                         card(presented, bounds: geometry.size)
@@ -81,8 +78,7 @@ struct ToolCallDetailHost: View {
                                                     removal: .identity))
                     }
                     .measuredOverlay(generation: presenter.generation, into: $measurement)
-                    .transition(.grow(from: CGPoint(x: presenter.anchor.midX, y: presenter.anchor.midY),
-                                      reduceMotion: reduceMotion))
+                    .transition(.popover(reduceMotion: reduceMotion))
                 }
                 .offset(x: x(in: geometry.size), y: y(in: geometry.size))
 

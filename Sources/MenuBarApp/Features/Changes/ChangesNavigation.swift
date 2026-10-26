@@ -127,7 +127,7 @@ final class ChangesNavigationMemory {
     private(set) var askingWholeChange = false
     // When the card was last open. An answer that lands after it is waiting to be read.
     private(set) var wholeChangeSeen = Date()
-    // The middle of the header button in window coordinates, so the card grows out of it.
+    // The middle of the header button in window coordinates, so the card can point at it.
     var askOrigin: CGPoint?
     var askDraft = ""
     // The thread the next question goes into, instead of starting a new one.

@@ -155,7 +155,6 @@ struct SessionFactsChip: View {
 
     @State private var pointerOnChip = false
     @State private var pointerOnCard = false
-    @State private var pillCentre: CGPoint?
     @State private var hovering = false
     @State private var closing: Task<Void, Never>?
     // Hover alone would make a card that can be read but not used, since reaching a row
@@ -184,14 +183,11 @@ struct SessionFactsChip: View {
         } label: { pill }
             .buttonStyle(PressDip(scale: 0.97))
             .onPointerHover { pointerOnChip = $0; pointerMoved() }
-            .onCentreChange { pillCentre = $0 }
             .accessibilityLabel(Self.accessibilityLabel(
                 state: state, facts: facts, showsBranch: showsBranch))
             .accessibilityValue(isOpen ? "Expanded" : "Collapsed")
             .background(WindowAnchor(monitor: escape))
             .overlay(alignment: .topTrailing) {
-                // The card is moved under the pill out here rather than on itself, so
-                // the mask it grows from the pill sits where the card is drawn.
                 ZStack {
                     if isOpen { hoverCard }
                 }
@@ -333,7 +329,7 @@ struct SessionFactsChip: View {
         }
         .fixedSize()
         .onPointerHover { pointerOnCard = $0; pointerMoved() }
-        .transition(.grow(from: pillCentre, reduceMotion: reduceMotion))
+        .transition(.popover(reduceMotion: reduceMotion))
     }
 
     private var card: some View {

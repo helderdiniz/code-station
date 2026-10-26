@@ -72,8 +72,8 @@ struct SessionView: View {
     @State private var agentFocus: AgentTranscriptFocus?
     @State private var recapOpen = false
     @State private var recapNeedsAttention = false
-    // Whether the person asked for the recap that is on its way. One they asked for grows
-    // out of its button; one written on its own appears where it hangs without moving, since
+    // Whether the person asked for the recap that is on its way. One they asked for lifts
+    // into place; one written on its own appears where it hangs without moving, since
     // nobody clicked anything for it.
     @State private var recapRequested = false
     @State private var recapArrivesUnasked = false
@@ -107,8 +107,6 @@ struct SessionView: View {
     // already there the next time this session opens.
     @State private var statsTask: Task<Void, Never>?
     @State private var designHasContent: Bool?
-    // Where the recap button sits in the window, so its panel grows out of it.
-    @State private var recapOrigin: CGPoint?
     // Focus goes back to the button that opened the questions card once it is put away.
     @AccessibilityFocusState private var askButtonFocused: Bool
     @State private var railNotes = 0
@@ -722,7 +720,7 @@ struct SessionView: View {
     }
 
     // A question about the whole change has no file or line to start from, so it is asked
-    // from here, and its card grows out of this button over the diff.
+    // from here, and its card hangs under this button over the diff.
     private var askWholeChangeButton: some View {
         let asking = changesNavigation.askingWholeChange
         let unread = !asking && WholeChangeThreads.hasUnreadAnswer(runner.reviews.questions(sessionID),
@@ -897,7 +895,6 @@ struct SessionView: View {
                     isOpen: recapOpen,
                     needsAttention: recapNeedsAttention,
                     toggle: toggleRecap)
-                .onCentreChange { recapOrigin = $0 }
             }
         }
     }
@@ -946,8 +943,6 @@ struct SessionView: View {
         HeaderRailButton(icon: "ellipsis",
                          badge: recapNeedsAttention,
                          label: "More session actions")
-            // The recap's own button is folded in here, so its card grows from this one.
-            .onCentreChange { recapOrigin = $0 }
             .appMenu(refreshOnOpen: { WorktreeOpener.refresh() }) {
                 utilityEntries(session: session, project: project)
             }
@@ -1045,8 +1040,8 @@ struct SessionView: View {
                 close: closeRecap)
                 .padding(.trailing, 20)
                 .offset(y: Self.destinationDeckHeight + 7)
-                .transition(recapArrivesUnasked ? .identity : .grow(from: recapOrigin, reduceMotion: reduceMotion))
-                // Once it is in place, closing it goes back into the button like any other.
+                .transition(recapArrivesUnasked ? .identity : .popover(reduceMotion: reduceMotion))
+                // Once it is in place, closing it fades out like any other.
                 .onAppear { recapArrivesUnasked = false }
         }
     }
