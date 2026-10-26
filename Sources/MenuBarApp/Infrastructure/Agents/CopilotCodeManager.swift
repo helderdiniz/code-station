@@ -58,11 +58,12 @@ final class CopilotCodeManager {
     func isOutOfSync(_ server: Server) -> Bool {
         guard let entry = entries[server.name], supports(server) else { return false }
         if server.isRemote {
-            return entry.url != server.url || entry.headers != appHeaders(server)
+            return !server.matchesRemote(command: entry.command, url: entry.url,
+                                         type: entry.type, headers: entry.headers)
         }
         if entry.command != resolvedCommand(server) { return true }
         if entry.args != server.args { return true }
-        return entry.env != appEnv(server)
+        return entry.env != EnvVar.values(server.env)
     }
 
     func serversNeedingSync(_ servers: [Server]) -> [Server] {
@@ -245,18 +246,6 @@ final class CopilotCodeManager {
     private func resolvedCommand(_ server: Server) -> String? {
         guard let command = server.command, !command.isEmpty else { return nil }
         return ProcessManager.resolve(command) ?? command
-    }
-
-    private func appEnv(_ server: Server) -> [String: String] {
-        var env: [String: String] = [:]
-        for variable in server.env where !variable.key.isEmpty { env[variable.key] = variable.value }
-        return env
-    }
-
-    private func appHeaders(_ server: Server) -> [String: String] {
-        var headers: [String: String] = [:]
-        for header in server.headers where !header.key.isEmpty { headers[header.key] = header.value }
-        return headers
     }
 
     private func unsupportedMessage(_ server: Server) -> String {

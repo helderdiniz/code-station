@@ -189,15 +189,15 @@ struct SavedRequest: Identifiable, Codable, Equatable {
     // The URL with the params folded in. {{env}} is left alone, so the result is still
     // a template for the environment to resolve on send.
     var expandedURL: String {
-        var expanded = url
-        // Longer names go first, so :id cannot eat the front of :idType. A param with
-        // no value is skipped, which leaves the placeholder visible instead of a hole.
-        let paths = pathParams
-            .filter { $0.enabled && !$0.key.isEmpty && !$0.value.isEmpty }
-            .sorted { $0.key.count > $1.key.count }
-        for param in paths {
-            expanded = expanded.replacingOccurrences(of: ":" + param.key, with: param.value)
-        }
+        let range = pathRange
+        let path = url[range].split(separator: "/", omittingEmptySubsequences: false).map { segment in
+            guard segment.first == ":",
+                  let param = pathParams.first(where: {
+                      $0.enabled && !$0.key.isEmpty && !$0.value.isEmpty && $0.key == segment.dropFirst()
+                  }) else { return String(segment) }
+            return param.value
+        }.joined(separator: "/")
+        let expanded = String(url[..<range.lowerBound]) + path + url[range.upperBound...]
         let query = queryParams
             .filter { $0.enabled && !$0.key.isEmpty }
             .map { "\(Self.queryEncoded($0.key))=\(Self.queryEncoded($0.value))" }
@@ -210,6 +210,23 @@ struct SavedRequest: Identifiable, Codable, Equatable {
             ? (address.hasSuffix("?") || address.hasSuffix("&") ? "" : "&")
             : "?"
         return address + separator + query + fragment
+    }
+
+    var pathParameterNames: Set<String> {
+        Set(url[pathRange].split(separator: "/").compactMap { segment in
+            segment.first == ":" ? String(segment.dropFirst()) : nil
+        })
+    }
+
+    // Keep the authority, query and fragment out of path substitution. Slicing the
+    // original text also preserves unresolved {{properties}} and existing escapes.
+    private var pathRange: Range<String.Index> {
+        let end = url.firstIndex(where: { $0 == "?" || $0 == "#" }) ?? url.endIndex
+        let address = url[..<end]
+        let authorityEnd = address.range(of: "://")?.upperBound
+            ?? (address.hasPrefix("//") ? address.index(address.startIndex, offsetBy: 2) : nil)
+        let start = authorityEnd.map { address[$0...].firstIndex(of: "/") ?? end } ?? url.startIndex
+        return start..<end
     }
 
     // A space or & in a value must not change the URL's shape. Braces stay as typed so

@@ -4,6 +4,26 @@ import Testing
 
 @MainActor
 struct AgentConfiguredServerTests {
+    @Test func remoteSyncDetectsChangedTokensURLsAndTransports() {
+        let url = "https://mcp.example/mcp"
+        let headers = ["Authorization": "Bearer current"]
+        let server = Server(name: "remote", command: nil, args: [], url: url,
+                            type: "http", env: [],
+                            headers: [EnvVar(key: "Authorization", value: "Bearer current")], disabled: false)
+        #expect(server.matchesRemote(command: nil, url: url, type: "http", headers: headers))
+        #expect(server.matchesRemote(command: nil, url: url, type: nil, headers: headers))
+        #expect(!server.matchesRemote(command: nil, url: "https://mcp.example/other", type: "http", headers: headers))
+        #expect(!server.matchesRemote(command: nil, url: url, type: "sse", headers: headers))
+        #expect(!server.matchesRemote(command: nil, url: url, type: "http", headers: ["Authorization": "Bearer old"]))
+        #expect(!server.matchesRemote(command: "local-mcp", url: url, type: "http", headers: headers))
+    }
+
+    @Test func environmentValuesIgnoreBlankRowsAndKeepTheLastValue() {
+        #expect(EnvVar.values([EnvVar(key: "", value: "unfinished"),
+                               EnvVar(key: "TOKEN", value: "old"),
+                               EnvVar(key: "TOKEN", value: "current")]) == ["TOKEN": "current"])
+    }
+
     @Test func keepsOnlyServersOutsideCodeStationAndCombinesTheirSources() {
         let managed = Server(name: "managed", command: "managed-mcp", args: [],
                              url: nil, type: nil, env: [], headers: [], disabled: false)

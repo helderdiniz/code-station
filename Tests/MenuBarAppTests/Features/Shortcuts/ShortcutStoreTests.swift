@@ -177,6 +177,23 @@ struct ShortcutStoreTests {
         #expect(store.failureCount(of: store.macShortcuts) == 1)
     }
 
+    @Test func preservesUnicodeSplitAcrossReadsOnBothOutputStreams() async throws {
+        let store = emptyStore(url)
+        let id = try #require(store.add(name: "Unicode", text: """
+            printf '\\303'; printf '\\342' >&2
+            sleep 0.1
+            printf '\\251'; printf '\\202\\254' >&2
+            """))
+        let run = ShortcutRun(id, in: FileManager.default.temporaryDirectory.path)
+
+        store.start(run)
+
+        #expect(await waitUntil { !store.state(run).isActive })
+        #expect(store.log(run).contains("é"))
+        #expect(store.log(run).contains("€"))
+        #expect(!store.log(run).contains("�"))
+    }
+
     // What ^C in the output drawer and the chip's own second click both come down to.
     // Stopping has to reach the command itself, not just the state the app shows: a
     // tunnel left holding its port would be worse than no stop at all.

@@ -288,7 +288,7 @@ struct ReviewPlacement: Equatable {
         }
         let starts = lines.keys.filter(holds).sorted { abs($0 - anchor.line) < abs($1 - anchor.line) }
         guard let best = starts.first else { return nil }
-        let distinctive = expected.joined().filter { $0.isLetter || $0.isNumber }.count >= 4
+        let distinctive = expected.joined().count { $0.isLetter || $0.isNumber } >= 4
         guard starts.count == 1 || distinctive,
               let end = last(from: best, count: expected.count) else { return nil }
         let moved = DiffAnchor(side: anchor.side, line: best, lastLine: anchor.lastLine.map { _ in best + span })

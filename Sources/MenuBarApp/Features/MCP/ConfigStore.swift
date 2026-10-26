@@ -162,10 +162,8 @@ final class ConfigStore {
         let allowed = Set(names)
         var map: [String: ConfigFile.Entry] = [:]
         for server in servers where allowed.contains(server.name) {
-            var env: [String: String] = [:]
-            for v in server.env where !v.key.isEmpty { env[v.key] = v.value }
-            var headers: [String: String] = [:]
-            for h in server.headers where !h.key.isEmpty { headers[h.key] = h.value }
+            let env = EnvVar.values(server.env)
+            let headers = EnvVar.values(server.headers)
             map[server.name] = ConfigFile.Entry(
                 command: server.command,
                 args: server.command != nil ? server.args : nil,

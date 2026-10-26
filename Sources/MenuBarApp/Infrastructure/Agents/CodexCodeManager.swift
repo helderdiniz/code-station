@@ -87,7 +87,7 @@ final class CodexCodeManager {
         if server.isRemote { return entry.url != server.url }
         if entry.command != resolvedCommand(server) { return true }
         if entry.args != server.args { return true }
-        return entry.env != appEnv(server)
+        return entry.env != EnvVar.values(server.env)
     }
 
     func serversNeedingSync(_ servers: [Server]) -> [Server] {
@@ -354,12 +354,6 @@ final class CodexCodeManager {
     private func resolvedCommand(_ server: Server) -> String? {
         guard let command = server.command, !command.isEmpty else { return nil }
         return ProcessManager.resolve(command) ?? command
-    }
-
-    private func appEnv(_ server: Server) -> [String: String] {
-        var env: [String: String] = [:]
-        for variable in server.env where !variable.key.isEmpty { env[variable.key] = variable.value }
-        return env
     }
 
     private func unsupportedMessage(_ server: Server) -> String {

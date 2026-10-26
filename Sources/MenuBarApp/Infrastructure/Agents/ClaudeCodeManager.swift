@@ -42,15 +42,16 @@ final class ClaudeCodeManager {
     func isRegistered(_ name: String) -> Bool { entries[name] != nil }
     func isBusy(_ name: String) -> Bool { registrar.isBusy(name) }
 
-    // True when the server exists in Claude Code but its command, args or env differ
-    // from what the app holds (for example after the token was changed here). Remote
-    // servers are not diffed - registered counts as in sync.
+    // A changed token or endpoint needs to replace the agent's saved registration.
     func isOutOfSync(_ server: Server) -> Bool {
         guard let entry = entries[server.name] else { return false }
-        if server.isRemote { return false }
+        if server.isRemote {
+            return !server.matchesRemote(command: entry.command, url: entry.url,
+                                         type: entry.type, headers: entry.headers)
+        }
         if entry.command != resolvedCommand(server) { return true }
         if entry.args != server.args { return true }
-        return entry.env != appEnv(server)
+        return entry.env != EnvVar.values(server.env)
     }
 
     func serversNeedingSync(_ servers: [Server]) -> [Server] {
@@ -270,12 +271,6 @@ final class ClaudeCodeManager {
 
     private func notFoundMessage(_ server: Server) -> String {
         "\"\(server.name)\" needs a command or url to register."
-    }
-
-    private func appEnv(_ server: Server) -> [String: String] {
-        var env: [String: String] = [:]
-        for variable in server.env where !variable.key.isEmpty { env[variable.key] = variable.value }
-        return env
     }
 
     private func runSteps(_ steps: [[String]], names: [String]) {

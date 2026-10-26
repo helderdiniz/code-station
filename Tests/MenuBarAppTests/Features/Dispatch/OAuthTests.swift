@@ -138,6 +138,36 @@ struct OAuthTests {
         }
     }
 
+    @Test func ignoresRequestsOutsideTheConfiguredCallbackPath() async throws {
+        let port: UInt16 = 8918
+        let server = LoopbackServer()
+        try await server.start(port: port, path: "/oauth/return", timeout: 10)
+        defer { server.stop() }
+        let session = URLSession(configuration: .ephemeral)
+        defer { session.invalidateAndCancel() }
+
+        for path in ["/favicon.ico", "/callback?code=unrelated"] {
+            _ = try await session.data(from: URL(string: "http://127.0.0.1:\(port)\(path)")!)
+        }
+        _ = try await session.data(from: URL(string: "http://127.0.0.1:\(port)/oauth/return?code=expected")!)
+        #expect(try await server.waitForRedirect()["code"] == "expected")
+    }
+
+    @Test func alreadyCancelledStartDoesNotWaitForTheBrowserTimeout() async {
+        let attempt = Task {
+            withUnsafeCurrentTask { $0?.cancel() }
+            try await LoopbackServer().start(port: 8919, timeout: 0.1)
+        }
+        await #expect(throws: CancellationError.self) { try await attempt.value }
+    }
+
+    @Test func stoppingResumesTheRedirectWait() async throws {
+        let server = LoopbackServer()
+        try await server.start(port: 8919, timeout: 1)
+        server.stop()
+        await #expect(throws: CancellationError.self) { try await server.waitForRedirect() }
+    }
+
     // Binding fails before a browser tab is ever opened, so a busy port is an error you
     // can act on rather than a wait that goes nowhere.
     @Test func refusesToStartOnAPortAlreadyInUse() async throws {

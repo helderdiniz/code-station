@@ -261,7 +261,7 @@ enum WorkingSetSummary {
             case .agent(let activity) where activity.actions.isEmpty:
                 count + (activity.state == .failed ? 1 : 0)
             case .agent(let activity):
-                count + activity.actions.filter { $0.state == .failed }.count
+                count + activity.actions.count { $0.state == .failed }
             case .call(let call):
                 count + (call.state == .failed ? 1 : 0)
             }

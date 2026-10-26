@@ -19,15 +19,17 @@ final class LoopbackServer: @unchecked Sendable {
     // A redirect that lands before anyone asks for it, which the timeout can also fill.
     private var arrived: Result<[String: String], Error>?
     private var timeoutItem: DispatchWorkItem?
+    private var callbackPath = "/callback"
     // Set once the server is done, so a bind retry already in the queue does not open a
     // listener nobody is waiting for any more.
     private var stopped = false
 
     // Returns once the port is listening, or throws if it cannot be.
-    func start(port: UInt16, timeout: TimeInterval = 300) async throws {
+    func start(port: UInt16, path: String = "/callback", timeout: TimeInterval = 300) async throws {
+        try Task.checkCancellation()
         try await withTaskCancellationHandler {
             _ = try await withCheckedThrowingContinuation { continuation in
-                queue.async { self.begin(port: port, timeout: timeout, ready: continuation) }
+                queue.async { self.begin(port: port, path: path, timeout: timeout, ready: continuation) }
             }
         } onCancel: {
             queue.async { self.giveUp(CancellationError()) }
@@ -52,14 +54,20 @@ final class LoopbackServer: @unchecked Sendable {
     }
 
     func stop() {
-        queue.async { self.cleanUp() }
+        queue.async { self.giveUp(CancellationError()) }
     }
 
     // MARK: - Listening
 
     private func begin(port: UInt16,
+                       path: String,
                        timeout: TimeInterval,
                        ready continuation: CheckedContinuation<UInt16, Error>) {
+        guard !stopped else {
+            continuation.resume(throwing: CancellationError())
+            return
+        }
+        callbackPath = path.isEmpty ? "/" : path
         listener.expect(continuation)
 
         guard let nwPort = NWEndpoint.Port(rawValue: port) else {
@@ -137,7 +145,7 @@ final class LoopbackServer: @unchecked Sendable {
                 return
             }
             guard let request = String(data: buffered, encoding: .utf8),
-                  let query = Self.query(from: request) else {
+                  let query = Self.query(from: request, path: self.callbackPath) else {
                 self.reply(on: connection, body: Self.page(title: "Nothing to do here",
                                                            detail: "This window can be closed."))
                 return
@@ -180,11 +188,11 @@ final class LoopbackServer: @unchecked Sendable {
     }
 
     private func finish(_ result: Result<[String: String], Error>) {
+        guard !stopped else { return }
+        arrived = result
         if let waiter {
             self.waiter = nil
             waiter.resume(with: result)
-        } else if arrived == nil {
-            arrived = result
         }
         cleanUp()
     }
@@ -200,10 +208,11 @@ final class LoopbackServer: @unchecked Sendable {
 
     // MARK: - Parsing
 
-    static func query(from request: String) -> [String: String]? {
+    static func query(from request: String, path: String = "/callback") -> [String: String]? {
         guard request.contains("\r\n\r\n"),
               let line = request.split(separator: "\r\n", maxSplits: 1).first,
-              let target = HTTPRequestLine.target(of: line) else { return nil }
+              let target = HTTPRequestLine.target(of: line),
+              HTTPRequestLine.path(in: target) == path else { return nil }
         return HTTPRequestLine.query(in: target)
     }
 

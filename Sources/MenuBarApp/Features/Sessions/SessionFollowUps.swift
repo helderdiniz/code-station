@@ -53,13 +53,11 @@ final class SessionFollowUps {
             let suggestion = await PromptSuggestion.read(
                 agent: agent, at: path, searchPath: searchPath,
                 workingDirectory: directory, prompt: prompt, model: model)
-            await MainActor.run {
-                SessionLog.note(suggestion == nil ? "no prompt suggestion returned"
-                                : "prompt suggestion received", session: sessionID)
-                guard let self, self.suggestionRequests[sessionID] == token,
-                      let suggestion, self.promptSuggestionsEnabled() else { return }
-                runner?.acceptSuggestion(suggestion, for: sessionID)
-            }
+            SessionLog.note(suggestion == nil ? "no prompt suggestion returned"
+                            : "prompt suggestion received", session: sessionID)
+            guard let self, self.suggestionRequests[sessionID] == token,
+                  let suggestion, self.promptSuggestionsEnabled() else { return }
+            runner?.acceptSuggestion(suggestion, for: sessionID)
         }
     }
 

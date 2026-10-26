@@ -74,6 +74,20 @@ struct SavedRequestParamsTests {
         #expect(request.expandedURL == "https://host/merchants/:id")
     }
 
+    @Test func replacesOnlyCompletePathSegments() {
+        let request = SavedRequest(name: "r", url: "https://host:8080/:idType/:id?next=:id#item:id",
+                                   pathParams: [HeaderField(key: "id", value: "42"),
+                                                HeaderField(key: "8080", value: "9999")])
+        #expect(request.expandedURL == "https://host:8080/:idType/42?next=:id#item:id")
+    }
+
+    @Test func doesNotExpandAPathValueAgain() {
+        let request = SavedRequest(name: "r", url: "https://host/:first/:second",
+                                   pathParams: [HeaderField(key: "first", value: ":second"),
+                                                HeaderField(key: "second", value: "42")])
+        #expect(request.expandedURL == "https://host/:second/42")
+    }
+
     @Test func oldFilesLoadWithoutParams() throws {
         let json = #"[{"name": "old", "url": "https://host"}]"#
         let requests = try JSONDecoder().decode([SavedRequest].self, from: Data(json.utf8))

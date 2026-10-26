@@ -75,6 +75,14 @@ struct EnvironmentPropertyTests {
         #expect(DispatchRunner.resolve(request, environment: environment, authorization: nil).problems.isEmpty)
     }
 
+    @Test func ignoresPathParametersOutsideThePathAndPartialNames() {
+        let request = SavedRequest(name: "unused", url: "https://example.test/:idType?next=:id#item:id",
+                                   pathParams: [HeaderField(key: "id", value: "{{missing}}")])
+        let resolved = DispatchRunner.resolve(request, environment: environment, authorization: nil)
+        #expect(resolved.problems.isEmpty)
+        #expect(resolved.url == request.url)
+    }
+
     @Test func masksRawJSONSecretsWithoutReportingAFalseValidationError() throws {
         let request = SavedRequest(name: "json", method: .post, url: "https://example.test",
                                    bodyType: .json, body: #"{"id":{{id}}}"#)

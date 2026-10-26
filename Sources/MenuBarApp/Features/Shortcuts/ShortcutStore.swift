@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import Synchronization
 
 // Mac commands run from home. Project commands and shared Mac commands run in the
 // active worktree, so they apply to the branch the reader is working on.
@@ -331,6 +332,17 @@ final class ShortcutStore {
 
     // MARK: - Persistence
 
+    nonisolated static func remappingProjects(in data: Data, using ids: [UUID: UUID]) throws -> Data {
+        guard ids.contains(where: { $0.key != $0.value }) else { return data }
+        var persisted = try PersistentFile.makeDecoder().decode(Persisted.self, from: data)
+        for index in persisted.shortcuts.indices {
+            if let projectID = persisted.shortcuts[index].projectID, let replacement = ids[projectID] {
+                persisted.shortcuts[index].projectID = replacement
+            }
+        }
+        return try PersistentFile.makeEncoder().encode(persisted)
+    }
+
     // A file that cannot be read and one that cannot be understood are told apart, since
     // the first is about permissions and the second about what is in it.
     func load(siteDefaults: SiteDefaults = .current) {
@@ -476,7 +488,13 @@ final class ShortcutStore {
         var environment = ProcessInfo.processInfo.environment
         environment["PATH"] = ProcessManager.searchPath
         let store = self
+        let outputDecoder = Mutex(UTF8StreamDecoder())
+        let errorDecoder = Mutex(UTF8StreamDecoder())
         let task = Task {
+            defer {
+                let tail = outputDecoder.withLock { $0.finish() } + errorDecoder.withLock { $0.finish() }
+                store.append(tail, to: run, token: token)
+            }
             do {
                 let result = try await CommandRunner.run(
                     executable: "/bin/zsh",
@@ -484,10 +502,12 @@ final class ShortcutStore {
                     currentDirectory: URL(fileURLWithPath: run.directory),
                     environment: environment,
                     outputChunkHandler: { data in
-                        Task { @MainActor in store.append(data, to: run, token: token) }
+                        let text = outputDecoder.withLock { $0.append(data) }
+                        Task { @MainActor in store.append(text, to: run, token: token) }
                     },
                     errorOutputChunkHandler: { data in
-                        Task { @MainActor in store.append(data, to: run, token: token) }
+                        let text = errorDecoder.withLock { $0.append(data) }
+                        Task { @MainActor in store.append(text, to: run, token: token) }
                     },
                     timeout: nil
                 )
@@ -567,9 +587,9 @@ final class ShortcutStore {
         durations[run] = Date().timeIntervalSince(since)
     }
 
-    private func append(_ data: Data, to run: ShortcutRun, token: UUID) {
-        guard runTokens[run] == token else { return }
-        var current = (logs[run] ?? "") + String(decoding: data, as: UTF8.self)
+    private func append(_ text: String, to run: ShortcutRun, token: UUID) {
+        guard runTokens[run] == token, !text.isEmpty else { return }
+        var current = (logs[run] ?? "") + text
         if current.count > 20_000 { current = String(current.suffix(20_000)) }
         logs[run] = current
     }

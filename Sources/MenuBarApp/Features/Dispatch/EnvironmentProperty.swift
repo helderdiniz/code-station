@@ -44,8 +44,7 @@ struct RequestPropertyResolver {
                 value = String(template[range])
             }
             if encoded {
-                value = value.addingPercentEncoding(withAllowedCharacters:
-                    CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-._~"))) ?? value
+                value = FormURLEncoding.component(value)
             }
             if json {
                 // Only a placeholder inside a JSON string needs string escaping.
@@ -73,12 +72,12 @@ struct RequestPropertyResolver {
     mutating func resolve(_ source: SavedRequest) -> SavedRequest {
         var request = source
         request.url = text(source.url, field: "URL")
+        let pathNames = request.pathParameterNames
         for index in request.pathParams.indices where request.pathParams[index].enabled
             && !request.pathParams[index].key.isEmpty
-            && request.url.contains(":" + request.pathParams[index].key) {
+            && pathNames.contains(request.pathParams[index].key) {
             let value = text(source.pathParams[index].value, field: "Path \(source.pathParams[index].key)")
-            request.pathParams[index].value = value.addingPercentEncoding(withAllowedCharacters:
-                CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-._~"))) ?? value
+            request.pathParams[index].value = FormURLEncoding.component(value)
         }
         for index in request.queryParams.indices where request.queryParams[index].enabled && !request.queryParams[index].key.isEmpty {
             request.queryParams[index].value = text(source.queryParams[index].value, field: "Query \(source.queryParams[index].key)")

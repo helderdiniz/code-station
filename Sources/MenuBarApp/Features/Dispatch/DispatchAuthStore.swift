@@ -451,7 +451,7 @@ final class DispatchAuthStore {
         let server = LoopbackServer()
         // The port has to be listening before the browser is sent anywhere, or the
         // redirect can arrive at nothing.
-        try await server.start(port: port)
+        try await server.start(port: port, path: URLComponents(string: config.callbackURL)?.path ?? "/")
         defer { server.stop() }
 
         NSWorkspace.shared.open(authorizeURL)

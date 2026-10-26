@@ -45,6 +45,12 @@ struct EnvVar: Identifiable, Equatable {
         return ["TOKEN", "SECRET", "PASSWORD", "KEY", "AUTH", "COOKIE", "BEARER"]
             .contains { k.contains($0) }
     }
+
+    static func values(_ variables: [EnvVar]) -> [String: String] {
+        variables.reduce(into: [:]) { values, variable in
+            if !variable.key.isEmpty { values[variable.key] = variable.value }
+        }
+    }
 }
 
 struct Server: Identifiable, Equatable {
@@ -68,6 +74,12 @@ struct Server: Identifiable, Equatable {
         if command != nil { return "stdio" }
         if let type, !type.isEmpty { return type }
         return url != nil ? "http" : "stdio"
+    }
+
+    func matchesRemote(command: String?, url: String?, type: String?, headers: [String: String]) -> Bool {
+        isRemote && command == nil && self.url == url
+            && transport == (type?.nilIfBlank ?? "http")
+            && EnvVar.values(self.headers) == headers
     }
 
     var isGrafana: Bool {

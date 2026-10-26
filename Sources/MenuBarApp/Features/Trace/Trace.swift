@@ -68,7 +68,7 @@ struct Trace: Equatable, Sendable {
     var spans: [Span] { rows.map(\.span) }
     var root: Span? { rows.first?.span }
     var durationNanos: Int64 { endNanos - startNanos }
-    var errorCount: Int { rows.filter(\.span.isError).count }
+    var errorCount: Int { rows.count(where: \.span.isError) }
 
     init(traceID: String, spans: [Span]) {
         var seen = Set<String>()
@@ -359,8 +359,7 @@ extension Trace {
     }
 
     func spanCount(in window: ClosedRange<Int64>) -> Int {
-        rows.filter { $0.span.endNanos >= window.lowerBound && $0.span.startNanos <= window.upperBound }
-            .count
+        rows.count { $0.span.endNanos >= window.lowerBound && $0.span.startNanos <= window.upperBound }
     }
 
     // How much of a span's own time something below it was running.

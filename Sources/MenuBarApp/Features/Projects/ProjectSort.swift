@@ -128,27 +128,16 @@ enum ProjectSort: String, CaseIterable, Identifiable {
 
     func apply(to items: [SidebarItem], sessions: [ChatSession]) -> [SidebarItem] {
         let pinned = Self.pinnedIDs(of: items, sessions: sessions)
-
-        switch self {
-        case .name:
-            return items.sorted { a, b in
-                let aIsPinned = pinned.contains(a.id)
-                if aIsPinned != pinned.contains(b.id) { return aIsPinned }
-                return byName(a, b)
-            }
-        case .lastUsed:
-            let latest = Self.sortDates(of: items, sessions: sessions)
-            return items.sorted { a, b in
-                let aIsPinned = pinned.contains(a.id)
-                if aIsPinned != pinned.contains(b.id) { return aIsPinned }
-                // An item with no sessions has never been used, so it falls below the ones
-                // that have. Equal times fall back to the name, so the list never wobbles.
-                switch (latest[a.id], latest[b.id]) {
-                case let (left?, right?): return left == right ? byName(a, b) : left > right
-                case (_?, nil): return true
-                case (nil, _?): return false
-                case (nil, nil): return byName(a, b)
-                }
+        let latest = self == .lastUsed ? Self.sortDates(of: items, sessions: sessions) : [:]
+        return items.sorted { a, b in
+            let aIsPinned = pinned.contains(a.id)
+            if aIsPinned != pinned.contains(b.id) { return aIsPinned }
+            // Unused items follow used ones; equal dates fall back to the name.
+            switch (latest[a.id], latest[b.id]) {
+            case let (left?, right?): return left == right ? byName(a, b) : left > right
+            case (_?, nil): return true
+            case (nil, _?): return false
+            case (nil, nil): return byName(a, b)
             }
         }
     }

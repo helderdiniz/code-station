@@ -118,6 +118,68 @@ struct AppBackupTests {
         #expect(try Data(contentsOf: newMac.path("agent-avatar.png")) == Data("new".utf8))
     }
 
+    @Test func workspaceReferencesFollowProjectsWhoseIDsCollide() throws {
+        let existing = Project(name: "local", path: "/Users/me/local")
+        let session = ChatSession(projectID: existing.id)
+        let url = newMac.path("projects.json")
+        try writeIndex(.init(projects: [existing], sessions: [session]), to: url)
+        let savedSessions = try readIndex(url).sessions
+
+        var imported = Project(name: "imported", path: "/Users/me/imported")
+        imported.id = existing.id
+        let workspace = ProjectWorkspace(name: "Imported", projectIDs: [imported.id],
+                                         leadProjectID: imported.id)
+        let incoming = try PersistentFile.makeEncoder().encode(
+            ProjectPersistence.Index(projects: [imported], sessions: [], workspaces: [workspace]))
+
+        try AppBackup.mergeProjects(incoming, into: url)
+
+        let index = try readIndex(url)
+        let added = try #require(index.projects.first { $0.path == imported.path })
+        let merged = try #require(index.workspaces?.first)
+        #expect(added.id != existing.id)
+        #expect(merged.leadProjectID == added.id)
+        #expect(merged.projectIDs == [added.id])
+        #expect(merged.worktreeProjectIDs == [added.id])
+        #expect(index.sessions == savedSessions)
+    }
+
+    @Test func duplicateWorkspacesAreImportedOnce() throws {
+        let project = Project(name: "api", path: "/Users/me/api")
+        let workspace = ProjectWorkspace(name: "Stack", projectIDs: [project.id], leadProjectID: project.id)
+        let incoming = try PersistentFile.makeEncoder().encode(
+            ProjectPersistence.Index(projects: [project], sessions: [], workspaces: [workspace, workspace]))
+        let url = newMac.path("projects.json")
+
+        try AppBackup.mergeProjects(incoming, into: url)
+
+        #expect(try readIndex(url).workspaces == [workspace])
+    }
+
+    @MainActor @Test func importedShortcutsFollowAnExistingProjectAtTheSamePath() throws {
+        defer { UserDefaults().removePersistentDomain(forName: newDomain) }
+        let existing = Project(name: "api", path: "/Users/me/api")
+        let imported = Project(name: "api", path: existing.path)
+        let url = newMac.path("projects.json")
+        try writeIndex(.init(projects: [existing], sessions: []), to: url)
+        let projects = try PersistentFile.makeEncoder().encode(
+            ProjectPersistence.Index(projects: [imported], sessions: []))
+        let shortcuts = ShortcutStore(storageURL: oldMac.path("shortcuts.json"))
+        let owned = try #require(shortcuts.add(name: "Build", text: "make", projectID: imported.id))
+        let shared = try #require(shortcuts.add(name: "Status", text: "pwd", availableInAllProjects: true))
+        let backup = AppBackup(createdAt: .now, files: [
+            "projects.json": projects,
+            "shortcuts.json": try Data(contentsOf: shortcuts.storageURL),
+        ])
+
+        try apply(backup)
+
+        let restored = ShortcutStore(storageURL: newMac.path("shortcuts.json"))
+        #expect(restored.loadError == nil)
+        #expect(restored.shortcuts.first { $0.id == owned }?.projectID == existing.id)
+        #expect(restored.shortcuts.first { $0.id == shared }?.availableInAllProjects == true)
+    }
+
     @Test func onlyTheChosenPartsAreKept() {
         let backup = AppBackup(createdAt: .now,
                                preferences: Data(),

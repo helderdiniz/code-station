@@ -201,6 +201,10 @@ struct AppBackup: Codable, Equatable, Sendable {
     }
 
     func apply(support: URL, projectsURL: URL, defaults: UserDefaults) throws {
+        let projectIDs = try files[Self.projectsFile].map {
+            try Self.mergeProjects($0, into: projectsURL)
+        } ?? [:]
+
         if let preferences,
            let values = try PropertyListSerialization.propertyList(from: preferences, format: nil)
             as? [String: Any] {
@@ -220,19 +224,19 @@ struct AppBackup: Codable, Equatable, Sendable {
             guard name == URL(fileURLWithPath: name).lastPathComponent, !name.hasPrefix(".") else {
                 continue
             }
-            try PersistentFile.write(data, to: support.appendingPathComponent(name))
+            let restored = name == "shortcuts.json"
+                ? try ShortcutStore.remappingProjects(in: data, using: projectIDs) : data
+            try PersistentFile.write(restored, to: support.appendingPathComponent(name))
         }
         if files[SiteDefaults.fileName] != nil {
             Preferences.setSiteDefaultsURL(nil, in: defaults)
-        }
-        if let projects = files[Self.projectsFile] {
-            try Self.mergeProjects(projects, into: projectsURL)
         }
     }
 
     // A folder already on the list keeps its own entry, and a workspace from the backup
     // is pointed at that entry instead.
-    static func mergeProjects(_ data: Data, into url: URL) throws {
+    @discardableResult
+    static func mergeProjects(_ data: Data, into url: URL) throws -> [UUID: UUID] {
         let decoder = PersistentFile.makeDecoder()
         let incoming = try decoder.decode(ProjectPersistence.Index.self, from: data)
         var index = try PersistentFile.readIfPresent(url).map {
@@ -246,22 +250,22 @@ struct AppBackup: Codable, Equatable, Sendable {
                                    uniquingKeysWith: { first, _ in first })
         var knownIDs = Set(index.projects.map(\.id))
         var idMap: [UUID: UUID] = [:]
-        for project in incoming.projects {
-            let path = standardized(project.path)
+        for incomingProject in incoming.projects {
+            let path = standardized(incomingProject.path)
             if let existing = idForPath[path] {
-                idMap[project.id] = existing
+                idMap[incomingProject.id] = existing
                 continue
             }
-            var project = project
+            var project = incomingProject
             if knownIDs.contains(project.id) { project.id = UUID() }
-            idMap[project.id] = project.id
+            idMap[incomingProject.id] = project.id
             idForPath[path] = project.id
             knownIDs.insert(project.id)
             index.projects.append(project)
         }
 
         var workspaces = index.workspaces ?? []
-        let knownWorkspaces = Set(workspaces.map(\.id))
+        var knownWorkspaces = Set(workspaces.map(\.id))
         for workspace in incoming.workspaces ?? [] where !knownWorkspaces.contains(workspace.id) {
             guard let lead = idMap[workspace.leadProjectID] else { continue }
             var workspace = workspace
@@ -269,9 +273,11 @@ struct AppBackup: Codable, Equatable, Sendable {
             workspace.projectIDs = workspace.projectIDs.compactMap { idMap[$0] }
             workspace.worktreeProjectIDs = workspace.worktreeProjectIDs.compactMap { idMap[$0] }
             workspaces.append(workspace)
+            knownWorkspaces.insert(workspace.id)
         }
         index.workspaces = workspaces
         try PersistentFile.write(try PersistentFile.makeEncoder().encode(index), to: url)
+        return idMap
     }
 
     // MARK: - Summary
@@ -284,7 +290,7 @@ struct AppBackup: Codable, Equatable, Sendable {
             }
             return counted(values?.count ?? 0, "setting")
         case .bots:
-            return counted(files.keys.filter { Part.bots.owns($0) && $0.hasSuffix(".png") }.count,
+            return counted(files.keys.count { Part.bots.owns($0) && $0.hasSuffix(".png") },
                            "picture")
         case .configuration:
             return files[SiteDefaults.fileName]
