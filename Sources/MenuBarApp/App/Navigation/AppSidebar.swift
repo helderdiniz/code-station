@@ -2160,11 +2160,16 @@ struct SessionCard: View {
                         .frame(minHeight: snoozed == nil ? 0 : 74, alignment: .top)
                 } else {
                     Button(action: onOpen) {
-                        HStack(spacing: 8) {
-                            if let checked { SidebarCheckbox(isOn: checked) }
-                            cardContent
-                        }
-                        .frame(minHeight: snoozed == nil ? 0 : 74, alignment: .top)
+                        // The box floats over the card rather than standing beside it, so
+                        // a state band still runs the full width of the card behind it.
+                        cardContent
+                            .overlay(alignment: .leading) {
+                                if let checked {
+                                    SidebarCheckbox(isOn: checked)
+                                        .padding(.leading, Self.boxInset)
+                                }
+                            }
+                            .frame(minHeight: snoozed == nil ? 0 : 74, alignment: .top)
                         .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
@@ -2250,9 +2255,12 @@ struct SessionCard: View {
     // A session that is doing something, or wants the user, wears its state line as a band
     // across the top of the card. The title below stays on the plain card, so it reads as
     // easily as an idle one.
+    private static let boxInset: CGFloat = 10
+
     private var cardContent: some View {
         let band = band
         let edge: CGFloat = selected ? 9 : 8
+        let leading: CGFloat = checked == nil ? 10 : Self.boxInset + 16 + 10
         return VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 6) {
                 StateLight(tone: tone, colour: failed ? Theme.deletion : nil)
@@ -2285,7 +2293,8 @@ struct SessionCard: View {
                     .font(.mono(9.5))
                     .foregroundStyle(.tertiary)
             }
-            .padding(.horizontal, 10)
+            .padding(.leading, leading)
+            .padding(.trailing, 10)
             .padding(.top, band == nil ? edge : 6)
             .padding(.bottom, band == nil ? 0 : 5)
             .background {
@@ -2321,7 +2330,7 @@ struct SessionCard: View {
 
                 ActivityLine(activity: activity())
             }
-            .padding(.leading, 10)
+            .padding(.leading, leading)
             .padding(.trailing, snoozed == nil ? 10 : 60)
             .padding(.top, band == nil ? 5 : 7)
             .padding(.bottom, edge)
