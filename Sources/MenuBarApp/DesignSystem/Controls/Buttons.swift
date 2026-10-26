@@ -76,6 +76,7 @@ struct ActionButton: View {
             Text(title)
                 .font(.system(size: size, weight: .semibold))
                 .lineLimit(1)
+                .contentTransition(.interpolate)
                 // A button's label is the button: it holds its width and lets whatever
                 // shares the row give way, rather than truncating its own words.
                 .fixedSize()

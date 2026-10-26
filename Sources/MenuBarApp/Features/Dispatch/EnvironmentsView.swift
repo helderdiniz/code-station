@@ -69,6 +69,7 @@ struct EnvironmentsView: View {
             SheetFooter(primary: SheetAction(title: "Save changes", enabled: hasChanges && validation == nil,
                                              shortcut: KeyboardShortcut("s", modifiers: .command),
                                              action: save),
+                        dismissTitle: hasChanges ? "Cancel" : "Close",
                         dismiss: { dismiss() }) {
                 VStack(alignment: .leading, spacing: 5) {
                     if let validation { Text(validation).foregroundStyle(Theme.deletion) }
@@ -83,6 +84,7 @@ struct EnvironmentsView: View {
                         .foregroundStyle(.secondary)
                 }.font(.system(size: 11))
             }
+            .motion(Motion.control, value: hasChanges)
         }
         .frame(width: sheetSize.width, height: sheetSize.height)
         .background(Theme.background)
