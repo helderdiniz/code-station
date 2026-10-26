@@ -288,6 +288,40 @@ struct TroubleshootTests {
         ])
     }
 
+    // A server added to Claude Code by hand has no environment, so a diagnosis keeps it
+    // whole, while one the app manages stays behind the environment filter.
+    @Test func filteredMCPConfigurationKeepsServersAddedToClaudeByHand() throws {
+        let servers = [server("grafana-platform-dev"), server("grafana-platform-prd")]
+        let managed = try #require(ConfigStore.mcpConfigurationData(
+            from: servers, allowing: ["grafana-platform-dev"]))
+        let claudeConfig = Data("""
+        {"mcpServers": {
+          "snowflake": {"type": "http", "url": "https://example.test/mcp",
+                        "oauth": {"clientId": "abc"}},
+          "grafana-platform-prd": {"command": "grafana"}
+        }}
+        """.utf8)
+
+        let data = try #require(ClaudeCodeManager.addingOwnServers(
+            to: managed, from: claudeConfig, managedNames: Set(servers.map(\.name))))
+        let object = try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let result = try #require(object["mcpServers"] as? [String: [String: Any]])
+
+        #expect(Set(result.keys) == ["grafana-platform-dev", "snowflake"])
+        #expect((result["snowflake"]?["oauth"] as? [String: String]) == ["clientId": "abc"])
+    }
+
+    @Test func filteredMCPConfigurationSurvivesAMissingClaudeConfig() throws {
+        let managed = try #require(ConfigStore.mcpConfigurationData(
+            from: [server("grafana-platform-dev")], allowing: ["grafana-platform-dev"]))
+
+        let data = try #require(ClaudeCodeManager.addingOwnServers(
+            to: managed, from: nil, managedNames: ["grafana-platform-dev"]))
+        let configuration = try JSONDecoder().decode(ConfigFile.self, from: data)
+
+        #expect(Set(configuration.mcpServers.keys) == ["grafana-platform-dev"])
+    }
+
     @Test func codexDisablesServersOutsideTheSelectedEnvironment() {
         let arguments = AgentLaunchConfiguration(
             agent: .codex,

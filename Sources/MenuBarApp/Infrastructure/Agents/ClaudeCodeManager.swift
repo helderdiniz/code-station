@@ -82,6 +82,25 @@ final class ClaudeCodeManager {
         return result
     }
 
+    // A filtered configuration only hides the servers the app manages, since only those
+    // carry an environment. Servers added to Claude Code by hand pass through as Claude
+    // Code stores them, so fields the app does not model, such as OAuth settings, are kept.
+    nonisolated static func addingOwnServers(to filtered: Data, from claudeConfig: Data?,
+                                             managedNames: Set<String>) -> Data? {
+        guard var file = try? JSONSerialization.jsonObject(with: filtered) as? [String: Any]
+        else { return nil }
+        var servers = file["mcpServers"] as? [String: Any] ?? [:]
+        let own = claudeConfig
+            .flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+            .flatMap { $0["mcpServers"] as? [String: Any] } ?? [:]
+        for (name, entry) in own where !managedNames.contains(name) {
+            servers[name] = entry
+        }
+        file["mcpServers"] = servers
+        return try? JSONSerialization.data(withJSONObject: file,
+                                           options: [.prettyPrinted, .sortedKeys])
+    }
+
     // MARK: - Servers Claude Code owns
 
     // What Claude Code last said about a server it holds, whoever registered it.

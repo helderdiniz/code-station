@@ -1776,10 +1776,15 @@ final class SessionRunner {
     private func temporaryMCPConfig(for session: ChatSession, agent: AgentKind) throws -> URL? {
         guard agent == .claudeCode,
               let allowedNames = session.settings?.allowedMCPServerNames else { return nil }
+        let claudeConfig = try? Data(contentsOf: FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".claude.json"))
         guard let configs,
-              let data = ConfigStore.mcpConfigurationData(
+              let managed = ConfigStore.mcpConfigurationData(
                 from: configs.servers, allowing: allowedNames,
-                taggingEnvironments: false) else {
+                taggingEnvironments: false),
+              let data = ClaudeCodeManager.addingOwnServers(
+                to: managed, from: claudeConfig,
+                managedNames: Set(configs.servers.map(\.name))) else {
             throw Failure("Could not prepare the filtered MCP server configuration.")
         }
 

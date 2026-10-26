@@ -481,14 +481,21 @@ struct TroubleshootTabView: View {
                !enableMCPServers || !managedServers.isEmpty {
                 do {
                     disabledServers = try await serversToDisable(
-                        for: session.agent, in: directory, keeping: selectedServers,
-                        mcpEnabled: enableMCPServers)
+                        for: session.agent, in: directory, managed: managedServers,
+                        keeping: selectedServers, mcpEnabled: enableMCPServers)
                 } catch {
                     dialogs.show(.notice("Could not filter MCP servers",
                                          message: error.localizedDescription))
                     return
                 }
             }
+
+            // Claude is told about the servers added to it by hand as well, since they
+            // pass through the filtered configuration and may also be deferred.
+            let managedNames = Set(managedServers.map(\.name))
+            let ownServerNames = session.agent == .claudeCode && !managedServers.isEmpty
+                ? claude.entries.keys.filter { !managedNames.contains($0) }
+                : []
 
             var settings = store.session(sessionID)?.settings ?? SessionSettings()
             settings.mcpServersEnabled = enableMCPServers
@@ -508,7 +515,7 @@ struct TroubleshootTabView: View {
                 projects: projects.map(\.name),
                 skills: chosenSkillNames,
                 mcpServersEnabled: enableMCPServers,
-                mcpServerNames: enableMCPServers ? selectedServers.map(\.name) : [],
+                mcpServerNames: enableMCPServers ? selectedServers.map(\.name) + ownServerNames : [],
                 agent: session.agent)
             runner.send(request.userInput,
                         attachments: sent.attachments,
@@ -524,17 +531,19 @@ struct TroubleshootTabView: View {
     }
 
     // The servers the agent has switched on that the diagnosis must not see: all of them
-    // while MCP is off, otherwise the ones outside the chosen environment. Claude Code
+    // while MCP is off, otherwise the managed ones outside the chosen environment. A
+    // server added to the agent by hand has no environment, so it stays on. Claude Code
     // is handed a filtered configuration instead, so it never comes through here.
     private func serversToDisable(for agent: AgentKind, in directory: String,
-                                  keeping selected: [Server],
+                                  managed: [Server], keeping selected: [Server],
                                   mcpEnabled: Bool) async throws -> [DisabledMCPServer] {
         let enabled = agent == .copilot
             ? try await copilot.enabledServers(in: directory)
             : try await codex.enabledServers(in: directory)
         guard mcpEnabled else { return enabled }
+        let managedNames = Set(managed.map(\.name))
         let selectedNames = Set(selected.map(\.name))
-        return enabled.filter { !selectedNames.contains($0.name) }
+        return enabled.filter { managedNames.contains($0.name) && !selectedNames.contains($0.name) }
     }
 }
 
