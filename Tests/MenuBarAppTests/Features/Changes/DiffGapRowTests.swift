@@ -74,6 +74,25 @@ struct DiffGapRowTests {
         #expect(pane.hit(on: header) == nil)
     }
 
+    @Test func theLinesAGapOpensAreTheOnesBetweenWhatBothTextsShare() {
+        let before = ["@@", " a", " ↑ 20 lines ↓", " z"]
+        // Read down from the code above: the new lines land above the shrunk row.
+        #expect(DiffText.arrivedLines(old: before, new: ["@@", " a", " b", " c", " ↑ 18 lines ↓", " z"]) == 2..<5)
+        // Read back from the code below: they land under it.
+        #expect(DiffText.arrivedLines(old: before, new: ["@@", " a", " ↑ 18 lines ↓", " x", " y", " z"]) == 2..<5)
+        // Opened whole, the row is gone and only its lines are left.
+        #expect(DiffText.arrivedLines(old: before, new: ["@@", " a", " b", " z"]) == 2..<3)
+        #expect(DiffText.arrivedLines(old: before, new: before).isEmpty)
+    }
+
+    @Test func aRepeatedLineNextToTheGapIsNotCountedTwice() {
+        // The last new line matches the line under the row, so the shared bottom could
+        // reach up into the new lines. It must not reach past the shared top.
+        let before = [" a", " ↓ the rest of the file"]
+        let after = [" a", " a", " a"]
+        #expect(DiffText.arrivedLines(old: before, new: after) == 1..<3)
+    }
+
     private func actions(_ text: NSAttributedString)
     -> [(range: NSRange, direction: DiffExpandDirection)] {
         var found: [(NSRange, DiffExpandDirection)] = []

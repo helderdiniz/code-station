@@ -107,6 +107,7 @@ struct DiffTextView: NSViewRepresentable {
         context.coordinator.shown = text
         let heightBefore = textView.frame.height
         let origin = scrollView.contentView.bounds.origin
+        let before = textView.awaitsLines ? textView.string : nil
         textView.textStorage?.setAttributedString(text)
         textView.sizeToFit()
         textView.layoutThreads()
@@ -123,6 +124,7 @@ struct DiffTextView: NSViewRepresentable {
             scrollView.contentView.scroll(to: NSPoint(x: origin.x, y: max(0, origin.y + grew)))
         }
         scrollView.reflectScrolledClipView(scrollView.contentView)
+        textView.textChanged(from: before)
     }
 
     func sizeThatFits(_ proposal: ProposedViewSize, nsView scrollView: NSScrollView,
@@ -164,6 +166,10 @@ private final class DiffDocumentView: NSTextView {
     // The gap row under the pointer, which is drawn a shade stronger so it reads as
     // something to press.
     private var hovered: String?
+    // A gap row was pressed and its lines are still being read. The text that lands next
+    // is that row opening, so the lines it adds are picked out as they arrive.
+    private(set) var awaitsLines = false
+    private let marks = DiffMarksView()
     // The line number under the pointer, in a diff that takes comments.
     private var hoveredRow: DiffRowHit?
     private var hoverTracking: NSTrackingArea?
@@ -174,10 +180,16 @@ private final class DiffDocumentView: NSTextView {
     override func setFrameSize(_ newSize: NSSize) {
         let clipWidth = enclosingScrollView?.contentSize.width ?? 0
         super.setFrameSize(NSSize(width: max(newSize.width, clipWidth), height: newSize.height))
+        marks.frame = bounds
     }
 
     override func viewDidMoveToSuperview() {
         super.viewDidMoveToSuperview()
+        if marks.superview == nil {
+            // Below the comment cards, which sit over their own rows.
+            addSubview(marks, positioned: .below, relativeTo: nil)
+            marks.frame = bounds
+        }
         guard let clip = enclosingScrollView?.contentView else { return }
         clip.postsFrameChangedNotifications = true
         NotificationCenter.default.removeObserver(self, name: NSView.frameDidChangeNotification,
@@ -343,6 +355,9 @@ private final class DiffDocumentView: NSTextView {
         let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
         let plain = flags.isEmpty
         if plain, let onExpand, let target = target(at: event), let direction = target.direction {
+            // Reading the lines takes a moment, so the row answers the press straight away.
+            awaitsLines = true
+            withRowRect(of: target.key) { marks.press($0) }
             onExpand(target.key, direction)
             return
         }
@@ -389,28 +404,102 @@ private final class DiffDocumentView: NSTextView {
         super.mouseMoved(with: event)
         if overThread(event) {
             NSCursor.arrow.set()
-            if hoveredRow != nil || hovered != nil {
-                hoveredRow = nil
-                hovered = nil
-                needsDisplay = true
-            }
+            setHover(gap: nil, row: nil)
             return
         }
         let target = target(at: event)
         let row = row(at: event)
         if target?.direction != nil || row != nil { NSCursor.pointingHand.set() }
-        guard target?.key != hovered || row != hoveredRow else { return }
-        hovered = target?.key
-        hoveredRow = row
-        needsDisplay = true
+        setHover(gap: target?.key, row: row)
     }
 
     override func mouseExited(with event: NSEvent) {
         super.mouseExited(with: event)
-        guard hovered != nil || hoveredRow != nil else { return }
+        setHover(gap: nil, row: nil)
+    }
+
+    private func setHover(gap: String?, row: DiffRowHit?) {
+        if row != hoveredRow {
+            hoveredRow = row
+            needsDisplay = true
+        }
+        guard gap != hovered else { return }
+        hovered = gap
+        // A press that came to nothing, such as a file that changed under it, lets go of
+        // its row once the pointer does.
+        if gap == nil, awaitsLines {
+            awaitsLines = false
+            marks.release()
+        }
+        if let gap {
+            withRowRect(of: gap) { marks.hover($0) }
+        } else {
+            marks.hover(nil)
+        }
+    }
+
+    // The new text is in place and scrolled. Whatever was lit belongs to the old text,
+    // and if a gap was pressed, the lines it opened are the ones the old text lacked.
+    func textChanged(from before: String?) {
+        awaitsLines = false
+        marks.release()
         hovered = nil
-        hoveredRow = nil
-        needsDisplay = true
+        marks.hover(nil, animated: false)
+        if let before, let storage = textStorage {
+            marks.arrive(arrivedRows(since: before, in: storage))
+        }
+        // The pointer has not moved, but the row under it may have.
+        guard let window else { return }
+        let point = window.mouseLocationOutsideOfEventStream
+        guard visibleRect.contains(convert(point, from: nil)) else { return }
+        if let gap = target(atWindowPoint: point)?.key {
+            hovered = gap
+            withRowRect(of: gap) { marks.hover($0, animated: false) }
+        }
+    }
+
+    // The rows of the new text that the old one did not have, merged into runs, leaving
+    // out the gap row itself, whose count changes as it shrinks.
+    private func arrivedRows(since before: String, in storage: NSTextStorage) -> [NSRect] {
+        guard let layoutManager, let textContainer else { return [] }
+        let new = storage.string.components(separatedBy: "\n")
+        let arrived = DiffText.arrivedLines(old: before.components(separatedBy: "\n"), new: new)
+        guard !arrived.isEmpty else { return [] }
+        let start = new[..<arrived.lowerBound].reduce(0) { $0 + $1.utf16.count + 1 }
+        let length = new[arrived].reduce(0) { $0 + $1.utf16.count + 1 } - 1
+        let glyphs = layoutManager.glyphRange(forCharacterRange: NSRange(location: start, length: max(0, length)),
+                                              actualCharacterRange: nil)
+        let origin = textContainerOrigin
+        var runs: [NSRect] = []
+        layoutManager.enumerateLineFragments(forGlyphRange: glyphs) { fragment, _, _, lineGlyphs, _ in
+            let index = layoutManager.characterIndexForGlyph(at: lineGlyphs.location)
+            guard index < storage.length,
+                  storage.attribute(.diffGap, at: index, effectiveRange: nil) == nil else { return }
+            let row = NSRect(x: 0, y: fragment.minY + origin.y, width: self.bounds.width, height: fragment.height)
+            if let last = runs.last, abs(last.maxY - row.minY) < 0.5 {
+                runs[runs.count - 1] = last.union(row)
+            } else {
+                runs.append(row)
+            }
+        }
+        return runs
+    }
+
+    private func withRowRect(of gap: String, _ body: (NSRect) -> Void) {
+        guard let layoutManager, let storage = textStorage, storage.length > 0 else { return }
+        var range = NSRange()
+        var index = 0
+        while index < storage.length {
+            if storage.attribute(.diffGap, at: index, longestEffectiveRange: &range,
+                                 in: NSRange(location: index, length: storage.length - index)) as? String == gap {
+                let glyph = layoutManager.glyphIndexForCharacter(at: range.location)
+                let fragment = layoutManager.lineFragmentRect(forGlyphAt: glyph, effectiveRange: nil)
+                body(NSRect(x: 0, y: fragment.minY + textContainerOrigin.y,
+                            width: bounds.width, height: fragment.height))
+                return
+            }
+            index = NSMaxRange(range)
+        }
     }
 
     override func cursorUpdate(with event: NSEvent) {
@@ -434,22 +523,16 @@ private final class DiffDocumentView: NSTextView {
     }
 
     private func target(at event: NSEvent) -> DiffGapHit? {
+        target(atWindowPoint: event.locationInWindow)
+    }
+
+    private func target(atWindowPoint windowPoint: NSPoint) -> DiffGapHit? {
         guard let layoutManager, let textContainer, let storage = textStorage else { return nil }
-        let point = convert(event.locationInWindow, from: nil)
+        let point = convert(windowPoint, from: nil)
         let origin = textContainerOrigin
         return DiffGapHit.at(NSPoint(x: point.x - origin.x, y: point.y - origin.y),
                              layoutManager: layoutManager, container: textContainer,
                              storage: storage)
-    }
-
-    // A hovered row sits a shade stronger than its usual band. Mixing towards the text
-    // colour works in either appearance: it darkens on a light pane and lightens on a
-    // dark one.
-    private func hoverFill(_ band: NSColor) -> NSColor {
-        guard let base = band.usingColorSpace(.sRGB),
-              let ink = NSColor.labelColor.usingColorSpace(.sRGB),
-              let mixed = base.blended(withFraction: 0.12, of: ink) else { return band }
-        return mixed
     }
 
     override func drawBackground(in rect: NSRect) {
@@ -464,9 +547,7 @@ private final class DiffDocumentView: NSTextView {
             guard index < storage.length,
                   let band = storage.attribute(.diffRowBackground, at: index,
                                                effectiveRange: nil) as? NSColor else { return }
-            let isHovered = self.hovered != nil
-                && storage.attribute(.diffGap, at: index, effectiveRange: nil) as? String == self.hovered
-            (isHovered ? self.hoverFill(band) : band).setFill()
+            band.setFill()
             NSRect(x: 0, y: fragment.minY + origin.y,
                    width: self.bounds.width, height: fragment.height).fill()
         }
@@ -509,6 +590,104 @@ private final class DiffDocumentView: NSTextView {
             ])
             let size = plus.size()
             plus.draw(at: NSPoint(x: badge.minX + 5, y: badge.midY - size.height / 2))
+        }
+    }
+}
+
+// The marks laid over a diff's rows as the pointer works its gap rows: the row under the
+// pointer, the row just pressed, and the lines that row opened. They are layers rather
+// than part of the text's own drawing so they can fade, and the view never takes a click.
+private final class DiffMarksView: NSView {
+    private let hoverLayer = CALayer()
+    private let pressLayer = CALayer()
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        layer = CALayer()
+        wantsLayer = true
+        layer?.isGeometryFlipped = true
+        for mark in [hoverLayer, pressLayer] {
+            mark.opacity = 0
+            layer?.addSublayer(mark)
+        }
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    override var isFlipped: Bool { true }
+
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    private var reduceMotion: Bool { NSWorkspace.shared.accessibilityDisplayShouldReduceMotion }
+
+    // The text colour laid thin over a band darkens it on a light pane and lightens it on
+    // a dark one, so the same mark works in either appearance.
+    private func color(_ color: NSColor, alpha: CGFloat) -> CGColor {
+        var resolved = color.cgColor
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            resolved = color.withAlphaComponent(alpha).cgColor
+        }
+        return resolved
+    }
+
+    func hover(_ row: NSRect?, animated: Bool = true) {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        if let row {
+            hoverLayer.frame = row
+            hoverLayer.backgroundColor = color(.labelColor, alpha: 0.12)
+        }
+        CATransaction.commit()
+        CATransaction.begin()
+        CATransaction.setAnimationDuration(Motion.hoverDuration)
+        CATransaction.setAnimationTimingFunction(CAMediaTimingFunction(name: .easeOut))
+        CATransaction.setDisableActions(!animated || reduceMotion)
+        hoverLayer.opacity = row == nil ? 0 : 1
+        CATransaction.commit()
+    }
+
+    func press(_ row: NSRect) {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        pressLayer.frame = row
+        pressLayer.backgroundColor = color(Theme.accentNSColor, alpha: 0.16)
+        pressLayer.opacity = 1
+        CATransaction.commit()
+    }
+
+    func release() {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        pressLayer.opacity = 0
+        CATransaction.commit()
+    }
+
+    // The new lines wear the pressed row's tint for a beat, then let it go, so the eye
+    // follows the press to what it opened. The tint only fades, so it plays the same
+    // with Reduce Motion on.
+    func arrive(_ rows: [NSRect]) {
+        let tint = color(Theme.accentNSColor, alpha: 0.16)
+        for row in rows {
+            let wash = CALayer()
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            wash.frame = row
+            wash.backgroundColor = tint
+            wash.opacity = 0
+            layer?.insertSublayer(wash, below: hoverLayer)
+            CATransaction.commit()
+
+            CATransaction.begin()
+            CATransaction.setCompletionBlock { wash.removeFromSuperlayer() }
+            let fade = CABasicAnimation(keyPath: "opacity")
+            fade.fromValue = 1
+            fade.toValue = 0
+            fade.beginTime = CACurrentMediaTime() + Motion.revealDuration
+            fade.duration = Motion.revealDuration
+            fade.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            fade.fillMode = .backwards
+            wash.add(fade, forKey: "arrive")
+            CATransaction.commit()
         }
     }
 }
@@ -661,6 +840,18 @@ enum DiffText {
             }
         }
         return result
+    }
+
+    // Which lines of a diff are new since an earlier text of it. A gap opening only adds
+    // lines in one place, so the lines both share at the top and at the bottom are the
+    // same lines, and whatever sits between them is new.
+    static func arrivedLines(old: [String], new: [String]) -> Range<Int> {
+        var top = 0
+        while top < min(old.count, new.count), old[top] == new[top] { top += 1 }
+        var bottom = 0
+        while bottom < min(old.count, new.count) - top,
+              old[old.count - 1 - bottom] == new[new.count - 1 - bottom] { bottom += 1 }
+        return top..<max(top, new.count - bottom)
     }
 
     // The empty row a thread's cards sit on. It starts at a guess and the view grows it
