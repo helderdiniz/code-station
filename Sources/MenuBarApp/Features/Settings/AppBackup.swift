@@ -129,6 +129,15 @@ struct AppBackup: Codable, Equatable, Sendable {
 
     // MARK: - Import
 
+    // A backup names its format at the top, and a team configuration never does, so one
+    // file chooser can take either.
+    static func isBackup(_ url: URL) -> Bool {
+        guard let data = try? Data(contentsOf: url),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return false }
+        return object["format"] as? String == formatName
+    }
+
     static func read(_ url: URL) throws -> AppBackup {
         let data: Data
         do {

@@ -151,6 +151,25 @@ struct AppBackupTests {
         #expect(throws: ImportError.self) { try AppBackup.read(future) }
     }
 
+    @Test func tellsABackupFromATeamConfiguration() throws {
+        let team = newMac.path("site-defaults.json")
+        try Data(#"{"environments": [], "shortcuts": []}"#.utf8).write(to: team)
+        #expect(!AppBackup.isBackup(team))
+        #expect(!AppBackup.isBackup(newMac.path("missing.json")))
+
+        let backup = try export()
+        let file = newMac.path("backup.json")
+        try backup.encoded().write(to: file)
+        #expect(AppBackup.isBackup(file))
+
+        // A backup from a newer app still counts, so the import explains why it cannot
+        // be read instead of treating it as a broken team configuration.
+        var newer = backup
+        newer.version = AppBackup.currentVersion + 1
+        try newer.encoded().write(to: file)
+        #expect(AppBackup.isBackup(file))
+    }
+
     @Test func aStagedImportIsAppliedOnceAtLaunch() throws {
         defer { UserDefaults().removePersistentDomain(forName: newDomain) }
         let backup = AppBackup(createdAt: .now, files: ["shortcuts.json": Data("saved".utf8)])

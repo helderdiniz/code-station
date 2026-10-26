@@ -39,13 +39,13 @@ struct SiteConfigurationSection: View {
     @State private var backup: AppBackup?
     @State private var backupChosen: Set<AppBackup.Part> = []
     @State private var backupFailure: String?
+    @State private var exportFailure: String?
     @State private var pendingBackup: AppBackup?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
             configuration.id(SettingsSearchTarget.advancedConfiguration.id)
-            move.id(SettingsSearchTarget.advancedMove.id)
-            reset.id(SettingsSearchTarget.advancedReset.id)
+            importing.id(SettingsSearchTarget.advancedImport.id)
         }
         .sheet(item: $editor) { aspect in
             SiteConfigurationEditorView(aspect: aspect, defaults: loaded) { defaults in
@@ -83,28 +83,34 @@ struct SiteConfigurationSection: View {
 
     private var configuration: some View {
         ChoiceBlock("CONFIGURATION",
-                    note: "These values are saved to one current configuration file. The JSON view is read-only and always generated from the settings shown here.") {
+                    note: "These values are saved to one current configuration file. The JSON view is read-only and always generated from the settings shown here. A backup also carries your preferences, bots, shortcuts, requests and project list to another Mac.") {
             SettingsCard {
-                HStack(alignment: .top, spacing: 12) {
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text("Current configuration")
-                            .font(.system(size: 13, weight: .semibold))
-                        Text(loaded.summary)
-                            .font(.system(size: 12))
-                            .foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                        Text(SiteConfigurationImporter.destination.path.abbreviatedPath)
-                            .font(.mono(10.5))
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                            .truncationMode(.middle)
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack(alignment: .top, spacing: 12) {
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text("Current configuration")
+                                .font(.system(size: 13, weight: .semibold))
+                            Text(loaded.summary)
+                                .font(.system(size: 12))
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                            Text(SiteConfigurationImporter.destination.path.abbreviatedPath)
+                                .font(.mono(10.5))
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                        }
+                        Spacer(minLength: 0)
+                        ActionButton(title: "JSON", tone: .outlined, icon: "curlybraces") {
+                            showingJSON = true
+                        }
+                        ActionButton(title: "Export backup…", tone: .outlined,
+                                     icon: "square.and.arrow.up", action: exportBackup)
                     }
-                    Spacer(minLength: 0)
-                    ActionButton(title: "JSON", tone: .outlined, icon: "curlybraces") {
-                        showingJSON = true
-                    }
+                    if let exportFailure { SourceFailure(exportFailure).transition(.fadeIn) }
                 }
                 .padding(14)
+                .smoothlyResizes(when: [exportFailure])
 
                 SettingsRowDivider()
 
@@ -201,32 +207,6 @@ struct SiteConfigurationSection: View {
         }
     }
 
-    private var move: some View {
-        ChoiceBlock("MOVE TO ANOTHER MAC",
-                    note: "Save your preferences, bots, configuration, shortcuts, requests and project list to one file, then import it on the new Mac. Sessions, history and secrets stay on this Mac, so sign in again after the move.") {
-            SettingsCard {
-                VStack(alignment: .leading, spacing: 10) {
-                    HStack(spacing: 8) {
-                        ActionButton(title: "Export backup…", tone: .outlined,
-                                     icon: "square.and.arrow.up", action: exportBackup)
-                        ActionButton(title: "Import backup…", tone: .outlined,
-                                     icon: "square.and.arrow.down", action: chooseBackup)
-                        Spacer(minLength: 0)
-                    }
-                    if let pendingBackup {
-                        pendingImport(pendingBackup).transition(.fadeIn)
-                    } else if let backup {
-                        backupPreview(backup).transition(.fadeIn)
-                    }
-                    if let backupFailure { SourceFailure(backupFailure).transition(.fadeIn) }
-                }
-                .padding(14)
-                .smoothlyResizes(when: [backup?.createdAt.description,
-                                        pendingBackup?.createdAt.description, backupFailure])
-            }
-        }
-    }
-
     private func backupPreview(_ backup: AppBackup) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             Divider().overlay(Theme.border)
@@ -297,17 +277,25 @@ struct SiteConfigurationSection: View {
         do {
             let configuration = try SiteConfigurationImporter.configurationData(for: currentConfiguration())
             try AppBackup.make(configuration: configuration).encoded().write(to: url, options: .atomic)
-            backupFailure = nil
+            exportFailure = nil
             settingsNote("Backup saved", "checkmark")
         } catch {
-            backupFailure = "The backup could not be saved: \(error.localizedDescription)"
+            exportFailure = "The backup could not be saved: \(error.localizedDescription)"
         }
     }
 
-    private func chooseBackup() {
-        guard let url = FilePicker.chooseFile(prompt: "Import",
-                                              message: "Choose a Code Station backup.",
+    private func chooseImport() {
+        guard !loader.isLoading,
+              let url = FilePicker.chooseFile(prompt: "Load",
+                                              message: "Choose a team configuration or a Code Station backup.",
                                               types: [.json]) else { return }
+        guard AppBackup.isBackup(url) else {
+            backup = nil
+            backupFailure = nil
+            loader.loadFile(url)
+            return
+        }
+        loader.clear()
         do {
             let loaded = try AppBackup.read(url)
             backup = loaded
@@ -317,6 +305,13 @@ struct SiteConfigurationSection: View {
             backup = nil
             backupFailure = error.localizedDescription
         }
+    }
+
+    private func loadRepository() {
+        guard loader.canLoadRepository else { return }
+        backup = nil
+        backupFailure = nil
+        loader.loadRepository()
     }
 
     private func confirmImport(_ backup: AppBackup) {
@@ -357,18 +352,30 @@ struct SiteConfigurationSection: View {
         NSApp.terminate(nil)
     }
 
-    private var reset: some View {
-        ChoiceBlock("RESET FROM FILE",
-                    note: "Load a team configuration, choose the aspects to restore, then reset them. Settings you leave unchecked stay exactly as they are.") {
+    // A team configuration and a backup load through the same row. What comes back decides
+    // the preview: a configuration resets the aspects you tick at once, while a backup
+    // replaces files the running app holds open, so it waits for a restart.
+    private var importing: some View {
+        ChoiceBlock("IMPORT",
+                    note: "Load a team configuration from a repository or a file, or choose a backup made on another Mac. Nothing changes until you choose what to bring in. Sessions, history and secrets never travel in a backup, so sign in again after a move.") {
             SettingsCard {
                 VStack(alignment: .leading, spacing: 10) {
                     sources
+                    if let pendingBackup {
+                        pendingImport(pendingBackup).transition(.fadeIn)
+                    } else if let backup {
+                        backupPreview(backup).transition(.fadeIn)
+                    }
                     if let selection = loader.selection { preview(selection).transition(.fadeIn) }
-                    if let failure = loader.failure { SourceFailure(failure).transition(.fadeIn) }
+                    if let failure = loader.failure ?? backupFailure {
+                        SourceFailure(failure).transition(.fadeIn)
+                    }
                     if let loadFailure = loaded.loadFailure { SourceFailure(loadFailure).transition(.fadeIn) }
                 }
                 .padding(14)
-                .smoothlyResizes(when: [loader.selection?.sourceName, loader.failure, loaded.loadFailure])
+                .smoothlyResizes(when: [loader.selection?.sourceName, loader.failure, loaded.loadFailure,
+                                        backup?.createdAt.description,
+                                        pendingBackup?.createdAt.description, backupFailure])
             }
         }
     }
@@ -382,15 +389,14 @@ struct SiteConfigurationSection: View {
                 .padding(.horizontal, 10)
                 .frame(height: 32)
                 .fieldSurface()
-                .onSubmit(loader.loadRepository)
+                .onSubmit(loadRepository)
             ActionButton(title: loader.isLoading ? "Loading…" : "Load",
                          tone: .outlined,
-                         action: loader.loadRepository)
+                         action: loadRepository)
                 .disabled(!loader.canLoadRepository)
-            ActionButton(title: "Choose file…", tone: .outlined, icon: "folder") {
-                loader.chooseFile(message: "Choose a Code Station configuration to use as a reset point.")
-            }
-            .disabled(loader.isLoading)
+            ActionButton(title: "Choose file…", tone: .outlined, icon: "folder",
+                         action: chooseImport)
+                .disabled(loader.isLoading)
         }
     }
 
