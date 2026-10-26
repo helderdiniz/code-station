@@ -273,6 +273,52 @@ struct DockerServiceBulkTests {
         #expect(await recorder.commands.first == ["compose", "--project-name", "payments", "stop"])
     }
 
+    @Test func usesTheComposePluginWhenDockerHasIt() async {
+        let calls = ToolCalls()
+        let result = await DockerService.runCompose(["--project-name", "payments", "stop"]) { tool, arguments in
+            await calls.record(tool, arguments)
+            return DockerService.Output(status: 0)
+        }
+
+        #expect(result.ok)
+        #expect(await calls.all == [["docker", "compose", "--project-name", "payments", "stop"]])
+    }
+
+    @Test func fallsBackToStandaloneComposeWhenThePluginIsMissing() async {
+        let calls = ToolCalls()
+        let result = await DockerService.runCompose(["--project-name", "payments", "stop"]) { tool, arguments in
+            await calls.record(tool, arguments)
+            if tool == "docker" { return DockerService.Output(errorText: "unknown flag: --project-name", status: 125) }
+            return DockerService.Output(status: 0)
+        }
+
+        #expect(result.ok)
+        #expect(await calls.all.last == ["docker-compose", "--project-name", "payments", "stop"])
+    }
+
+    @Test func fallsBackToPodmanComposeWhenNoDockerComposeIsInstalled() async {
+        let calls = ToolCalls()
+        let result = await DockerService.runCompose(["--project-name", "payments", "stop"]) { tool, arguments in
+            await calls.record(tool, arguments)
+            return tool == "podman" ? DockerService.Output(status: 0) : nil
+        }
+
+        #expect(result.ok)
+        #expect(await calls.all.last == ["podman", "compose", "--project-name", "payments", "stop"])
+    }
+
+    @Test func reportsAComposeFailureWhenThePluginWorks() async {
+        let calls = ToolCalls()
+        let result = await DockerService.runCompose(["--project-name", "payments", "stop"]) { tool, arguments in
+            await calls.record(tool, arguments)
+            if arguments == ["compose", "version"] { return DockerService.Output(status: 0) }
+            return DockerService.Output(errorText: "no such project: payments", status: 1)
+        }
+
+        #expect(result.failureMessage == "no such project: payments")
+        #expect(await calls.all.allSatisfy { $0.first == "docker" })
+    }
+
     @Test func readsWhatAPruneFreed() async {
         let recorder = DockerScriptedRunner(output: "Deleted build cache objects:\nx\n\nTotal reclaimed space: 4.7GB")
         let service = DockerService(runner: { await recorder.run($0) }, availability: { true })
@@ -291,6 +337,14 @@ private func container(name: String = "c", image: String) throws -> DockerContai
 private func image(_ repository: String, _ tag: String, id: String, size: String) throws -> DockerImage {
     try #require(DockerImage(line:
         #"{"ID":"sha256:\#(id)","Repository":"\#(repository)","Tag":"\#(tag)","Size":"\#(size)"}"#))
+}
+
+private actor ToolCalls {
+    private(set) var all: [[String]] = []
+
+    func record(_ tool: String, _ arguments: [String]) {
+        all.append([tool] + arguments)
+    }
 }
 
 private actor DockerScriptedRunner {

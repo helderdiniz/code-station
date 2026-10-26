@@ -36,6 +36,12 @@ Anything new that the user can see or touch needs motion: a screen, a tab, a pan
 - Keep it short and quiet. Motion confirms what the user did. It never makes them wait, never blocks a click, and never plays for something the user did not cause, such as text streaming in or a background refresh.
 - Check the motion in the running app, both with and without Reduce Motion, before calling the work done.
 
+## Docker
+
+- Support every common way of running containers on a Mac, not just Docker Desktop: Docker Desktop, Rancher Desktop, Podman (with its docker socket), Colima and OrbStack. Never assume the engine behind the `docker` CLI is Docker itself.
+- Do not assume a tool comes bundled. Compose may be the `docker compose` plugin, the standalone `docker-compose`, or `podman compose`, and a plugin link can point at a tool that has since been removed. Try the usual shape first and fall back to the others.
+- Engines answer the same command in slightly different ways. Podman, for example, fails a whole `ps --size` when it cannot measure one container. Keep a plainer fallback for anything that one engine rejects, and test against more than one engine when changing a docker command.
+
 ## SwiftPM
 
 - Run builds, tests and development runs through `./Scripts/swiftpm.sh`, with `--disable-sandbox` and `--cache-path /private/tmp/teya-swiftpm-cache`. Codex already provides the outer macOS sandbox.

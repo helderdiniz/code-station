@@ -613,7 +613,7 @@ final class DockerService {
     }
 
     private func dockerUnavailable() {
-        let missing = Output(errorText: "Docker was not found. Install Docker Desktop, or start it if it is already installed.")
+        let missing = Output(errorText: "Docker was not found. Install Docker Desktop, Rancher Desktop or Podman, or start it if it is already installed.")
         containers.apply(missing)
         images.apply(missing)
         networks.apply(missing)
@@ -623,9 +623,31 @@ final class DockerService {
     // MARK: - Running docker
 
     nonisolated private static func run(_ arguments: [String]) async -> Output {
-        guard let path = ProcessManager.resolve("docker") else {
-            return Output(errorText: "Docker was not found on PATH.")
+        if arguments.first == "compose" {
+            return await runCompose(Array(arguments.dropFirst()), with: execute)
         }
+        return await execute("docker", arguments) ?? Output(errorText: "Docker was not found on PATH.")
+    }
+
+    // Compose comes in more than one shape. Docker Desktop ships it as a `docker compose`
+    // plugin, while Homebrew, Rancher Desktop and Podman setups often have only the
+    // standalone `docker-compose`, or a plugin link left pointing at a tool since removed.
+    // The plugin is tried first, and only when docker cannot run it at all is the next
+    // shape tried, so a real failure from compose itself is reported as it is.
+    nonisolated static func runCompose(_ arguments: [String],
+                                       with execute: @Sendable (String, [String]) async -> Output?) async -> Output {
+        let plugin = await execute("docker", ["compose"] + arguments)
+        if let plugin, plugin.ok { return plugin }
+        if let plugin, await execute("docker", ["compose", "version"])?.ok == true { return plugin }
+
+        if let standalone = await execute("docker-compose", arguments) { return standalone }
+        if let podman = await execute("podman", ["compose"] + arguments) { return podman }
+        return Output(errorText: "Docker Compose was not found. Install the compose plugin or the standalone docker-compose.")
+    }
+
+    // Returns nil when the tool is not installed, so a caller can try another one.
+    nonisolated private static func execute(_ tool: String, _ arguments: [String]) async -> Output? {
+        guard let path = ProcessManager.resolve(tool) else { return nil }
         var environment = ProcessInfo.processInfo.environment
         environment["PATH"] = ProcessManager.searchPath
 
