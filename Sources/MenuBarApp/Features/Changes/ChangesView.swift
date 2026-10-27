@@ -1780,7 +1780,7 @@ struct ChangesView: View {
     }
 
     private func language(_ file: GitChange) -> CodeLanguage? {
-        CodeLanguage(fileExtension: (file.path as NSString).pathExtension)
+        CodeLanguage(path: file.path)
     }
 
     // A grey gap row stands for the unchanged lines the diff skipped. Pressing one of its

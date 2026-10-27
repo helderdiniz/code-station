@@ -440,7 +440,7 @@ private struct CommitFileDiff: View {
     private func render() async {
         guard let diff, diff.note == nil else { return }
         let lines = diff.lines
-        let built = await DiffText.build(lines, language: CodeLanguage(fileExtension: (file.path as NSString).pathExtension),
+        let built = await DiffText.build(lines, language: CodeLanguage(path: file.path),
                                          scale: settings.textSize.scale, numbered: true)
         // More of the file can have opened while the text was built.
         guard !Task.isCancelled, self.diff?.lines == lines else { return }

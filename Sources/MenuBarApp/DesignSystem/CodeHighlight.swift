@@ -20,15 +20,24 @@ enum CodeLanguage: Sendable, Equatable {
         self = language
     }
 
-    // Some files are known by name rather than extension: a Makefile has none, and a
-    // Makefile.in or Makefile.am is still a Makefile.
-    init?(fileName: String) {
+    // Takes a whole path or just a file name. Some files are known by name rather than
+    // extension: a Makefile has none, and a Makefile.in or Makefile.am is still a
+    // Makefile. A known extension still wins, and so does prose, so Makefile.py reads as
+    // Python and Makefile.md as plain text.
+    init?(path: String) {
+        let fileName = (path as NSString).lastPathComponent
         let name = fileName.lowercased()
-        if ["makefile", "gnumakefile", "bsdmakefile"].contains(name) || name.hasPrefix("makefile.") {
+        let fileExtension = (fileName as NSString).pathExtension
+        if ["makefile", "gnumakefile", "bsdmakefile"].contains(name) {
             self = .makefile
-            return
+        } else if let language = CodeLanguage(fileExtension: fileExtension) {
+            self = language
+        } else if name.hasPrefix("makefile."),
+                  !["md", "markdown", "txt", "rst"].contains(fileExtension.lowercased()) {
+            self = .makefile
+        } else {
+            return nil
         }
-        self.init(fileExtension: (fileName as NSString).pathExtension)
     }
 
     private init?(name: String) {

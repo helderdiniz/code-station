@@ -113,7 +113,7 @@ enum PullRequestReviewHunk {
     static func render(_ hunk: String, path: String) async -> NSAttributedString? {
         let lines = lines(hunk)
         guard !lines.isEmpty else { return nil }
-        return await DiffText.build(lines, language: CodeLanguage(fileExtension: (path as NSString).pathExtension))
+        return await DiffText.build(lines, language: CodeLanguage(path: path))
     }
 }
 

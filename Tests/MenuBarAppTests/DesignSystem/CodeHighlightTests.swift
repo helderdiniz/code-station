@@ -339,14 +339,28 @@ struct CodeHighlightTests {
     }
 
     @Test func makefilesAreKnownByName() {
-        #expect(CodeLanguage(fileName: "Makefile") == .makefile)
-        #expect(CodeLanguage(fileName: "makefile") == .makefile)
-        #expect(CodeLanguage(fileName: "GNUmakefile") == .makefile)
-        #expect(CodeLanguage(fileName: "Makefile.in") == .makefile)
-        #expect(CodeLanguage(fileName: "rules.mk") == .makefile)
-        #expect(CodeLanguage(fileName: "main.swift") == .swift)
-        #expect(CodeLanguage(fileName: "README") == nil)
+        #expect(CodeLanguage(path: "Makefile") == .makefile)
+        #expect(CodeLanguage(path: "makefile") == .makefile)
+        #expect(CodeLanguage(path: "GNUmakefile") == .makefile)
+        #expect(CodeLanguage(path: "Makefile.in") == .makefile)
+        #expect(CodeLanguage(path: "rules.mk") == .makefile)
+        #expect(CodeLanguage(path: "main.swift") == .swift)
+        #expect(CodeLanguage(path: "README") == nil)
         #expect(CodeLanguage(tag: "make") == .makefile)
+    }
+
+    @Test func pathsAreReadByTheirLastComponent() {
+        #expect(CodeLanguage(path: "tools/build/Makefile") == .makefile)
+        #expect(CodeLanguage(path: "Sources/App/main.swift") == .swift)
+        // A directory named like a Makefile does not make its files Make.
+        #expect(CodeLanguage(path: "makefile.d/notes") == nil)
+    }
+
+    @Test func aKnownExtensionOrProseBeatsTheMakefilePrefix() {
+        #expect(CodeLanguage(path: "Makefile.py") == .python)
+        #expect(CodeLanguage(path: "Makefile.md") == nil)
+        #expect(CodeLanguage(path: "Makefile.TXT") == nil)
+        #expect(CodeLanguage(path: "Makefile.local") == .makefile)
     }
 
     // MARK: - Language resolution

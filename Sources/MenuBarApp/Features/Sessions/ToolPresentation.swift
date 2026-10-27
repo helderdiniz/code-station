@@ -39,7 +39,7 @@ struct ToolPresentation: Sendable {
 
         // Code reads as code in a diff, the way it does everywhere else in the app.
         var language: CodeLanguage? {
-            CodeLanguage(fileExtension: (name as NSString).pathExtension)
+            CodeLanguage(path: name)
         }
     }
 

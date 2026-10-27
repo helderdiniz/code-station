@@ -785,7 +785,7 @@ enum DiffText {
         for (index, line) in lines.enumerated() {
             if line.kind == .section {
                 activeLanguage = withinLimit
-                    ? CodeLanguage(fileExtension: (line.text as NSString).pathExtension)
+                    ? CodeLanguage(path: line.text)
                     : nil
             }
             var attributes: [NSAttributedString.Key: Any] = [
