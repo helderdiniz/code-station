@@ -296,7 +296,7 @@ struct DayRibbonSection: View {
                             shown: peeking && card.shown == index)
         if let play = moment.play {
             bar.grown = play.grow(ofBar: index, of: count, at: moment.time)
-            bar.drained = play.drain(ofBar: index, of: count, at: moment.time)
+            bar.tinted = play.tint(ofBar: index, of: count, at: moment.time)
         }
         return bar
     }
@@ -446,12 +446,12 @@ private struct RibbonBar: View {
     // Bottom first. Empty for a slot with nothing to show, which is drawn as a stub.
     let segments: [DayRibbon.Activity.Segment]
     let dimmed: Bool
-    // The bar whose card is up shows its project mix in place of the green.
+    // The bar whose card is up sits on a sunken background.
     let shown: Bool
-    // During the entrance the bar grows up from the baseline in its project mix, and the
-    // mix then drains away from the top to show the green underneath.
+    // During the entrance the bar grows up from the baseline in green, and its project
+    // mix then rises from the bottom to cover the green.
     var grown: Double?
-    var drained: Double?
+    var tinted: Double?
 
     @Environment(\.colorScheme) private var colorScheme
 
@@ -484,20 +484,16 @@ private struct RibbonBar: View {
 
     private var bar: some View {
         let height = height
-        let drained = drained ?? 0
+        let tinted = tinted ?? 1
         return ZStack(alignment: .bottom) {
             layer { _ in Theme.accent }
                 .mask(alignment: .top) {
-                    Rectangle().frame(height: height * (self.drained == nil ? 1 : drained))
+                    Rectangle().frame(height: height * (1 - tinted))
                 }
-                .opacity(shown && self.drained == nil ? 0 : 1)
-                .motion(DayRibbonSection.quick, value: shown)
             layer { $0.subject.tint.colour }
                 .mask(alignment: .bottom) {
-                    Rectangle().frame(height: height * (1 - drained))
+                    Rectangle().frame(height: height * tinted)
                 }
-                .opacity(shown || self.drained != nil ? 1 : 0)
-                .motion(DayRibbonSection.quick, value: shown)
         }
         .frame(height: height)
         .mask(alignment: .bottom) {
