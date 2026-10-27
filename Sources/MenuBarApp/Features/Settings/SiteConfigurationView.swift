@@ -32,7 +32,6 @@ struct SiteConfigurationSection: View {
     @State private var editor: SiteConfigurationAspect?
     @State private var showingDispatch = false
     @State private var showingEnvironmentAccess = false
-    @State private var showingMCP = false
     @State private var showingSkills = false
     @State private var showingShortcuts = false
     @State private var showingJSON = false
@@ -58,9 +57,6 @@ struct SiteConfigurationSection: View {
         }
         .sheet(isPresented: $showingEnvironmentAccess) {
             EnvironmentsView().appOverlays()
-        }
-        .sheet(isPresented: $showingMCP) {
-            ConfigManagerView().appOverlays()
         }
         .sheet(isPresented: $showingSkills, onDismiss: refreshConfiguration) {
             SkillsView(manager: skills).appOverlays()
@@ -175,7 +171,7 @@ struct SiteConfigurationSection: View {
 
     private func actionTitle(for aspect: SiteConfigurationAspect) -> String {
         switch aspect {
-        case .requests, .mcp, .skills, .shortcuts: "Open"
+        case .requests, .skills, .shortcuts: "Open"
         default: "Configure"
         }
     }
@@ -184,8 +180,6 @@ struct SiteConfigurationSection: View {
         switch aspect {
         case .requests:
             showingDispatch = true
-        case .mcp:
-            showingMCP = true
         case .skills:
             showingSkills = true
         case .shortcuts:
