@@ -196,12 +196,15 @@ struct ChangesView: View {
                             if !navigatorVisible && mode == .changes && !files.isEmpty { commitBar }
                         }.frame(maxWidth: .infinity).clipped()
                     }
-                    .overlay(alignment: .leading) {
-                        if navigatorVisible && isWorkspace {
-                            WorkspaceSplitHandle(width: Binding(get: { treeWidth }, set: { treeWidth = $0 }), displayedWidth: width,
-                                                 availableWidth: geometry.size.width)
-                                .offset(x: width + (ExplorerSplitLayout.dividerWidth - ExplorerSplitLayout.handleWidth) / 2)
+                    .overlay {
+                        ZStack(alignment: .leading) {
+                            if navigatorVisible && isWorkspace {
+                                WorkspaceSplitHandle(width: Binding(get: { treeWidth }, set: { treeWidth = $0 }), displayedWidth: width,
+                                                     availableWidth: geometry.size.width)
+                                    .offset(x: width + (ExplorerSplitLayout.dividerWidth - ExplorerSplitLayout.handleWidth) / 2)
+                            }
                         }
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
                     }
                 }
             }

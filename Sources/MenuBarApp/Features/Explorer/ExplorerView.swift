@@ -196,10 +196,6 @@ struct ExplorerView: View {
             }
             .frame(width: geometry.size.width, height: geometry.size.height)
             .overlay(alignment: .leading) {
-                if showsTree && sideBySide {
-                    splitHandle(treeWidth: width, availableWidth: geometry.size.width)
-                        .offset(x: width + (ExplorerSplitLayout.dividerWidth - ExplorerSplitLayout.handleWidth) / 2)
-                }
                 // The ZStack stays put so each layer inside it can take its own transition.
                 ZStack(alignment: .leading) {
                     if showsTree && !sideBySide {
@@ -212,6 +208,17 @@ struct ExplorerView: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
                 .clipped()
+            }
+            // A bare `if` beside other views in an overlay loses the overlay's alignment
+            // and lands in the middle, so the handle gets a leading frame of its own.
+            .overlay {
+                ZStack(alignment: .leading) {
+                    if showsTree && sideBySide {
+                        splitHandle(treeWidth: width, availableWidth: geometry.size.width)
+                            .offset(x: width + (ExplorerSplitLayout.dividerWidth - ExplorerSplitLayout.handleWidth) / 2)
+                    }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
             }
         }
         .background(Theme.background)
