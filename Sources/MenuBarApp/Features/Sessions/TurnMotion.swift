@@ -210,6 +210,27 @@ struct ThreadNode: View {
         .frame(width: 20, height: 20)
         .allowsHitTesting(false)
         .onChange(of: phase) { old, new in play(from: old, to: new) }
+        // Once a change has played out, the dot must wear the look its phase calls for,
+        // which is also how a finish the user watched goes back to the plain dot. Tied to
+        // the view, so a row that left the rail mid-beat settles when it is drawn again,
+        // and keyed on the phase, so a newer change cancels the older wait.
+        .task(id: phase) {
+            try? await Task.sleep(for: .seconds(Self.settleDelay))
+            guard !Task.isCancelled else { return }
+            settle()
+        }
+    }
+
+    // Long enough for the slowest change, a watched finish, to be seen through.
+    static let settleDelay: Double = 1.6
+
+    private func settle() {
+        let resting = ThreadLook.resting(phase)
+        if look != resting {
+            withAnimation(reduceMotion ? nil : Motion.leave) { look = resting }
+        }
+        shown = phase
+        spinning = phase == .running
     }
 
     private var orbit: some View {
@@ -239,9 +260,9 @@ struct ThreadNode: View {
         case (_, .running):
             start()
         case (.running, .finished):
-            finish(settling: false)
+            finish()
         case (.running, .idle) where endedCleanly:
-            finish(settling: true)
+            finish()
         case (.running, .failed):
             fail()
         default:
@@ -269,7 +290,7 @@ struct ThreadNode: View {
 
     // The arc closes the ring, the dot fills, and the tick draws on the sound's beat.
     // Then a pulse climbs the rail to the project.
-    private func finish(settling: Bool) {
+    private func finish() {
         withAnimation(.timingCurve(0.65, 0, 0.35, 1, duration: 0.36)) { look.closed = 1 }
         withAnimation(TurnMotion.fill.delay(0.32)) { look.core = 2.05 }
         withAnimation(.timingCurve(0.3, 0.7, 0.4, 1, duration: 0.26).delay(0.42)) {
@@ -282,14 +303,6 @@ struct ThreadNode: View {
         after(0.7) {
             guard shown != .running else { return }
             spinning = false
-        }
-        // A finish the user watched has nothing left to come back for, so once it has
-        // been seen through, the dot returns to rest.
-        if settling {
-            after(1.6) {
-                guard shown == .idle else { return }
-                withAnimation(.easeOut(duration: 0.3)) { look = .resting(.idle) }
-            }
         }
     }
 
