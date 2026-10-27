@@ -2,8 +2,8 @@ import Foundation
 
 // The entrance the day ribbon plays each time Home opens on a full day.
 // The total rolls up over the dimmed chart and flies into the headline. As it flies the
-// bars grow up from the baseline in their project colours, left to right, and a second
-// later each one drains from the top into the accent green, which is how the chart looks
+// bars grow up from the baseline in the accent green, left to right, and a second later
+// each one fills from the bottom with its project colours, which is how the chart looks
 // at rest.
 //
 // Every value is a pure function of the time since the start, so one clock can drive
@@ -30,9 +30,9 @@ struct RibbonEntrance {
     private static let flight: TimeInterval = 0.52
     private static let grow: TimeInterval = 0.6
     private static let growStagger: TimeInterval = 0.008
-    // How long a bar shows its project colours, from the moment it starts to grow.
+    // How long a bar stays green, from the moment it starts to grow.
     private static let hold: TimeInterval = 1
-    private static let drain: TimeInterval = 0.3
+    private static let tint: TimeInterval = 0.3
 
     init(total: String) {
         self.total = total
@@ -59,7 +59,7 @@ struct RibbonEntrance {
     }
 
     var duration: TimeInterval {
-        flightStart + Double(Self.slots - 1) * Self.growStagger + Self.hold + Self.drain
+        flightStart + Double(Self.slots - 1) * Self.growStagger + Self.hold + Self.tint
     }
 
     // How far a digit's strip has turned, in digits. Each column spins one turn more than
@@ -99,10 +99,10 @@ struct RibbonEntrance {
         Self.easeOutQuart((time - growStart(ofBar: index, of: count)) / Self.grow)
     }
 
-    // How much of a bar's project colour has drained away from the top.
-    func drain(ofBar index: Int, of count: Int, at time: TimeInterval) -> Double {
+    // How far a bar's project colours have risen from the bottom over the green.
+    func tint(ofBar index: Int, of count: Int, at time: TimeInterval) -> Double {
         Self.easeInOutCubic(
-            (time - growStart(ofBar: index, of: count) - Self.hold) / Self.drain)
+            (time - growStart(ofBar: index, of: count) - Self.hold) / Self.tint)
     }
 
     // MARK: - Curves

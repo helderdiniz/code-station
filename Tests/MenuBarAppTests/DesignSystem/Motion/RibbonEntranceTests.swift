@@ -71,15 +71,15 @@ struct RibbonEntranceTests {
         #expect(play.grow(ofBar: 31, of: 64, at: time) == 0)
     }
 
-    // Each bar keeps its colours for a second after it starts to grow, so the drain
-    // follows the grow wave across the chart.
-    @Test func eachBarDrainsASecondAfterItStartsToGrow() {
+    // Each bar stays green for a second after it starts to grow, so the colours follow
+    // the grow wave across the chart.
+    @Test func eachBarTakesItsColoursASecondAfterItStartsToGrow() {
         let play = RibbonEntrance(total: "2h")
         let start = play.flightStart + 1
-        #expect(play.drain(ofBar: 0, of: 64, at: start) < 0.001)
-        #expect(play.drain(ofBar: 0, of: 64, at: start + 0.15) > 0)
-        #expect(play.drain(ofBar: 10, of: 64, at: start + 0.07) == 0)
-        #expect(play.drain(ofBar: 0, of: 64, at: start + 0.3) == 1)
+        #expect(play.tint(ofBar: 0, of: 64, at: start) < 0.001)
+        #expect(play.tint(ofBar: 0, of: 64, at: start + 0.15) > 0)
+        #expect(play.tint(ofBar: 10, of: 64, at: start + 0.07) == 0)
+        #expect(play.tint(ofBar: 0, of: 64, at: start + 0.3) == 1)
     }
 
     // A narrow chart spreads its fewer bars over the same time.
@@ -93,8 +93,8 @@ struct RibbonEntranceTests {
         let play = RibbonEntrance(total: "17h 49m")
         let end = play.duration
         #expect((0..<64).allSatisfy { play.grow(ofBar: $0, of: 64, at: end) == 1 })
-        #expect((0..<20).allSatisfy { play.drain(ofBar: $0, of: 20, at: end) == 1 })
-        #expect((0..<64).allSatisfy { play.drain(ofBar: $0, of: 64, at: end) == 1 })
+        #expect((0..<20).allSatisfy { play.tint(ofBar: $0, of: 20, at: end) == 1 })
+        #expect((0..<64).allSatisfy { play.tint(ofBar: $0, of: 64, at: end) == 1 })
         #expect(play.chartOpacity(at: end) == 1)
         #expect(play.numberOpacity(at: end) == 1)
         #expect(play.restOpacity(at: end) == 1)
