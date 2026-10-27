@@ -47,8 +47,16 @@ struct SiteConfigurationSection: View {
             importing.id(SettingsSearchTarget.advancedImport.id)
         }
         .sheet(item: $editor) { aspect in
-            SiteConfigurationEditorView(aspect: aspect, defaults: loaded) { defaults in
-                apply(defaults, changed: [aspect])
+            Group {
+                if aspect == .mcp {
+                    MCPPresetsEditorView(defaults: loaded) { defaults in
+                        apply(defaults, changed: [aspect])
+                    }
+                } else {
+                    SiteConfigurationEditorView(aspect: aspect, defaults: loaded) { defaults in
+                        apply(defaults, changed: [aspect])
+                    }
+                }
             }
             .appOverlays()
         }
@@ -574,7 +582,8 @@ private struct SiteConfigurationEditorView: View {
         case .environments: environmentsEditor
         case .apiAccess: apiAccessEditor
         case .requests: requestsEditor
-        case .mcp: mcpEditor
+        // The presets open in a sheet of their own, MCPPresetsEditorView.
+        case .mcp: EmptyView()
         case .skills: skillsEditor
         case .shortcuts: shortcutsEditor
         }
@@ -680,142 +689,6 @@ private struct SiteConfigurationEditorView: View {
             }
         }
         .smoothlyResizes(when: draft.requestList?.count)
-    }
-
-    private var mcpEditor: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            ForEach(Array((draft.presetList ?? []).indices), id: \.self) { index in
-                let preset = binding(\.presetList, at: index,
-                                     or: SiteDefaults.MCP.Preset(name: ""))
-                editorCard {
-                    HStack(alignment: .top, spacing: 10) {
-                        SiteConfigurationField(caption: "NAME",
-                                               placeholder: "service-environment",
-                                               text: preset.name)
-                        SiteConfigurationField(caption: "LABEL",
-                                               placeholder: "Service environment",
-                                               text: optional(preset.title))
-                        removeButton { draft.mcp?.presets?.remove(at: index) }
-                    }
-                    HStack(alignment: .top, spacing: 10) {
-                        SiteConfigurationField(caption: "SERVER TYPE",
-                                               placeholder: "None - shown under Add from preset",
-                                               text: optional(preset.serverType))
-                        SiteConfigurationField(caption: "ENVIRONMENT",
-                                               placeholder: "production",
-                                               text: optional(preset.environment))
-                        VStack(alignment: .leading, spacing: 6) {
-                            SectionLabel("TRANSPORT", style: .field)
-                            HStack(spacing: 4) {
-                                ChoicePill(title: "stdio", selected: !preset.wrappedValue.isRemote) {
-                                    preset.command.wrappedValue = preset.wrappedValue.command ?? ""
-                                    preset.url.wrappedValue = nil
-                                    preset.type.wrappedValue = nil
-                                }
-                                ChoicePill(title: "remote", selected: preset.wrappedValue.isRemote) {
-                                    preset.command.wrappedValue = nil
-                                    preset.args.wrappedValue = nil
-                                    preset.url.wrappedValue = preset.wrappedValue.url ?? ""
-                                    preset.type.wrappedValue = preset.wrappedValue.type ?? "http"
-                                }
-                            }
-                            .frame(height: 34)
-                        }
-                    }
-                    if preset.wrappedValue.isRemote {
-                        HStack(alignment: .top, spacing: 10) {
-                            SiteConfigurationField(caption: "URL",
-                                                   placeholder: "https://mcp.example/mcp",
-                                                   text: optional(preset.url))
-                            OptionMenu(caption: "TYPE",
-                                       value: preset.wrappedValue.type ?? "http",
-                                       options: ["http", "sse"].map { type in
-                                           (type, preset.wrappedValue.type == type,
-                                            { preset.type.wrappedValue = type })
-                                       })
-                        }
-                        .transition(.fadeIn)
-                    } else {
-                        SiteConfigurationField(caption: "COMMAND",
-                                               placeholder: "mcp-server",
-                                               text: optional(preset.command))
-                            .transition(.fadeIn)
-                        SiteConfigurationTextArea(caption: "ARGUMENTS - ONE PER LINE",
-                                                  placeholder: "--flag\nvalue",
-                                                  text: arguments(preset))
-                            .transition(.fadeIn)
-                    }
-                    presetValuesEditor("ENVIRONMENT VARIABLES", at: index, keyPath: \.env)
-                    presetValuesEditor("HEADERS", at: index, keyPath: \.headers)
-                }
-                .transition(.fold)
-            }
-            addButton("Add MCP preset") {
-                let environment = draft.deployEnvironments.first?.name ?? ""
-                var mcp = draft.mcp ?? SiteDefaults.MCP()
-                mcp.presets = (mcp.presets ?? [])
-                    + [SiteDefaults.MCP.Preset(name: "",
-                                               environment: environment,
-                                               command: "")]
-                draft.mcp = mcp
-            }
-        }
-        // Keyed on the shape of the list rather than the whole draft, so typing in a
-        // field does not animate.
-        .smoothlyResizes(when: (draft.presetList ?? []).map {
-            [$0.isRemote ? 1 : 0, $0.env?.count ?? 0, $0.headers?.count ?? 0]
-        })
-    }
-
-    @ViewBuilder private func presetValuesEditor(
-        _ title: String,
-        at presetIndex: Int,
-        keyPath: WritableKeyPath<SiteDefaults.MCP.Preset, [SiteDefaults.MCP.Value]?>
-    ) -> some View {
-        let values = draft.mcp?.presets?[presetIndex][keyPath: keyPath] ?? []
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                SectionLabel(title)
-                Spacer()
-                Button {
-                    var preset = draft.mcp?.presets?[presetIndex]
-                        ?? SiteDefaults.MCP.Preset(name: "")
-                    var entries = preset[keyPath: keyPath] ?? []
-                    entries.append(.init(key: "", value: ""))
-                    preset[keyPath: keyPath] = entries
-                    draft.mcp?.presets?[presetIndex] = preset
-                } label: {
-                    Label("Add", systemImage: "plus")
-                        .font(.system(size: 11.5, weight: .semibold))
-                        .foregroundStyle(Theme.accent)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .hoverLift()
-            }
-            ForEach(Array(values.indices), id: \.self) { valueIndex in
-                let value = presetValueBinding(at: presetIndex,
-                                               keyPath: keyPath,
-                                               valueIndex: valueIndex)
-                HStack(alignment: .top, spacing: 8) {
-                    SiteConfigurationField(caption: "KEY",
-                                           placeholder: title == "HEADERS"
-                                            ? "Authorization" : "SERVICE_TOKEN",
-                                           text: value.key)
-                    SiteConfigurationField(caption: "VALUE - LEAVE EMPTY TO PROMPT",
-                                           placeholder: "Filled in when added",
-                                           text: value.value)
-                    removeButton {
-                        var preset = draft.mcp?.presets?[presetIndex]
-                            ?? SiteDefaults.MCP.Preset(name: "")
-                        preset[keyPath: keyPath]?.remove(at: valueIndex)
-                        draft.mcp?.presets?[presetIndex] = preset
-                    }
-                }
-                .transition(.fold)
-            }
-        }
-        .padding(.top, 4)
     }
 
     private var skillsEditor: some View {
@@ -1020,28 +893,6 @@ private struct SiteConfigurationEditorView: View {
                 set: { draft[keyPath: list]?[index] = $0 })
     }
 
-    private func presetValueBinding(
-        at presetIndex: Int,
-        keyPath: WritableKeyPath<SiteDefaults.MCP.Preset, [SiteDefaults.MCP.Value]?>,
-        valueIndex: Int
-    ) -> Binding<SiteDefaults.MCP.Value> {
-        Binding(get: {
-            draft.mcp?.presets?[presetIndex][keyPath: keyPath]?[valueIndex]
-                ?? SiteDefaults.MCP.Value(key: "", value: "")
-        }, set: { value in
-            draft.mcp?.presets?[presetIndex][keyPath: keyPath]?[valueIndex] = value
-        })
-    }
-
-    private func arguments(_ preset: Binding<SiteDefaults.MCP.Preset>) -> Binding<String> {
-        Binding(get: { (preset.wrappedValue.args ?? []).joined(separator: "\n") },
-                set: { value in
-                    preset.args.wrappedValue = value.components(separatedBy: .newlines)
-                        .map(\.trimmed)
-                        .filter { !$0.isEmpty }
-                })
-    }
-
     private func optional(_ value: Binding<String?>) -> Binding<String> {
         Binding(get: { value.wrappedValue ?? "" }, set: { value.wrappedValue = $0 })
     }
@@ -1086,7 +937,7 @@ private struct SiteConfigurationEditorView: View {
     }
 }
 
-private enum SiteConfigurationForm {
+enum SiteConfigurationForm {
     static func cleaned(_ defaults: SiteDefaults,
                         aspect: SiteConfigurationAspect) throws -> SiteDefaults {
         var result = defaults

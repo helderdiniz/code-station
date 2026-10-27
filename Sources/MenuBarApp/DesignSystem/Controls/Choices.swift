@@ -199,6 +199,10 @@ struct ChoicePill: View {
     // Pills sharing a track pass the track's namespace, and the picked one's fill then
     // slides across to the next pick instead of fading out of one pill and into another.
     var thumb: Namespace.ID? = nil
+    // A line under the title, for a choice whose name alone does not say what it does.
+    var detail: String? = nil
+    // Takes an equal share of the track rather than hugging its title.
+    var fills = false
     let choose: () -> Void
 
     @State private var hovering = false
@@ -209,6 +213,7 @@ struct ChoicePill: View {
         }
         .buttonStyle(.plain)
         .disabled(!enabled)
+        .accessibilityAddTraits(selected ? .isSelected : [])
         .hoverLift(hovering && enabled)
         .onPointerHover { hovering = $0 }
         .motion(Motion.control, value: selected)
@@ -246,15 +251,29 @@ struct ChoicePill: View {
                     .fill(selected ? Theme.brand : dot)
                     .frame(width: 6, height: 6)
             }
-            Text(title)
-                .font(.system(size: 12, weight: .semibold))
-                // A squeezed pill must never fold its title onto two lines.
-                .lineLimit(1)
-                .fixedSize()
+            if let detail {
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(title)
+                        .font(.system(size: 12.5, weight: .semibold))
+                        .lineLimit(1)
+                    Text(detail)
+                        .font(.system(size: 11))
+                        .lineLimit(1)
+                        .opacity(0.8)
+                }
+                .foregroundStyle(selected ? Color.white : Color.primary)
+            } else {
+                Text(title)
+                    .font(.system(size: 12, weight: .semibold))
+                    // A squeezed pill must never fold its title onto two lines.
+                    .lineLimit(1)
+                    .fixedSize()
+            }
         }
         .foregroundStyle(selected ? Color.white : Color.secondary)
         .padding(.horizontal, 12)
-        .padding(.vertical, 6)
+        .padding(.vertical, detail == nil ? 6 : 7)
+        .frame(maxWidth: fills ? .infinity : nil, alignment: .leading)
     }
 
     private var fill: Color {
