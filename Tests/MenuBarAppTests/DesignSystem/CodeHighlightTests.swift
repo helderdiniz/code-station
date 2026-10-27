@@ -268,6 +268,87 @@ struct CodeHighlightTests {
         #expect(found.contains { $0.text == "p" && $0.kind == .keyword })
     }
 
+    // MARK: - Make
+
+    @Test func makeColoursAssignmentsRulesAndDirectives() {
+        let code = """
+        CFLAGS := -O2 -Wall # tuned
+        .PHONY: all clean
+        ifeq ($(OS),Darwin)
+        endif
+        build: main.o util.o
+        """
+        #expect(kind(of: "CFLAGS", in: code, .makefile) == .type)
+        #expect(kind(of: "# tuned", in: code, .makefile) == .comment)
+        #expect(kind(of: ".PHONY", in: code, .makefile) == .keyword)
+        #expect(kind(of: "ifeq", in: code, .makefile) == .keyword)
+        #expect(kind(of: "$(OS)", in: code, .makefile) == .type)
+        #expect(kind(of: "endif", in: code, .makefile) == .keyword)
+        #expect(kind(of: "build", in: code, .makefile) == .type)
+        // Prerequisites and the 2 in -O2 stay plain.
+        #expect(kind(of: "clean", in: code, .makefile) == nil)
+        #expect(kind(of: "main.o", in: code, .makefile) == nil)
+        #expect(!tokens(code, .makefile).contains { $0.kind == .number })
+    }
+
+    @Test func makeRecipeIsShellWithReferencesOnTop() {
+        let code = "build:\n\t@echo \"building $(TARGET)\" && $(CC) -o $@ $^"
+        let found = tokens(code, .makefile)
+        #expect(found.contains { $0.text == "@" && $0.kind == .keyword })
+        #expect(found.contains { $0.text == "echo" && $0.kind == .keyword })
+        // The reference cuts the string around it.
+        #expect(found.contains { $0.text == "\"building " && $0.kind == .string })
+        #expect(found.contains { $0.text == "$(TARGET)" && $0.kind == .type })
+        #expect(found.contains { $0.text == "\"" && $0.kind == .string })
+        #expect(found.contains { $0.text == "$(CC)" && $0.kind == .type })
+        #expect(found.contains { $0.text == "$@" && $0.kind == .keyword })
+        #expect(found.contains { $0.text == "$^" && $0.kind == .keyword })
+    }
+
+    @Test func makeFunctionsMarkOnlyTheirHeadAndClose() {
+        let code = "OBJS = $(patsubst %.c,%.o,$(SRCS))"
+        let found = tokens(code, .makefile)
+        #expect(found.contains { $0.text == "$(patsubst" && $0.kind == .keyword })
+        #expect(found.contains { $0.text == "$(SRCS)" && $0.kind == .type })
+        #expect(found.contains { $0.text == ")" && $0.kind == .keyword })
+        #expect(!found.contains { $0.text.contains("%.c") })
+    }
+
+    @Test func makeTellsIndentedAssignmentsFromShellVariables() {
+        let code = "ifeq ($(OS),Linux)\n\tLDFLAGS += -lrt\nendif\nrun:\n\tGOOS=linux go build"
+        #expect(kind(of: "LDFLAGS", in: code, .makefile) == .type)
+        // A one-command shell variable is not a Make assignment.
+        #expect(kind(of: "GOOS", in: code, .makefile) == nil)
+    }
+
+    @Test func makeLeavesAnUnclosedApostropheAlone() {
+        let code = "MESSAGE = don't panic"
+        #expect(!tokens(code, .makefile).contains { $0.kind == .string })
+    }
+
+    @Test func makeSurvivesBrokenLines() {
+        let lines = ["", "\t", "$", "$(", "$(shell echo \"$(X", "a: ;", "\t@", "x := $(a)$(b)",
+                     "\techo \"$(A)\"$(B)'$(C)'", "#", "\\# not a comment", "::", "\t$$HOME"]
+        for line in lines {
+            var state = CodeHighlight.State.normal
+            let found = CodeHighlight.tokens(in: line[...], language: .makefile, state: &state)
+            #expect(zip(found, found.dropFirst()).allSatisfy {
+                $0.range.upperBound <= $1.range.lowerBound
+            })
+        }
+    }
+
+    @Test func makefilesAreKnownByName() {
+        #expect(CodeLanguage(fileName: "Makefile") == .makefile)
+        #expect(CodeLanguage(fileName: "makefile") == .makefile)
+        #expect(CodeLanguage(fileName: "GNUmakefile") == .makefile)
+        #expect(CodeLanguage(fileName: "Makefile.in") == .makefile)
+        #expect(CodeLanguage(fileName: "rules.mk") == .makefile)
+        #expect(CodeLanguage(fileName: "main.swift") == .swift)
+        #expect(CodeLanguage(fileName: "README") == nil)
+        #expect(CodeLanguage(tag: "make") == .makefile)
+    }
+
     // MARK: - Language resolution
 
     @Test func unknownFenceTagsFallBackToCLike() {

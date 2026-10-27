@@ -1301,7 +1301,7 @@ struct ExplorerView: View {
             current.url = URL(fileURLWithPath: FileTree.path(current.path, afterMoving: old, to: new))
             current.name = current.url.lastPathComponent
             selected = current
-            language = CodeLanguage(fileExtension: current.kind)
+            language = CodeLanguage(fileName: current.name)
         }
         let oldParent = (old as NSString).deletingLastPathComponent
         let newParent = url.deletingLastPathComponent().path
@@ -1720,7 +1720,7 @@ struct ExplorerView: View {
             draft = edit.draft
             original = edit.original
             loadedAt = edit.loadedAt
-            language = CodeLanguage(fileExtension: node.kind)
+            language = CodeLanguage(fileName: node.name)
             loadingPreview = false
             if let query, let line { revealedMatches = FileTextSearch.hits(of: query, onLine: line, in: draft) }
             return
@@ -1733,7 +1733,7 @@ struct ExplorerView: View {
             loadingPreview = false
             preview = loaded
             loadedAt = modified
-            language = CodeLanguage(fileExtension: node.kind)
+            language = CodeLanguage(fileName: node.name)
             if case .text(let text) = loaded {
                 draft = text
                 original = text

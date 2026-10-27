@@ -8,7 +8,7 @@ import SwiftUI
 // text file coloured as code looks broken.
 enum CodeLanguage: Sendable, Equatable {
     case swift, json, jsonnet, yaml, shell, python, javascript, java, kotlin, go, rust, markup, sql,
-         cLike
+         makefile, cLike
 
     init?(tag: String?) {
         guard let tag, !tag.isEmpty else { return nil }
@@ -18,6 +18,17 @@ enum CodeLanguage: Sendable, Equatable {
     init?(fileExtension: String) {
         guard let language = CodeLanguage(name: fileExtension.lowercased()) else { return nil }
         self = language
+    }
+
+    // Some files are known by name rather than extension: a Makefile has none, and a
+    // Makefile.in or Makefile.am is still a Makefile.
+    init?(fileName: String) {
+        let name = fileName.lowercased()
+        if ["makefile", "gnumakefile", "bsdmakefile"].contains(name) || name.hasPrefix("makefile.") {
+            self = .makefile
+            return
+        }
+        self.init(fileExtension: (fileName as NSString).pathExtension)
     }
 
     private init?(name: String) {
@@ -35,6 +46,7 @@ enum CodeLanguage: Sendable, Equatable {
         case "rust", "rs": self = .rust
         case "html", "htm", "xml", "svg", "xhtml", "plist", "xib", "storyboard": self = .markup
         case "sql", "postgres", "postgresql", "mysql", "sqlite", "psql": self = .sql
+        case "make", "makefile", "mk", "mak": self = .makefile
         case "c", "h", "cpp", "hpp", "cc", "hh", "cxx", "m", "mm", "cs", "scala",
              "groovy", "gradle", "php", "dart", "proto": self = .cLike
         default: return nil
@@ -177,6 +189,7 @@ enum CodeHighlight {
     static func tokens(in line: Substring, language: CodeLanguage,
                        state: inout State) -> [Token] {
         if language == .markup { return markupTokens(in: line, state: &state) }
+        if language == .makefile { return makeTokens(in: line, state: &state) }
         let rules = rules(for: language)
         var tokens: [Token] = []
         var i = line.startIndex
@@ -562,6 +575,281 @@ enum CodeHighlight {
         return tokens
     }
 
+    // Make is two languages on one page. A line that starts with a tab is a recipe, which
+    // is shell; every other line is Make's own: a directive, an assignment or a rule.
+    // Both carry $(VAR) references, which Make expands before the shell sees the line,
+    // so those are coloured over whatever the shell reading put there. Nothing is carried
+    // from one line to the next, so a continued line is read on its own.
+    private static func makeTokens(in line: Substring, state: inout State) -> [Token] {
+        state = .normal
+        let text = line.drop { $0 == " " || $0 == "\t" }
+        if line.first == "\t", !makeLineInRecipePosition(text) {
+            return makeRecipeTokens(in: text)
+        }
+
+        var commentStart = text.endIndex
+        var i = text.startIndex
+        while i < text.endIndex {
+            if text[i] == "#", i == text.startIndex || text[text.index(before: i)] != "\\" {
+                commentStart = i
+                break
+            }
+            i = text.index(after: i)
+        }
+        let code = text[..<commentStart]
+        var tokens: [Token] = []
+        var rest = code
+
+        // Directives lead the line, and some stack: `export override NAME := value`.
+        var lastDirective: String?
+        while let word = makeLeadingWord(rest), makeDirectives.contains(String(word)) {
+            tokens.append(Token(range: word.startIndex..<word.endIndex, kind: .keyword))
+            lastDirective = String(word)
+            rest = rest[word.endIndex...].drop { $0 == " " || $0 == "\t" }
+        }
+
+        if let name = makeAssignment(in: rest)?.name {
+            tokens.append(Token(range: name, kind: .type))
+            tokens += makeValueTokens(in: rest[name.upperBound...])
+        } else if let lastDirective, makeNamingDirectives.contains(lastDirective),
+                  let name = makeLeadingWord(rest), !name.contains("$") {
+            tokens.append(Token(range: name.startIndex..<name.endIndex, kind: .type))
+        } else if lastDirective == nil, text.startIndex == line.startIndex,
+                  let colon = makeRuleColon(in: rest) {
+            for target in rest[..<colon].split(whereSeparator: { $0 == " " || $0 == "\t" })
+            where !target.contains("$") && target != "&" {
+                let special = target.count > 1 && target.first == "."
+                    && target.dropFirst().allSatisfy { $0.isUppercase || $0 == "_" }
+                tokens.append(Token(range: target.startIndex..<target.endIndex,
+                                    kind: special ? .keyword : .type))
+            }
+            // A ; ends the prerequisites and starts a recipe on the same line.
+            let after = rest[colon...]
+            if let semicolon = after.firstIndex(of: ";") {
+                tokens += makeRecipeTokens(in: after[after.index(after: semicolon)...])
+            }
+        } else {
+            // What is left is a value: an include list, a condition, or a value
+            // continued from the line above. An indented line is never read as a rule,
+            // since it is most likely such a continuation.
+            tokens += makeValueTokens(in: rest)
+        }
+
+        tokens = overlay(makeReferences(in: code), on: tokens)
+        if commentStart < text.endIndex {
+            tokens.append(Token(range: commentStart..<text.endIndex, kind: .comment))
+        }
+        return tokens
+    }
+
+    // A tab-led line is a recipe only inside a rule, which a single line cannot tell. A
+    // directive or an assignment written the way Make writes them is read as Make, so a
+    // block indented under an ifeq keeps its colours. `NAME=value cmd` with no spaces is
+    // the shell setting a variable for one command, and stays shell.
+    private static func makeLineInRecipePosition(_ text: Substring) -> Bool {
+        if let word = makeLeadingWord(text), makeDirectives.contains(String(word)) { return true }
+        guard let assignment = makeAssignment(in: text) else { return false }
+        return assignment.op != "=" || assignment.spaced
+    }
+
+    private static func makeLeadingWord(_ text: Substring) -> Substring? {
+        let word = text.prefix { !$0.isWhitespace && $0 != "(" }
+        return word.isEmpty ? nil : word
+    }
+
+    // The name and operator of `NAME = value` and its kin: :=, ::=, :::=, ?=, += and !=.
+    private static func makeAssignment(
+        in text: Substring
+    ) -> (name: Range<String.Index>, op: String, spaced: Bool)? {
+        let name = text.prefix { !$0.isWhitespace && !"=:?+!#$(){}".contains($0) }
+        guard !name.isEmpty else { return nil }
+        let afterName = text[name.endIndex...]
+        let rest = afterName.drop { $0 == " " || $0 == "\t" }
+        for op in [":::=", "::=", ":=", "?=", "+=", "!=", "="] where rest.hasPrefix(op) {
+            return (name.startIndex..<name.endIndex, op, rest.startIndex > afterName.startIndex)
+        }
+        return nil
+    }
+
+    // The colon that ends a rule's targets. One inside a reference, as in $(SRC:.c=.o),
+    // belongs to the reference.
+    private static func makeRuleColon(in text: Substring) -> String.Index? {
+        var depth = 0
+        var i = text.startIndex
+        while i < text.endIndex {
+            switch text[i] {
+            case "(", "{": depth += 1
+            case ")", "}": depth = max(0, depth - 1)
+            case ":" where depth == 0: return i
+            default: break
+            }
+            i = text.index(after: i)
+        }
+        return nil
+    }
+
+    // A recipe is shell, with Make's own marks in front: @ hides the command, - ignores
+    // its failure and + runs it even under make -n.
+    private static func makeRecipeTokens(in text: Substring) -> [Token] {
+        let marks = text.prefix { "@-+".contains($0) }
+        var tokens: [Token] = []
+        if !marks.isEmpty {
+            tokens.append(Token(range: marks.startIndex..<marks.endIndex, kind: .keyword))
+        }
+        let command = text[marks.endIndex...]
+        var state = State.normal
+        tokens += CodeHighlight.tokens(in: command, language: .shell, state: &state)
+        return overlay(makeReferences(in: command), on: tokens)
+    }
+
+    // Make gives quotes no meaning, so only a string that closes on its line is coloured.
+    // An apostrophe in `MESSAGE = don't` stays text.
+    private static func makeValueTokens(in text: Substring) -> [Token] {
+        var tokens: [Token] = []
+        var i = text.startIndex
+        while i < text.endIndex {
+            let c = text[i]
+            if c == "\"" || c == "'" {
+                let open = i
+                if let close = text[text.index(after: i)...].firstIndex(of: c) {
+                    i = text.index(after: close)
+                    tokens.append(Token(range: open..<i, kind: .string))
+                } else {
+                    i = text.index(after: i)
+                }
+            } else if c.isNumber {
+                let start = i
+                scanNumber(text, from: &i)
+                tokens.append(Token(range: start..<i, kind: .number))
+            } else if c.isLetter || c == "_" || c == "-" || c == "." {
+                // Words swallow their own digits, so the 2 in -O2 is not a number.
+                i = text.index(after: i)
+                while i < text.endIndex,
+                      text[i].isLetter || text[i].isNumber || "_-.".contains(text[i]) {
+                    i = text.index(after: i)
+                }
+            } else {
+                i = text.index(after: i)
+            }
+        }
+        return tokens
+    }
+
+    // Every $ reference on the line, nested ones included, in order. A variable is
+    // coloured as a type; a function such as $(patsubst ...) and an automatic variable
+    // such as $@ as a keyword. When a reference holds more than a name, only its head and
+    // closing bracket are marked, so its arguments keep their own colours.
+    private static func makeReferences(in text: Substring) -> [Token] {
+        var tokens: [Token] = []
+        var i = text.startIndex
+        scanMakeReferences(text, from: &i, until: nil, into: &tokens)
+        return tokens
+    }
+
+    // Stops at the `close` bracket that ends the reference being read, or at the end of
+    // the line.
+    private static func scanMakeReferences(_ text: Substring, from i: inout String.Index,
+                                           until close: Character?, into tokens: inout [Token]) {
+        var depth = 0
+        while i < text.endIndex {
+            let c = text[i]
+            if let close, c == close {
+                if depth == 0 { return }
+                depth -= 1
+            } else if let close, c == (close == ")" ? "(" : "{") {
+                depth += 1
+            }
+            guard c == "$" else {
+                i = text.index(after: i)
+                continue
+            }
+            let start = i
+            i = text.index(after: i)
+            guard i < text.endIndex else { return }
+            let next = text[i]
+            if next == "(" || next == "{" {
+                let closer: Character = next == "(" ? ")" : "}"
+                i = text.index(after: i)
+                let name = text[i...].prefix { !$0.isWhitespace && !":=,$(){}".contains($0) }
+                i = name.endIndex
+                let isFunction = i < text.endIndex && text[i].isWhitespace
+                    && makeFunctions.contains(String(name))
+                let isAutomatic = name.count <= 2 && name.first.map { makeAutomatic.contains($0) } == true
+                let kind: Kind = isFunction || isAutomatic ? .keyword : .type
+                let headEnd = i
+                var inner: [Token] = []
+                scanMakeReferences(text, from: &i, until: closer, into: &inner)
+                guard i < text.endIndex else {
+                    tokens.append(Token(range: start..<headEnd, kind: kind))
+                    tokens += inner
+                    return
+                }
+                let end = text.index(after: i)
+                if headEnd == i {
+                    tokens.append(Token(range: start..<end, kind: kind))
+                } else {
+                    tokens.append(Token(range: start..<headEnd, kind: kind))
+                    tokens += inner
+                    tokens.append(Token(range: i..<end, kind: kind))
+                }
+                i = end
+            } else if makeAutomatic.contains(next) {
+                i = text.index(after: i)
+                tokens.append(Token(range: start..<i, kind: .keyword))
+            } else if next.isLetter || next.isNumber || next == "_" {
+                i = text.index(after: i)
+                tokens.append(Token(range: start..<i, kind: .type))
+            } else if next == "$" {
+                // $$ is a literal $ handed to the shell.
+                i = text.index(after: i)
+            }
+        }
+    }
+
+    // Lays `top` over `base`, cutting a base token wherever a top token covers it. Both
+    // come in order without overlaps of their own.
+    private static func overlay(_ top: [Token], on base: [Token]) -> [Token] {
+        guard !top.isEmpty else { return base }
+        var out: [Token] = []
+        for token in base {
+            var lower = token.range.lowerBound
+            for cover in top {
+                guard lower < token.range.upperBound else { break }
+                guard cover.range.overlaps(lower..<token.range.upperBound) else { continue }
+                if lower < cover.range.lowerBound {
+                    out.append(Token(range: lower..<cover.range.lowerBound, kind: token.kind))
+                }
+                lower = cover.range.upperBound
+            }
+            if lower < token.range.upperBound {
+                out.append(Token(range: lower..<token.range.upperBound, kind: token.kind))
+            }
+        }
+        return (out + top).sorted { $0.range.lowerBound < $1.range.lowerBound }
+    }
+
+    private static let makeDirectives: Set<String> = [
+        "define", "endef", "undefine", "ifdef", "ifndef", "ifeq", "ifneq", "else", "endif",
+        "include", "-include", "sinclude", "override", "export", "unexport", "private",
+        "vpath", "load", "-load"
+    ]
+
+    // Directives whose next word is a variable name.
+    private static let makeNamingDirectives: Set<String> = [
+        "define", "undefine", "ifdef", "ifndef", "export", "unexport"
+    ]
+
+    private static let makeFunctions: Set<String> = [
+        "abspath", "addprefix", "addsuffix", "and", "basename", "call", "dir", "error",
+        "eval", "file", "filter", "filter-out", "findstring", "firstword", "flavor",
+        "foreach", "guile", "if", "info", "intcmp", "join", "lastword", "let", "notdir",
+        "or", "origin", "patsubst", "realpath", "shell", "sort", "strip", "subst",
+        "suffix", "value", "warning", "wildcard", "word", "wordlist", "words"
+    ]
+
+    // The automatic variables, which also come as $(@D), $(<F) and the like.
+    private static let makeAutomatic: Set<Character> = ["@", "<", "^", "+", "?", "*", "%", "|"]
+
     // MARK: - Rules
 
     private struct Rules: Sendable {
@@ -596,7 +884,7 @@ enum CodeHighlight {
         case .json: jsonRules
         case .jsonnet: jsonnetRules
         case .yaml: yamlRules
-        case .shell: shellRules
+        case .shell, .makefile: shellRules
         case .python: pythonRules
         case .javascript: javascriptRules
         case .java: javaRules
