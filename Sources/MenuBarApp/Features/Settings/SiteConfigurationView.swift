@@ -699,7 +699,7 @@ private struct SiteConfigurationEditorView: View {
                     }
                     HStack(alignment: .top, spacing: 10) {
                         SiteConfigurationField(caption: "SERVER TYPE",
-                                               placeholder: "Grafana",
+                                               placeholder: "None - shown under Add from preset",
                                                text: optional(preset.serverType))
                         SiteConfigurationField(caption: "ENVIRONMENT",
                                                placeholder: "production",
