@@ -149,6 +149,63 @@ struct CursorEffectLayerTests {
         #expect(animations(view).isEmpty)
     }
 
+    @Test(arguments: [CursorEffect.ember, .aurora, .orbit])
+    func pointerExitLetsTrailsDecayWithoutInterruptingThemOnReentry(effect: CursorEffect) throws {
+        guard !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else { return }
+        let view = makeView()
+        configure(view, effect: effect, activity: .running)
+        let start = CACurrentMediaTime()
+        view.movePointer(to: CGPoint(x: 100, y: 100), at: start)
+        view.movePointer(to: CGPoint(x: 120, y: 100), at: start + 1.0 / 60)
+        let trails = layers(view).filter { $0.animation(forKey: "decay") != nil }
+        #expect(!trails.isEmpty)
+
+        view.mouseExited(with: try exitEvent())
+        #expect(layers(view).count == trails.count + 2)
+        for trail in trails {
+            let decay = try #require(trail.animation(forKey: "decay"))
+            #expect(decay.duration > 0 && decay.duration.isFinite)
+            #expect(decay.repeatCount == 0 && decay.isRemovedOnCompletion)
+            #expect(trail.opacity == 0)
+            let opacity = (decay as? CAAnimationGroup)?.animations?
+                .compactMap { $0 as? CABasicAnimation }.first { $0.keyPath == "opacity" }
+                ?? decay as? CABasicAnimation
+            #expect(try #require(opacity?.toValue as? Double) == 0)
+        }
+
+        view.movePointer(to: CGPoint(x: 350, y: 200), at: start + 2.0 / 60)
+        #expect(layers(view).filter { $0.animation(forKey: "decay") != nil }.count == trails.count)
+        #expect(trails.allSatisfy { $0.animation(forKey: "decay") != nil })
+        view.movePointer(to: CGPoint(x: 370, y: 200), at: start + 3.0 / 60)
+        let fresh = layers(view).filter { layer in
+            layer.animation(forKey: "decay") != nil && !trails.contains { $0 === layer }
+        }
+        #expect(!fresh.isEmpty)
+        if effect == .aurora {
+            for ribbon in fresh.compactMap({ $0 as? CAShapeLayer }) {
+                #expect(try #require(ribbon.path).boundingBoxOfPath.minX >= 350)
+            }
+        }
+
+        view.mouseExited(with: try exitEvent())
+        view.setForeground(false)
+        #expect(animations(view).isEmpty)
+        view.stop()
+        #expect(animations(view).isEmpty)
+    }
+
+    @Test(arguments: CursorEffect.allCases)
+    func reducedMotionPointerExitLeavesNoEffects(effect: CursorEffect) throws {
+        let view = makeView()
+        for activity: CursorEffectActivity in [.running, .waiting] {
+            configure(view, effect: effect, activity: activity, reduced: true)
+            view.movePointer(to: CGPoint(x: 100, y: 100))
+            view.mouseExited(with: try exitEvent())
+            #expect(animations(view).isEmpty)
+            #expect(layers(view).count == 2)
+        }
+    }
+
     @Test func aDifferentSessionStartsWithoutThePreviousSessionsCompletion() {
         let running = makeView()
         configure(running, effect: .orbit, activity: .running)
@@ -248,6 +305,11 @@ struct CursorEffectLayerTests {
         view.layoutLayers()
         view.setForeground(true)
         return view
+    }
+
+    private func exitEvent() throws -> NSEvent {
+        try #require(NSEvent.enterExitEvent(with: .mouseExited, location: .zero, modifierFlags: [],
+            timestamp: 0, windowNumber: 0, context: nil, eventNumber: 0, trackingNumber: 0, userData: nil))
     }
 
     private func configure(_ view: CursorEffectLayerView, effect: CursorEffect,

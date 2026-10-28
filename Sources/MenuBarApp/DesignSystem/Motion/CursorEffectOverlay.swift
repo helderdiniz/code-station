@@ -131,8 +131,12 @@ final class CursorEffectLayerView: LoopLayerView {
     override func mouseExited(with event: NSEvent) {
         pointerInside = false
         previous = nil
-        clear()
-        rebuild()
+        ribbonStart = nil
+        // Existing trails finish their own decay after the pointer leaves.
+        LayerLoop.still {
+            ornament.removeAllAnimations()
+            ornament.sublayers?.forEach { $0.removeFromSuperlayer() }
+        }
     }
 
     override func layoutLayers() {
@@ -204,7 +208,7 @@ final class CursorEffectLayerView: LoopLayerView {
         if !pointerInside {
             pointerInside = true
             previous = nil
-            clear()
+            ribbonStart = nil
         }
         let from = previous ?? location
         point = location
