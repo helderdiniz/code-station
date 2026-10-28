@@ -169,6 +169,80 @@ struct CursorEffectLayerTests {
         #expect(layers(view).allSatisfy { $0.position.x.isFinite && $0.position.y.isFinite })
     }
 
+    @Test func auroraJoinsRibbonSegmentsAndFadesTheirColourAndWidth() throws {
+        guard !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else { return }
+        let view = makeView()
+        configure(view, effect: .aurora, activity: .running)
+        let start = CACurrentMediaTime()
+        for (index, point) in [CGPoint(x: 100, y: 100), CGPoint(x: 120, y: 100), CGPoint(x: 140, y: 120)].enumerated() {
+            view.movePointer(to: point, at: start + Double(index) / 60)
+        }
+        let ribbons = layers(view).compactMap { $0.name == "aurora-ribbon" ? $0 as? CAShapeLayer : nil }
+        #expect(ribbons.count == 8)
+        let first = try #require(ribbons.first?.path)
+        let next = try #require(ribbons.dropFirst(4).first?.path)
+        var nextStart = CGPoint.zero
+        next.applyWithBlock { element in
+            if element.pointee.type == .moveToPoint { nextStart = element.pointee.points[0] }
+        }
+        #expect(first.currentPoint == nextStart)
+        for ribbon in ribbons {
+            let tint = try #require(ribbon.animation(forKey: "ribbon-colour") as? CABasicAnimation)
+            let taper = try #require(ribbon.animation(forKey: "ribbon-taper") as? CABasicAnimation)
+            let fromColour = try #require(tint.fromValue) as! CGColor
+            let toColour = try #require(tint.toValue) as! CGColor
+            #expect(fromColour != toColour)
+            #expect(try #require(taper.fromValue as? Double) > #require(taper.toValue as? Double))
+            #expect(ribbon.animation(forKey: "decay") != nil)
+        }
+    }
+
+    @Test func emberThrowsMoreStreaksWithFasterMovement() throws {
+        guard !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else { return }
+        func sparks(distance: CGFloat, elapsed: Double) -> [CAShapeLayer] {
+            let view = makeView()
+            configure(view, effect: .ember, activity: .running)
+            let start = CACurrentMediaTime()
+            view.movePointer(to: CGPoint(x: 100, y: 100), at: start)
+            view.movePointer(to: CGPoint(x: 100 + distance, y: 100), at: start + elapsed)
+            return layers(view).compactMap { $0.name == "cursor-spark" ? $0 as? CAShapeLayer : nil }
+        }
+        let slow = sparks(distance: 3, elapsed: 0.1)
+        let fast = sparks(distance: 40, elapsed: 1.0 / 60)
+        #expect(fast.count > slow.count)
+        for spark in fast {
+            #expect(spark.fillColor == nil)
+            #expect(spark.strokeColor != nil)
+            let group = try #require(spark.animation(forKey: "decay") as? CAAnimationGroup)
+            let flight = try #require(group.animations?.first as? CAKeyframeAnimation)
+            let points = try #require(flight.values as? [NSValue]).map(\.pointValue)
+            #expect(points.count > 3)
+            let last = points.count - 1
+            #expect(points[last].y - points[last - 1].y > points[1].y - points[0].y)
+        }
+    }
+
+    @Test func orbitHasGlowingSatellitesAndMovingConstellationLinks() throws {
+        guard !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else { return }
+        let view = makeView()
+        configure(view, effect: .orbit, activity: .running)
+        #expect(animations(view).isEmpty)
+        view.movePointer(to: CGPoint(x: 100, y: 100))
+        let satellites = layers(view).filter { $0.name == "orbit-satellite" }
+        #expect(satellites.count == 4)
+        for satellite in satellites {
+            #expect(satellite.sublayers?.contains { $0.name == "cursor-glow" } == true)
+            let orbit = try #require(satellite.animation(forKey: "orbit") as? CAKeyframeAnimation)
+            let points = try #require(orbit.values as? [NSValue]).map(\.pointValue)
+            #expect(abs(try #require(points.first).x - #require(points.last).x) < 0.001)
+            #expect(abs(try #require(points.first).y - #require(points.last).y) < 0.001)
+        }
+        #expect(layers(view).filter { $0.animation(forKey: "constellation") != nil }.count == 1)
+        configure(view, effect: .orbit, activity: .waiting)
+        #expect(animations(view).isEmpty)
+        #expect(layers(view).allSatisfy { $0.name != "cursor-glow" })
+    }
+
     private func makeView() -> CursorEffectLayerView {
         let view = CursorEffectLayerView(frame: CGRect(x: 0, y: 0, width: 500, height: 300))
         view.layoutLayers()

@@ -23,8 +23,9 @@ struct CursorEffectOverlay: NSViewRepresentable {
 // Pointer events only place layers. Core Animation owns their decay and every loop,
 // so an idle pointer never asks SwiftUI to lay out the window again.
 final class CursorEffectLayerView: LoopLayerView {
-    static let particleLimit = 96
+    static let particleLimit = 320
     private static let lifetime = Motion.popDuration * 3
+    private static let orbitPeriod = Breath.period * 30
 
     private(set) var settings = CursorEffectsSettings()
     private(set) var activity = CursorEffectActivity.inactive
@@ -33,6 +34,7 @@ final class CursorEffectLayerView: LoopLayerView {
     private var pointerInside = false
     private var point = CGPoint.zero
     private var previous: CGPoint?
+    private var ribbonStart: CGPoint?
     private var lastEmission: CFTimeInterval = 0
     private var monitor: Any?
     private var tracking: NSTrackingArea?
@@ -210,7 +212,7 @@ final class CursorEffectLayerView: LoopLayerView {
         rebuild()
         if activity == .running && !reduced {
             if hypot(location.x - from.x, location.y - from.y) > 2 && time - lastEmission > 1.0 / 90 {
-                emit(from: from, to: location)
+                emit(from: from, to: location, elapsed: max(1.0 / 90, min(0.1, time - lastEmission)))
                 lastEmission = time
                 previous = location
             } else if previous == nil {
@@ -220,6 +222,7 @@ final class CursorEffectLayerView: LoopLayerView {
     }
 
     private func clear() {
+        ribbonStart = nil
         LayerLoop.still {
             ornament.removeAllAnimations()
             ornament.sublayers?.forEach { $0.removeFromSuperlayer() }
@@ -238,16 +241,20 @@ final class CursorEffectLayerView: LoopLayerView {
         LayerLoop.still {
             ornament.position = point
             if activity == .waiting || reduced {
-                let halo = shape(path: CGPath(ellipseIn: CGRect(x: -15, y: -15, width: 30, height: 30), transform: nil),
-                                 colour: activity == .waiting ? NSColor(Theme.attentionText) : NSColor(Theme.dotOnText), width: 1.2)
+                let tint = activity == .waiting ? NSColor(Theme.attentionText) : NSColor(Theme.dotOnText)
+                let halo = shape(path: CGPath(ellipseIn: CGRect(x: -8, y: -5, width: 30, height: 30), transform: nil),
+                                 colour: tint.withAlphaComponent(0.6), width: 1.2)
                 ornament.addSublayer(halo)
+                let dot = shape(path: CGPath(ellipseIn: CGRect(x: 16.7, y: 18.7, width: 4.6, height: 4.6), transform: nil),
+                                colour: tint, width: 0)
+                dot.fillColor = tint.cgColor
+                ornament.addSublayer(dot)
             } else if settings.effect == .orbit {
                 addOrbits()
             } else {
-                let glow = shape(path: CGPath(ellipseIn: CGRect(x: -7, y: -7, width: 14, height: 14), transform: nil),
-                                 colour: colour(0), width: 1)
-                glow.opacity = 0.35
-                ornament.addSublayer(glow)
+                let radius = settings.effect == .ember ? 26 + settings.intensity * 13 : 22
+                ornament.addSublayer(glow(at: CGPoint(x: 7, y: 10), radius: radius,
+                                         colour: colour(settings.effect == .ember ? 0.4 : 1).withAlphaComponent(0.16)))
             }
         }
     }
@@ -296,56 +303,125 @@ final class CursorEffectLayerView: LoopLayerView {
         return particle
     }
 
-    private func emit(from start: CGPoint, to end: CGPoint) {
+    private func emit(from start: CGPoint, to end: CGPoint, elapsed: CFTimeInterval) {
+        let velocity = CGVector(dx: (end.x - start.x) / elapsed, dy: (end.y - start.y) / elapsed)
+        let speed = min(2500, hypot(velocity.dx, velocity.dy))
+        let origin = CGPoint(x: end.x + 7, y: end.y + 10)
         LayerLoop.still {
             if settings.effect == .aurora {
+                let control = CGPoint(x: start.x + 7, y: start.y + 10)
+                let midpoint = CGPoint(x: (control.x + origin.x) / 2, y: (control.y + origin.y) / 2)
+                let path = CGMutablePath()
+                path.move(to: ribbonStart ?? control)
+                path.addQuadCurve(to: midpoint, control: control)
+                ribbonStart = midpoint
                 for index in 0..<4 {
                     let ribbon = transient()
-                    let offset = CGFloat(index - 2) * 2
-                    let path = CGMutablePath()
-                    path.move(to: CGPoint(x: start.x, y: start.y + offset))
-                    path.addQuadCurve(to: CGPoint(x: end.x, y: end.y + offset),
-                                      control: CGPoint(x: (start.x + end.x) / 2, y: start.y + offset))
-                    ribbon.path = path
-                    ribbon.lineWidth = [12, 6, 2, 1][index] * settings.intensity
-                    ribbon.strokeColor = colour(Double(index) / 3).cgColor
-                    fade(ribbon, opacity: index < 2 ? 0.18 : 0.75)
+                    styleRibbon(ribbon, path: path, band: index)
+                    let tint = CABasicAnimation(keyPath: "strokeColor")
+                    tint.fromValue = colour(1).cgColor
+                    tint.toValue = colour(0).cgColor
+                    tint.duration = Self.lifetime
+                    ribbon.add(tint, forKey: "ribbon-colour")
+                    let taper = CABasicAnimation(keyPath: "lineWidth")
+                    taper.fromValue = ribbon.lineWidth
+                    taper.toValue = 0.1
+                    taper.duration = Self.lifetime
+                    ribbon.add(taper, forKey: "ribbon-taper")
+                    let flow = CAKeyframeAnimation(keyPath: "position")
+                    let now = CACurrentMediaTime()
+                    flow.values = (0...24).map { frame in
+                        let age = Double(frame) / 24
+                        let wave = sin((1 - age) * 7 - (now + age * Self.lifetime) * 3 + Double(index) * 0.9)
+                            * age * 13 * settings.intensity
+                        return NSValue(point: CGPoint(x: 0, y: wave))
+                    }
+                    flow.duration = Self.lifetime
+                    ribbon.add(flow, forKey: "ribbon-flow")
+                    fade(ribbon, opacity: [0.05, 0.16, 0.65, 0.65][index])
                 }
             } else {
-                for _ in 0..<Int(2 + settings.intensity * 6) {
-                    spark(at: end, spread: 28 + settings.intensity * 25)
+                let count = settings.effect == .ember
+                    ? min(11, Int(ceil(speed / 140 * (0.8 + settings.intensity * 2.8))))
+                    : max(1, Int(settings.intensity * 3))
+                for _ in 0..<count {
+                    if settings.effect == .orbit {
+                        let phase = CACurrentMediaTime().truncatingRemainder(dividingBy: Self.orbitPeriod) / Self.orbitPeriod
+                        let offset = satellite(Int.random(in: 0..<4), phase: phase, radius: 24 + settings.intensity * 17)
+                        spark(at: CGPoint(x: end.x + offset.x, y: end.y + offset.y), spread: 18, velocity: velocity)
+                    } else {
+                        spark(at: origin, spread: 9 + settings.intensity * 58, velocity: velocity)
+                    }
                 }
             }
         }
     }
 
-    private func spark(at origin: CGPoint, spread: Double) {
+    private func styleRibbon(_ ribbon: CAShapeLayer, path: CGPath, band: Int) {
+        ribbon.name = "aurora-ribbon"
+        ribbon.path = path
+        ribbon.lineWidth = [30, 12, 3.7, 1.1][band] * settings.intensity
+        ribbon.strokeColor = colour(1).cgColor
+        ribbon.lineCap = .round
+        ribbon.lineJoin = .round
+    }
+
+    private func spark(at origin: CGPoint, spread: Double, velocity: CGVector = .zero) {
         let particle = transient()
-        let radius = Double.random(in: 0.6...1.6)
-        particle.path = CGPath(ellipseIn: CGRect(x: -radius, y: -radius, width: radius * 2, height: radius * 2), transform: nil)
-        particle.fillColor = colour(Double.random(in: 0...1)).cgColor
-        particle.strokeColor = nil
-        let dx = Double.random(in: -spread...spread)
-        let dy = Double.random(in: -spread...spread)
+        particle.name = "cursor-spark"
+        let angle = Double.random(in: 0...(2 * .pi))
+        let speed = Double.random(in: spread * 0.2...spread)
+        let dx = cos(angle) * speed - max(-2500, min(2500, velocity.dx)) * 0.13
+        let dy = sin(angle) * speed - max(-2500, min(2500, velocity.dy)) * 0.13 - 20
+        let duration = Self.lifetime * Double.random(in: 0.35...1)
+        let gravity = settings.effect == .ember ? 65.0 : 5.0
+        let path = CGMutablePath()
+        path.move(to: .zero)
+        path.addLine(to: CGPoint(x: -dx * 0.025, y: -dy * 0.025))
+        if Double.random(in: 0...1) > 0.89 {
+            path.move(to: CGPoint(x: -2.6, y: 0))
+            path.addLine(to: CGPoint(x: 2.6, y: 0))
+            path.move(to: CGPoint(x: 0, y: -2.6))
+            path.addLine(to: CGPoint(x: 0, y: 2.6))
+        }
+        particle.path = path
+        particle.lineWidth = Double.random(in: 0.5...1.75)
+        particle.strokeColor = colour(1).cgColor
         let flight = CAKeyframeAnimation(keyPath: "position")
-        flight.values = [origin,
-                         CGPoint(x: origin.x + dx * 0.6, y: origin.y + dy * 0.6 - 8),
-                         CGPoint(x: origin.x + dx, y: origin.y + dy + (settings.effect == .ember ? 32 : 4))]
-            .map { NSValue(point: $0) }
-        flight.keyTimes = [0, 0.5, 1]
-        flight.duration = Self.lifetime
+        flight.values = (0...12).map { frame in
+            let time = duration * Double(frame) / 12
+            return NSValue(point: CGPoint(x: origin.x + dx * (1 - exp(-0.9 * time)) / 0.9,
+                                          y: origin.y + dy * time + gravity * time * time / 2))
+        }
+        flight.duration = duration
         let opacity = CABasicAnimation(keyPath: "opacity")
         opacity.fromValue = 0.9
         opacity.toValue = 0
-        opacity.duration = Self.lifetime
-        let cooling = CABasicAnimation(keyPath: "fillColor")
-        cooling.fromValue = particle.fillColor
+        opacity.duration = duration
+        let cooling = CABasicAnimation(keyPath: "strokeColor")
+        cooling.fromValue = particle.strokeColor
         cooling.toValue = colour(0).withAlphaComponent(0.2).cgColor
-        cooling.duration = Self.lifetime
+        cooling.duration = duration
+        let thinning = CABasicAnimation(keyPath: "lineWidth")
+        thinning.fromValue = particle.lineWidth
+        thinning.toValue = 0.1
+        thinning.duration = duration
         let group = CAAnimationGroup()
-        group.animations = [flight, opacity, cooling]
-        group.duration = Self.lifetime
+        group.animations = [flight, opacity, cooling, thinning]
+        group.duration = duration
         particle.add(group, forKey: "decay")
+    }
+
+    private func glow(at point: CGPoint, radius: CGFloat, colour: NSColor) -> CAGradientLayer {
+        let glow = CAGradientLayer()
+        glow.name = "cursor-glow"
+        glow.type = .radial
+        glow.colors = [colour.cgColor, colour.cgColor, colour.withAlphaComponent(0).cgColor]
+        glow.locations = [0, 0.22, 1]
+        glow.startPoint = CGPoint(x: 0.5, y: 0.5)
+        glow.endPoint = CGPoint(x: 1, y: 1)
+        glow.frame = CGRect(x: point.x - radius, y: point.y - radius, width: radius * 2, height: radius * 2)
+        return glow
     }
 
     private func fade(_ layer: CALayer, opacity: Float) {
@@ -360,7 +436,7 @@ final class CursorEffectLayerView: LoopLayerView {
         guard foreground, settings.effect != .none, activity == .running, !reduced else { return }
         LayerLoop.still {
             let origin = ornament.presentation()?.position ?? point
-            for _ in 0..<Int(12 + settings.intensity * 20) { spark(at: origin, spread: 70) }
+            for _ in 0..<Int(12 + settings.intensity * 20) { spark(at: CGPoint(x: origin.x + 7, y: origin.y + 10), spread: 175) }
             ring(at: origin, finished: false)
         }
     }
@@ -368,11 +444,11 @@ final class CursorEffectLayerView: LoopLayerView {
     private func ring(at origin: CGPoint, finished: Bool) {
         LayerLoop.still {
             let ring = transient()
-            ring.position = origin
+            ring.position = CGPoint(x: origin.x + 7, y: origin.y + 10)
             ring.strokeColor = (finished ? NSColor(Theme.dotOnText) : colour(0.5)).cgColor
             ring.lineWidth = 1
             let opening = CGPath(ellipseIn: CGRect(x: -12, y: -12, width: 24, height: 24), transform: nil)
-            let closing = CGPath(ellipseIn: CGRect(x: -48, y: -48, width: 96, height: 96), transform: nil)
+            let closing = CGPath(ellipseIn: CGRect(x: -77, y: -77, width: 154, height: 154), transform: nil)
             ring.path = closing
             let expand = CABasicAnimation(keyPath: "path")
             expand.fromValue = opening
@@ -385,27 +461,61 @@ final class CursorEffectLayerView: LoopLayerView {
     }
 
     private func addOrbits() {
-        let radius = 22 + settings.intensity * 15
+        let radius = 24 + settings.intensity * 17
+        let center = CGPoint(x: 8, y: 10)
+        ornament.addSublayer(glow(at: center, radius: 18, colour: colour(0).withAlphaComponent(0.1)))
         for index in 0..<2 {
             var tilt = CGAffineTransform(rotationAngle: index == 0 ? -0.5 : 1.1)
-            let ellipse = CGPath(ellipseIn: CGRect(x: -radius, y: -radius * 0.6,
-                                                 width: radius * 2, height: radius * 1.2), transform: &tilt)
+                .concatenating(CGAffineTransform(translationX: center.x, y: center.y))
+            let rx = radius * (index == 0 ? 1 : 1.22)
+            let ry = radius * (index == 0 ? 0.62 : 0.58)
+            let ellipse = CGPath(ellipseIn: CGRect(x: -rx, y: -ry, width: rx * 2, height: ry * 2), transform: &tilt)
             let orbit = shape(path: ellipse, colour: colour(Double(index)), width: 0.7)
-            orbit.opacity = 0.45
+            orbit.name = "orbit-track"
+            orbit.opacity = index == 0 ? 0.35 : 0.25
             ornament.addSublayer(orbit)
-            for satellite in 0..<2 {
-                let dot = shape(path: CGPath(ellipseIn: CGRect(x: -2, y: -2, width: 4, height: 4), transform: nil),
-                                colour: colour(Double(index)), width: 1)
-                dot.fillColor = colour(Double(index)).cgColor
-                let travel = CAKeyframeAnimation(keyPath: "position")
-                travel.path = ellipse
-                travel.calculationMode = .paced
-                travel.duration = Breath.period * Double(index + 2)
-                let loop = LayerLoop.repeating(travel, period: travel.duration)
-                loop.timeOffset += Double(satellite) * travel.duration / 2
-                dot.add(loop, forKey: "orbit")
-                ornament.addSublayer(dot)
-            }
         }
+        let frames = Int(Self.orbitPeriod * 30)
+        var positions: [[CGPoint]] = []
+        for index in 0..<4 {
+            let points = (0...frames).map { frame in
+                satellite(index, phase: Double(frame) / Double(frames), radius: radius)
+            }
+            positions.append(points)
+            let dotRadius = index == 0 ? 2.3 : 1.5
+            let dot = shape(path: CGPath(ellipseIn: CGRect(x: -dotRadius, y: -dotRadius,
+                                                          width: dotRadius * 2, height: dotRadius * 2), transform: nil),
+                            colour: colour(Double(index % 2)), width: 0)
+            dot.name = "orbit-satellite"
+            dot.fillColor = colour(Double(index % 2)).cgColor
+            dot.insertSublayer(glow(at: .zero, radius: 7, colour: colour(0).withAlphaComponent(0.3)), at: 0)
+            let travel = CAKeyframeAnimation(keyPath: "position")
+            travel.values = points.map { NSValue(point: $0) }
+            travel.duration = Self.orbitPeriod
+            dot.add(LayerLoop.repeating(travel, period: Self.orbitPeriod), forKey: "orbit")
+            ornament.addSublayer(dot)
+        }
+        let paths = (0...frames).map { frame in
+            let path = CGMutablePath()
+            path.addLines(between: positions.map { $0[frame] })
+            path.closeSubpath()
+            return path
+        }
+        let constellation = shape(path: paths[0], colour: colour(0).withAlphaComponent(0.14), width: 0.55)
+        let links = CAKeyframeAnimation(keyPath: "path")
+        links.values = paths
+        links.duration = Self.orbitPeriod
+        constellation.add(LayerLoop.repeating(links, period: Self.orbitPeriod), forKey: "constellation")
+        ornament.insertSublayer(constellation, at: 0)
+    }
+
+    private func satellite(_ index: Int, phase: Double, radius: Double) -> CGPoint {
+        let reverse = index.isMultiple(of: 2) ? 1.0 : -1.0
+        let angle = phase * .pi * 2 * Double(6 + index) * reverse + Double(index) * .pi / 2
+        let rx = radius * (index.isMultiple(of: 2) ? 1 : 1.15)
+        let ry = radius * 0.65
+        let tilt = index.isMultiple(of: 2) ? -0.5 : 1.1
+        return CGPoint(x: 8 + cos(angle) * rx * cos(tilt) - sin(angle) * ry * sin(tilt),
+                       y: 10 + cos(angle) * rx * sin(tilt) + sin(angle) * ry * cos(tilt))
     }
 }
