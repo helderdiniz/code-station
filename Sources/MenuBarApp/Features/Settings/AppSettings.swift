@@ -80,6 +80,10 @@ final class AppSettings {
         }
     }
 
+    var cursorEffects: CursorEffectsSettings {
+        didSet { Preferences.setCursorEffects(cursorEffects, in: preferences) }
+    }
+
     var opensWorkingSetByDefault: Bool {
         didSet {
             Preferences.setOpensWorkingSetByDefault(opensWorkingSetByDefault,
@@ -177,6 +181,7 @@ final class AppSettings {
         projectGrouping = Preferences.projectGrouping(in: preferences)
         terminalBundleID = Preferences.terminalBundleID(in: preferences)
         appearance = Preferences.appearance(in: preferences)
+        cursorEffects = Preferences.cursorEffects(in: preferences)
         sidebarIconSet = Preferences.sidebarIconSet(in: preferences)
         opensWorkingSetByDefault = Preferences.opensWorkingSetByDefault(in: preferences)
         hiddenHeaderButtons = Preferences.hiddenHeaderButtons(in: preferences)
@@ -207,6 +212,7 @@ final class AppSettings {
 
     func resetAppearance() {
         appearance = .system
+        cursorEffects = CursorEffectsSettings()
         textSize = .standard
         messageColour = .projectIcon
         diceBearAvatarStyle = .waves

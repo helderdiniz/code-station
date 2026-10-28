@@ -13,6 +13,9 @@ enum SettingsSearchTarget: String, Hashable {
     case generalSkills
     case generalSystem
     case appearanceTheme
+    case appearanceCursorEffects
+    case appearanceText
+    case appearanceMessages
     case appearanceWorkingSet
     case appearanceHeaderButtons
     case appearanceSidebarIcons
@@ -76,9 +79,11 @@ enum SettingsSearchIndex {
                "system open reveal stuck diagnostics"),
         result("Theme", .appearance, .appearanceTheme,
                "appearance system light dark macos"),
-        result("Session text", .appearance, .appearanceTheme,
+        result("Cursor effects", .appearance, .appearanceCursorEffects,
+               "pointer sparks ember aurora orbit none animation reduce motion intensity halo trails"),
+        result("Session text", .appearance, .appearanceText,
                "appearance size small regular large transcript diff terminal"),
-        result("Your messages", .appearance, .appearanceTheme,
+        result("Your messages", .appearance, .appearanceMessages,
                "appearance colour color bubble prompt sent project icon stone paper lemon leaf ink"),
         result("Open working set automatically", .appearance, .appearanceWorkingSet,
                "appearance session layout panel sidebar default first turn agent closed open"),
