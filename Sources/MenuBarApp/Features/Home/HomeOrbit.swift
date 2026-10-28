@@ -817,7 +817,7 @@ struct OrbitHub: View {
                     .frame(width: radius * 2, height: radius * 2)
             }
             VStack(spacing: 2) {
-                Text("\(map.runningCount)")
+                Text("\(map.inProgressCount)")
                     .font(.serif(numberSize, .medium))
                     .monospacedDigit()
                     .foregroundStyle(Theme.accent)
@@ -837,12 +837,12 @@ struct OrbitHub: View {
         }
         .frame(width: side, height: side)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("\(counted(map.runningCount, "session")) working, \(chipText)")
+        .accessibilityLabel("\(counted(map.inProgressCount, "session")) in progress, \(chipText)")
     }
 
     private var caption: String {
         if map.active.isEmpty { return "nothing running" }
-        return map.runningCount == 1 ? "session working" : "sessions working"
+        return map.inProgressCount == 1 ? "session in progress" : "in progress"
     }
 
     private var chipText: String {

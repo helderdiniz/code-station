@@ -108,7 +108,7 @@ struct HomeView: View {
     private func introduction(_ map: HomeWorkMap) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Your work, in motion.").font(.serif(36, .medium))
-            Text("\(counted(map.runningCount, "session")) working. "
+            Text("\(map.progressSummary). "
                  + (map.waiting.isEmpty ? "You're all caught up." : "\(map.waiting.count) need your attention."))
                 .font(.system(size: 13)).foregroundStyle(.secondary)
         }

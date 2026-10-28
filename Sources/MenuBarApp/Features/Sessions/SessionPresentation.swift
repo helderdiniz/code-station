@@ -114,7 +114,17 @@ enum BackgroundTaskPhrase {
     static func of(_ tasks: [BackgroundTask]) -> String {
         guard let first = tasks.first else { return "a background task" }
         guard tasks.count == 1 else { return "\(tasks.count) background tasks" }
-        return first.label
+        return trimmingWait(first.label)
+    }
+
+    // Every caller already says "waiting for", and agents often describe a task as a wait
+    // in their own words, which would read "waiting for Wait for CI".
+    private static func trimmingWait(_ label: String) -> String {
+        for lead in ["waiting for ", "wait for "]
+        where label.lowercased().hasPrefix(lead) && label.count > lead.count {
+            return String(label.dropFirst(lead.count))
+        }
+        return label
     }
 }
 
