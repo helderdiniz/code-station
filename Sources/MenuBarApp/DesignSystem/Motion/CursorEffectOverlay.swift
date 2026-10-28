@@ -56,8 +56,10 @@ final class CursorEffectLayerView: LoopLayerView {
 
     func configure(settings: CursorEffectsSettings, activity: CursorEffectActivity,
                    reduceMotion: Bool) {
-        let changed = self.settings != settings || self.activity != activity || environmentReduced != reduceMotion
+        let appearanceChanged = self.settings != settings || environmentReduced != reduceMotion
+        let changed = appearanceChanged || self.activity != activity
         let wasActive = self.activity == .running || self.activity == .waiting
+        let preserveTrails = !appearanceChanged && wasActive && (activity == .running || activity == .waiting)
         let completed = wasActive && activity == .finished && self.settings.effect == settings.effect
         let presentedPoint = ornament.presentation()?.position ?? point
         self.settings = settings
@@ -65,7 +67,7 @@ final class CursorEffectLayerView: LoopLayerView {
         environmentReduced = reduceMotion
         if changed {
             reduced = reduceMotion || settings.reduceMotion || NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
-            clear()
+            clear(preservingTrails: preserveTrails && !reduced)
             rebuild()
             if completed && foreground && !reduced && settings.effect != .none && pointerInside {
                 ring(at: presentedPoint, finished: true)
@@ -130,13 +132,7 @@ final class CursorEffectLayerView: LoopLayerView {
 
     override func mouseExited(with event: NSEvent) {
         pointerInside = false
-        previous = nil
-        ribbonStart = nil
-        // Existing trails finish their own decay after the pointer leaves.
-        LayerLoop.still {
-            ornament.removeAllAnimations()
-            ornament.sublayers?.forEach { $0.removeFromSuperlayer() }
-        }
+        clear(preservingTrails: true)
     }
 
     override func layoutLayers() {
@@ -225,14 +221,17 @@ final class CursorEffectLayerView: LoopLayerView {
         }
     }
 
-    private func clear() {
+    private func clear(preservingTrails: Bool = false) {
+        previous = nil
         ribbonStart = nil
         LayerLoop.still {
             ornament.removeAllAnimations()
             ornament.sublayers?.forEach { $0.removeFromSuperlayer() }
-            for particle in particles {
-                particle.removeAllAnimations()
-                particle.opacity = 0
+            if !preservingTrails {
+                for particle in particles {
+                    particle.removeAllAnimations()
+                    particle.opacity = 0
+                }
             }
         }
     }

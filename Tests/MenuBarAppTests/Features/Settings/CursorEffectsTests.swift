@@ -206,6 +206,62 @@ struct CursorEffectLayerTests {
         }
     }
 
+    @Test(arguments: [CursorEffect.ember, .aurora, .orbit])
+    func questionPromptLetsTrailsFinishAndResumesWithoutABridge(effect: CursorEffect) throws {
+        guard !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else { return }
+        let view = makeView()
+        configure(view, effect: effect, activity: .running)
+        let start = CACurrentMediaTime()
+        view.movePointer(to: CGPoint(x: 100, y: 100), at: start)
+        view.movePointer(to: CGPoint(x: 120, y: 100), at: start + 1.0 / 60)
+        let trails = layers(view).filter { $0.animation(forKey: "decay") != nil }
+        #expect(!trails.isEmpty)
+
+        configure(view, effect: effect, activity: CursorEffectActivity(session: .streaming, needsInput: true))
+        #expect(trails.allSatisfy { $0.animation(forKey: "decay") != nil })
+        let halo = layers(view).compactMap { $0 as? CAShapeLayer }.filter { mark in
+            !trails.contains { $0 === mark }
+        }
+        #expect(halo.count == 2)
+        for layer in layers(view) {
+            for key in layer.animationKeys() ?? [] {
+                #expect(layer.animation(forKey: key)?.repeatCount == 0)
+            }
+        }
+        view.movePointer(to: CGPoint(x: 350, y: 200), at: start + 2.0 / 60)
+        #expect(layers(view).filter { $0.animation(forKey: "decay") != nil }.count == trails.count)
+
+        configure(view, effect: effect, activity: CursorEffectActivity(session: .streaming, needsInput: false))
+        view.movePointer(to: CGPoint(x: 350, y: 200), at: start + 3.0 / 60)
+        #expect(layers(view).filter { $0.animation(forKey: "decay") != nil }.count == trails.count)
+        #expect(trails.allSatisfy { $0.animation(forKey: "decay") != nil })
+        view.movePointer(to: CGPoint(x: 370, y: 200), at: start + 4.0 / 60)
+        let fresh = layers(view).filter { layer in
+            layer.animation(forKey: "decay") != nil && !trails.contains { $0 === layer }
+        }
+        #expect(!fresh.isEmpty)
+        if effect == .aurora {
+            for ribbon in fresh.compactMap({ $0 as? CAShapeLayer }) {
+                #expect(try #require(ribbon.path).boundingBoxOfPath.minX >= 350)
+            }
+        }
+        configure(view, effect: effect, activity: .waiting)
+        configure(view, effect: .none, activity: .waiting)
+        #expect(animations(view).isEmpty)
+    }
+
+    @Test func enablingReduceMotionAtAQuestionClearsTrailsImmediately() {
+        guard !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else { return }
+        let view = makeView()
+        configure(view, effect: .aurora, activity: .running)
+        let start = CACurrentMediaTime()
+        view.movePointer(to: CGPoint(x: 100, y: 100), at: start)
+        view.movePointer(to: CGPoint(x: 120, y: 100), at: start + 1.0 / 60)
+        #expect(!animations(view).isEmpty)
+        configure(view, effect: .aurora, activity: .waiting, reduced: true)
+        #expect(animations(view).isEmpty)
+    }
+
     @Test func aDifferentSessionStartsWithoutThePreviousSessionsCompletion() {
         let running = makeView()
         configure(running, effect: .orbit, activity: .running)
