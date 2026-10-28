@@ -15,7 +15,7 @@ struct CursorEffectsLayoutTests {
         host.frame = CGRect(x: 0, y: 0, width: width, height: 900)
         host.layoutSubtreeIfNeeded()
         #expect(host.fittingSize.width == width)
-        #expect(host.fittingSize.height < (width < 600 ? 1100 : 700))
+        #expect(host.fittingSize.height < (width < 600 ? 500 : 300))
     }
 
     @Test func rendersAppearanceChoicesForReview() throws {
@@ -33,7 +33,7 @@ struct CursorEffectsLayoutTests {
                     .padding(18).frame(width: 722)
                     .background(Theme.background))
                 host.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
-                host.frame = CGRect(x: 0, y: 0, width: 722, height: 620)
+                host.frame = CGRect(x: 0, y: 0, width: 722, height: 260)
                 host.layoutSubtreeIfNeeded()
                 let bitmap = try #require(host.bitmapImageRepForCachingDisplay(in: host.bounds))
                 host.cacheDisplay(in: host.bounds, to: bitmap)

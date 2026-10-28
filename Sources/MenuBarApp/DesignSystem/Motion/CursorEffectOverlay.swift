@@ -5,10 +5,6 @@ import SwiftUI
 struct CursorEffectOverlay: NSViewRepresentable {
     let settings: CursorEffectsSettings
     let activity: CursorEffectActivity
-    var preview = false
-    var demo = false
-    var flourish = 0
-    var onPointerEntry: () -> Void = {}
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     func makeNSView(context: Context) -> CursorEffectLayerView {
@@ -16,9 +12,7 @@ struct CursorEffectOverlay: NSViewRepresentable {
     }
 
     func updateNSView(_ view: CursorEffectLayerView, context: Context) {
-        view.onPointerEntry = onPointerEntry
-        view.configure(settings: settings, activity: activity,
-                       reduceMotion: reduceMotion, preview: preview, demo: demo, flourish: flourish)
+        view.configure(settings: settings, activity: activity, reduceMotion: reduceMotion)
     }
 
     static func dismantleNSView(_ view: CursorEffectLayerView, coordinator: ()) {
@@ -31,15 +25,11 @@ struct CursorEffectOverlay: NSViewRepresentable {
 final class CursorEffectLayerView: LoopLayerView {
     static let particleLimit = 96
     private static let lifetime = Motion.popDuration * 3
-    private static let demoPeriod = Breath.period * 3
 
     private(set) var settings = CursorEffectsSettings()
     private(set) var activity = CursorEffectActivity.inactive
     private var reduced = false
     private var environmentReduced = false
-    private var preview = false
-    private var demo = false
-    private var flourish = 0
     private var pointerInside = false
     private var point = CGPoint.zero
     private var previous: CGPoint?
@@ -50,15 +40,12 @@ final class CursorEffectLayerView: LoopLayerView {
     private var foreground = false
     private var lastSize = CGSize.zero
     private let ornament = CALayer()
-    private let demoLayers = CALayer()
     private var particles: [CAShapeLayer] = []
     private var nextParticle = 0
-    var onPointerEntry: () -> Void = {}
 
     override init(frame: NSRect) {
         super.init(frame: frame)
         layer?.masksToBounds = true
-        layer?.addSublayer(demoLayers)
         layer?.addSublayer(ornament)
         setAccessibilityElement(false)
     }
@@ -66,29 +53,22 @@ final class CursorEffectLayerView: LoopLayerView {
     convenience init() { self.init(frame: .zero) }
 
     func configure(settings: CursorEffectsSettings, activity: CursorEffectActivity,
-                   reduceMotion: Bool, preview: Bool, demo: Bool, flourish: Int) {
-        let changed = self.settings != settings || self.activity != activity
-            || environmentReduced != reduceMotion || self.preview != preview || self.demo != demo
+                   reduceMotion: Bool) {
+        let changed = self.settings != settings || self.activity != activity || environmentReduced != reduceMotion
         let wasActive = self.activity == .running || self.activity == .waiting
         let completed = wasActive && activity == .finished && self.settings.effect == settings.effect
-        let clicked = self.flourish != flourish
         let presentedPoint = ornament.presentation()?.position ?? point
-        if self.demo && !demo && preview && !pointerInside { point = presentedPoint }
         self.settings = settings
         self.activity = activity
         environmentReduced = reduceMotion
-        self.preview = preview
-        self.demo = demo
-        self.flourish = flourish
         if changed {
             reduced = reduceMotion || settings.reduceMotion || NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
             clear()
             rebuild()
-            if completed && foreground && !reduced && settings.effect != .none && (preview || pointerInside) {
+            if completed && foreground && !reduced && settings.effect != .none && pointerInside {
                 ring(at: presentedPoint, finished: true)
             }
         }
-        if clicked { click() }
     }
 
     override func viewDidMoveToWindow() {
@@ -196,7 +176,7 @@ final class CursorEffectLayerView: LoopLayerView {
             foreground = visible
             previous = nil
             clear()
-            if visible && !preview, let window {
+            if visible, let window {
                 let location = convert(window.mouseLocationOutsideOfEventStream, from: nil)
                 pointerInside = visibleRect.contains(location)
                 if pointerInside { point = location }
@@ -223,7 +203,6 @@ final class CursorEffectLayerView: LoopLayerView {
             pointerInside = true
             previous = nil
             clear()
-            if preview { onPointerEntry() }
         }
         let from = previous ?? location
         point = location
@@ -244,7 +223,6 @@ final class CursorEffectLayerView: LoopLayerView {
         LayerLoop.still {
             ornament.removeAllAnimations()
             ornament.sublayers?.forEach { $0.removeFromSuperlayer() }
-            demoLayers.sublayers?.forEach { $0.removeFromSuperlayer() }
             for particle in particles {
                 particle.removeAllAnimations()
                 particle.opacity = 0
@@ -255,7 +233,7 @@ final class CursorEffectLayerView: LoopLayerView {
     private func rebuild() {
         guard foreground, settings.effect != .none,
               activity == .running || activity == .waiting,
-              pointerInside || preview else { return }
+              pointerInside else { return }
         guard ornament.sublayers?.isEmpty != false else { return }
         LayerLoop.still {
             ornament.position = point
@@ -270,10 +248,6 @@ final class CursorEffectLayerView: LoopLayerView {
                                  colour: colour(0), width: 1)
                 glow.opacity = 0.35
                 ornament.addSublayer(glow)
-            }
-            if preview && !pointerInside {
-                ornament.addSublayer(samplePointer())
-                if demo && activity == .running && !reduced { animateDemo() }
             }
         }
     }
@@ -431,69 +405,6 @@ final class CursorEffectLayerView: LoopLayerView {
                 loop.timeOffset += Double(satellite) * travel.duration / 2
                 dot.add(loop, forKey: "orbit")
                 ornament.addSublayer(dot)
-            }
-        }
-    }
-
-    private func samplePointer() -> CAShapeLayer {
-        let path = CGMutablePath()
-        path.move(to: .zero)
-        path.addLines(between: [CGPoint(x: 14, y: 11), CGPoint(x: 8, y: 12), CGPoint(x: 5, y: 19), .zero])
-        let cursor = shape(path: path, colour: .black, width: 1)
-        cursor.fillColor = NSColor.white.cgColor
-        return cursor
-    }
-
-    private func demoPoint(_ fraction: Double) -> CGPoint {
-        let angle = fraction * .pi * 2
-        return CGPoint(x: bounds.width * (0.57 + cos(angle) * 0.23),
-                       y: bounds.height * (0.54 + sin(angle * 2) * 0.18))
-    }
-
-    private func animateDemo() {
-        let points = (0...120).map { demoPoint(Double($0) / 120) }
-        let travel = CAKeyframeAnimation(keyPath: "position")
-        travel.values = points.map { NSValue(point: $0) }
-        travel.duration = Self.demoPeriod
-        ornament.add(LayerLoop.repeating(travel, period: Self.demoPeriod), forKey: "demo")
-
-        // The demo is a precomputed journey. Each mark shares the cursor's clock, which
-        // makes it a real moving sample without a timer or a display-link callback.
-        let count = Int(16 + settings.intensity * 48)
-        for index in 0..<count {
-            let fraction = Double(index) / Double(count)
-            let origin = demoPoint(fraction)
-            let mark: CAShapeLayer
-            if settings.effect == .aurora {
-                let path = CGMutablePath()
-                path.move(to: origin)
-                path.addLine(to: demoPoint(fraction + 1.0 / Double(count)))
-                mark = shape(path: path, colour: colour(fraction), width: 2 + 6 * settings.intensity)
-            } else {
-                mark = shape(path: CGPath(ellipseIn: CGRect(x: -1, y: -1, width: 2, height: 2), transform: nil),
-                             colour: colour(fraction), width: 1)
-                mark.position = origin
-                mark.fillColor = colour(fraction).cgColor
-            }
-            mark.opacity = 0
-            demoLayers.addSublayer(mark)
-            let opacity = CAKeyframeAnimation(keyPath: "opacity")
-            opacity.values = [0.8, 0, 0]
-            opacity.keyTimes = [0, NSNumber(value: Self.lifetime / Self.demoPeriod), 1]
-            opacity.duration = Self.demoPeriod
-            let loop = LayerLoop.repeating(opacity, period: Self.demoPeriod)
-            loop.timeOffset = (loop.timeOffset + Self.demoPeriod * (1 - fraction)).truncatingRemainder(dividingBy: Self.demoPeriod)
-            mark.add(loop, forKey: "demo-decay")
-            if settings.effect != .aurora {
-                let drift = CAKeyframeAnimation(keyPath: "position")
-                let end = CGPoint(x: origin.x + Double.random(in: -18...18),
-                                  y: origin.y + (settings.effect == .ember ? 28 : 8))
-                drift.values = [NSValue(point: origin), NSValue(point: end), NSValue(point: end)]
-                drift.keyTimes = opacity.keyTimes
-                drift.duration = Self.demoPeriod
-                let flight = LayerLoop.repeating(drift, period: Self.demoPeriod)
-                flight.timeOffset = loop.timeOffset
-                mark.add(flight, forKey: "demo-flight")
             }
         }
     }

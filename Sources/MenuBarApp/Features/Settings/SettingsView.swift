@@ -616,7 +616,6 @@ struct SettingsView: View {
             }
 
             CursorEffectsSection()
-                .padding(.vertical, 10)
                 .id(SettingsSearchTarget.appearanceCursorEffects.id)
 
             SettingsCard {

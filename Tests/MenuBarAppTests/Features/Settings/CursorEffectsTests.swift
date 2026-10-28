@@ -51,14 +51,14 @@ struct CursorEffectsTests {
         #expect(CursorEffectActivity(session: .failed("stopped"), needsInput: false) == .inactive)
     }
 
-    @Test(arguments: ["cursor", "pointer", "sparks", "ember", "aurora", "orbit", "reduce motion", "intensity"])
+    @Test(arguments: ["cursor", "pointer", "sparks", "ember", "aurora", "orbit"])
     func findsCursorEffects(query: String) {
         #expect(SettingsSearchIndex.results(for: query).contains {
             $0.tab == .appearance && $0.target == .appearanceCursorEffects
         })
     }
 
-    @Test func textSearchGoesToTextBelowTheCursorPreview() {
+    @Test func textSearchGoesToTextBelowTheCursorEffects() {
         #expect(SettingsSearchIndex.results(for: "session text").first?.target == .appearanceText)
     }
 
@@ -66,8 +66,7 @@ struct CursorEffectsTests {
         let view = CursorEffectLayerView(frame: CGRect(x: 0, y: 0, width: 500, height: 300))
         for effect in CursorEffect.allCases {
             for activity: CursorEffectActivity in [.running, .waiting, .finished, .inactive] {
-                view.configure(settings: CursorEffectsSettings(effect: effect), activity: activity,
-                               reduceMotion: false, preview: true, demo: true, flourish: 1)
+                view.configure(settings: CursorEffectsSettings(effect: effect), activity: activity, reduceMotion: false)
                 #expect(view.hitTest(CGPoint(x: 30, y: 30)) == nil)
                 #expect(animations(in: view.layer).isEmpty)
             }
@@ -84,26 +83,21 @@ struct CursorEffectsTests {
 
 @MainActor
 struct CursorEffectLayerTests {
-    @Test func noneSuppressesEveryStateAndFlourish() {
+    @Test func noneSuppressesEveryState() {
         let view = makeView()
-        var flourish = 0
         for state: CursorEffectActivity in [.running, .waiting, .finished, .running, .inactive] {
-            flourish += 1
-            configure(view, effect: .none, activity: state, demo: true, flourish: flourish)
+            configure(view, effect: .none, activity: state)
             view.movePointer(to: CGPoint(x: 100, y: 100))
             #expect(animations(view).isEmpty)
-            #expect(layers(view).count == 3)
+            #expect(layers(view).count == 2)
         }
     }
 
     @Test(arguments: [CursorEffect.ember, .aurora, .orbit], [false, true])
     func reducedMotionHasStillHalosAndNoCompletionBurst(effect: CursorEffect, userPreference: Bool) {
         let view = makeView()
-        var flourish = 0
         for state: CursorEffectActivity in [.running, .waiting, .finished] {
-            flourish += 1
-            configure(view, effect: effect, activity: state, reduced: !userPreference, demo: true,
-                      flourish: flourish, userReduced: userPreference)
+            configure(view, effect: effect, activity: state, reduced: !userPreference, userReduced: userPreference)
             view.movePointer(to: CGPoint(x: 100, y: 100))
             #expect(animations(view).isEmpty)
             let marks = layers(view).compactMap { $0 as? CAShapeLayer }
@@ -114,10 +108,7 @@ struct CursorEffectLayerTests {
     @Test(arguments: [CursorEffect.ember, .aurora, .orbit])
     func movementIsBoundedAndWindowChangesRemoveAllAnimations(effect: CursorEffect) {
         let view = makeView()
-        configure(view, effect: effect, activity: .running, demo: true)
-        if !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
-            #expect(!animations(view).isEmpty)
-        }
+        configure(view, effect: effect, activity: .running)
         let start = CACurrentMediaTime()
         for index in 0..<500 {
             view.movePointer(to: CGPoint(x: 30 + index * 13 % 400, y: 50 + index * 17 % 200),
@@ -160,7 +151,8 @@ struct CursorEffectLayerTests {
 
     @Test func aDifferentSessionStartsWithoutThePreviousSessionsCompletion() {
         let running = makeView()
-        configure(running, effect: .orbit, activity: .running, demo: true)
+        configure(running, effect: .orbit, activity: .running)
+        running.movePointer(to: CGPoint(x: 100, y: 100))
         running.stop()
         let finished = makeView()
         configure(finished, effect: .orbit, activity: .finished)
@@ -185,10 +177,9 @@ struct CursorEffectLayerTests {
     }
 
     private func configure(_ view: CursorEffectLayerView, effect: CursorEffect,
-                           activity: CursorEffectActivity, reduced: Bool = false, demo: Bool = false,
-                           flourish: Int = 0, userReduced: Bool = false) {
+                           activity: CursorEffectActivity, reduced: Bool = false, userReduced: Bool = false) {
         view.configure(settings: CursorEffectsSettings(effect: effect, reduceMotion: userReduced), activity: activity,
-                       reduceMotion: reduced, preview: true, demo: demo, flourish: flourish)
+                       reduceMotion: reduced)
     }
 
     private func layers(_ view: CursorEffectLayerView) -> [CALayer] {
