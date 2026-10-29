@@ -684,14 +684,14 @@ struct ExplorerView: View {
                     if let node = selected {
                         breadcrumbs(node, inset: inset)
                         let header = compact
-                            ? AnyLayout(VStackLayout(alignment: .trailing, spacing: 9))
+                            ? AnyLayout(VStackLayout(alignment: .trailing, spacing: 3))
                             : AnyLayout(HStackLayout(spacing: 16))
                         header {
                             fileTitle(node, compact: compact)
                             fileActions(node, compact: compact)
                         }
-                        .padding(.horizontal, inset).padding(.vertical, 12)
-                        .frame(minWidth: 0, maxWidth: .infinity, minHeight: 60, alignment: .leading)
+                        .padding(.horizontal, inset).padding(.vertical, compact ? 5 : 4)
+                        .frame(minWidth: 0, maxWidth: .infinity, minHeight: compact ? 65 : 36, alignment: .leading)
                         if findPresented {
                             findBar.transition(reduceMotion ? AnyTransition.opacity.animation(Motion.reveal) : .fold)
                         }
@@ -830,7 +830,7 @@ struct ExplorerView: View {
                     .background(Theme.field, in: RoundedRectangle(cornerRadius: 6))
             }
         }
-        .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
+        .frame(minWidth: 0, maxWidth: .infinity, minHeight: compact ? 24 : nil, alignment: .leading)
     }
 
     private func fileActions(_ node: FileNode, compact: Bool) -> some View {

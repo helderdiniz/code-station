@@ -5,7 +5,8 @@ import Testing
 
 @MainActor
 struct ExplorerHeaderTests {
-    @Test func longNamesAndSourceLinesStayInsideTheEditor() async throws {
+    @Test(arguments: [false, true])
+    func longNamesAndSourceLinesStayInsideTheEditor(reduceMotion: Bool) async throws {
         let scratch = ScratchDirectory(prefix: "explorer-header")
         let root = scratch.url.resolvingSymlinksInPath()
         let name = String(repeating: "LongFilename", count: 10) + "ChartTool.java"
@@ -20,6 +21,7 @@ struct ExplorerHeaderTests {
                         for: root.path)
         let dialogs = DialogPresenter()
         let hosting = NSHostingController(rootView: ExplorerView(root: root.path)
+            .environment(\._accessibilityReduceMotion, reduceMotion)
             .environment(memory).environment(dialogs).appOverlays())
         hosting.sizingOptions = []
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1100, height: 700),
@@ -47,16 +49,28 @@ struct ExplorerHeaderTests {
                     && $0.convert($0.bounds, to: hosting.view).minY > 78
             })
             let titleFrame = title.convert(title.bounds, to: hosting.view)
-            let inset: CGFloat = viewport.width < 530 ? 16 : 20
+            let compact = viewport.width < 530
+            let inset: CGFloat = compact ? 16 : 20
+            let padding: CGFloat = compact ? 5 : 4
+            let toolbarHeight: CGFloat = compact ? 65 : 36
+            let breadcrumbs = try #require(views(in: hosting.view).compactMap { $0 as? NSScrollView }
+                .map { $0.convert($0.bounds, to: hosting.view) }
+                .filter { $0.minX == viewport.minX && $0.width == viewport.width && $0.maxY < viewport.minY }
+                .max { $0.maxY < $1.maxY })
+            #expect(viewport.minY - breadcrumbs.maxY == toolbarHeight)
             #expect(titleFrame.minX >= viewport.minX + inset)
             #expect(titleFrame.maxX <= viewport.maxX - inset + 1)
             #expect(titleFrame.width > 0)
+            #expect(titleFrame.minY >= breadcrumbs.maxY + padding)
+            #expect(titleFrame.maxY <= viewport.minY - padding)
             for label in ["Find in file (Cmd+F or Ctrl+F)", "Pin file", "File details", "File actions"] {
                 let action = try #require(views(in: hosting.view).first { $0.identifier?.rawValue == label })
                 let frame = action.convert(action.bounds, to: hosting.view)
                 #expect(frame.minX >= viewport.minX + inset)
                 #expect(frame.maxX <= viewport.maxX - inset + 1)
-                if viewport.width < 530 { #expect(frame.minY >= titleFrame.maxY) }
+                #expect(frame.size == NSSize(width: 28, height: 28))
+                #expect(frame.maxY == viewport.minY - padding)
+                if compact { #expect(frame.minY >= titleFrame.maxY + 3) }
                 else { #expect(abs(frame.midY - titleFrame.midY) < 1) }
             }
             let footer = NSRect(x: viewport.minX, y: viewport.maxY,
@@ -71,7 +85,8 @@ struct ExplorerHeaderTests {
             #expect(try snapshot(hosting.view, rect: footer) == before)
             if let destination = ProcessInfo.processInfo.environment["EXPLORER_REVIEW_DIRECTORY"] {
                 try snapshot(hosting.view, rect: hosting.view.bounds)
-                    .write(to: URL(fileURLWithPath: destination).appendingPathComponent("long-name-\(Int(width))\(suffix).png"))
+                    .write(to: URL(fileURLWithPath: destination).appendingPathComponent(
+                        "long-name-\(Int(width))\(suffix)\(reduceMotion ? "-reduced-motion" : "").png"))
             }
         }
         for width: CGFloat in [1100, 831, 830, 600, 541, 540, 400, 320, 280] {
