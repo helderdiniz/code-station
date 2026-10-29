@@ -29,6 +29,9 @@ struct NewSessionView: View {
     // The folder's uncommitted work is copied into the worktree. Off until asked for,
     // since the work may well be meant to stay where it is.
     @State private var carryChanges = false
+    // The folder's default branch is moved up to the remote tip the worktree forks
+    // from. Off until asked for, since it changes the folder.
+    @State private var updateDefaultBranch = false
     // The update is running. The sheet stays up until it finishes, so the whole screen
     // goes quiet: a click anywhere while git works could only start the same work twice
     // or abandon it half done.
@@ -61,6 +64,7 @@ struct NewSessionView: View {
                     SessionProjectCard(project: project, usesWorktree: useWorktree,
                                        report: freshness, startPoint: $startPoint,
                                        carryChanges: $carryChanges,
+                                       updateDefaultBranch: $updateDefaultBranch,
                                        selectWorktree: selectWorktree,
                                        selectProjectFolder: selectProjectFolder,
                                        onChoose: { startPointWasChosen = true })
@@ -80,7 +84,7 @@ struct NewSessionView: View {
             .frame(maxHeight: 470)
 
             NewSessionFooter(sessionID: sessionID,
-                             note: SessionCreationImpact(updates: startPoint == .updateCheckout && freshness?.canUpdateCheckout == true ? 1 : 0,
+                             note: SessionCreationImpact(updates: updatesCheckout || fastForwardsDefaultBranch ? 1 : 0,
                                                          worktrees: useWorktree ? 1 : 0).text,
                              fetching: fetching,
                              updating: pulling ? (freshness?.defaultBranch ?? "the checkout") : nil,
@@ -155,9 +159,19 @@ struct NewSessionView: View {
     // still going, or free to be started again. On failure the sheet stays for another
     // try or a cancel.
     private func create() {
+        if fastForwardsDefaultBranch, let branch = freshness?.defaultBranch,
+           let remote = freshness?.remoteRef {
+            pulling = true
+            Task {
+                let error = await GitActions.fastForwardBranch(branch, to: remote, at: project.path)
+                pulling = false
+                guard let error else { return finish() }
+                dialogs.show(.fastForwardFailure(error, branch: branch) { finish() })
+            }
+            return
+        }
         // Checked while the option was on screen, and still safe to apply now.
-        guard startPoint == .updateCheckout, let report = freshness, report.canUpdateCheckout,
-              let branch = report.defaultBranch else {
+        guard updatesCheckout, let report = freshness, let branch = report.defaultBranch else {
             finish()
             return
         }
@@ -174,6 +188,15 @@ struct NewSessionView: View {
             }
             finish()
         }
+    }
+
+    private var updatesCheckout: Bool {
+        startPoint == .updateCheckout && freshness?.canUpdateCheckout == true
+    }
+
+    private var fastForwardsDefaultBranch: Bool {
+        useWorktree && startPoint == .remote && updateDefaultBranch
+            && freshness?.canFastForwardDefaultBranch == true
     }
 
     private func finish() {
@@ -232,6 +255,7 @@ struct FreshnessNotice: View {
     let projectPath: String
     @Binding var startPoint: SessionStartPoint
     @Binding var carryChanges: Bool
+    @Binding var updateDefaultBranch: Bool
     let onChoose: () -> Void
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -251,6 +275,12 @@ struct FreshnessNotice: View {
     }
 
     private var offersCarry: Bool { forWorktree && report.dirty }
+
+    // Only beside the remote tip: that is the choice which leaves the folder alone, and
+    // the one whose base the default branch would be moved up to.
+    private var offersFastForward: Bool {
+        forWorktree && startPoint == .remote && report.canFastForwardDefaultBranch
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -281,12 +311,17 @@ struct FreshnessNotice: View {
                         choice(.remote,
                                title: "Start from \(remote)",
                                detail: remoteDetail)
+                        if offersFastForward {
+                            fastForwardToggle
+                                .transition(reduceMotion ? .opacity : .fadeIn)
+                        }
                     }
                     if report.canUpdateCheckout, let title = updateTitle {
                         choice(.updateCheckout, title: title, detail: updateDetail)
                     }
                     choice(.currentCheckout, title: currentTitle, detail: currentDetail)
                 }
+                .motion(Motion.reveal, value: offersFastForward)
             }
             if offersCarry {
                 carryToggle
@@ -329,6 +364,24 @@ struct FreshnessNotice: View {
         .motion(Motion.reveal, value: carryChanges)
         .padding(.leading, 19)
         .padding(.top, 2)
+    }
+
+    private var fastForwardToggle: some View {
+        let branch = report.defaultBranch ?? "the default branch"
+        return VStack(alignment: .leading, spacing: 4) {
+            Toggle(isOn: $updateDefaultBranch) {
+                Text("Also update \(branch) to \(report.remoteRef ?? "the remote branch")")
+                    .font(.system(size: 12, weight: .semibold))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .toggleStyle(.appCheckbox)
+            Text("Moves \(branch) forward \(counted(report.defaultBranchBehind, "commit")) in the project folder. The uncommitted changes stay in place.")
+                .font(.system(size: 11.5))
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.leading, 24)
+        }
+        .padding(.leading, 39)
     }
 
     private var carryStatus: (text: String, warns: Bool)? {

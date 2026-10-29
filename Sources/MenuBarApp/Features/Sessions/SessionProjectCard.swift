@@ -7,6 +7,7 @@ struct SessionProjectCard: View {
     let report: GitFreshness.Report?
     @Binding var startPoint: SessionStartPoint
     @Binding var carryChanges: Bool
+    @Binding var updateDefaultBranch: Bool
     let selectWorktree: () -> Void
     let selectProjectFolder: () -> Void
     let onChoose: () -> Void
@@ -54,7 +55,8 @@ struct SessionProjectCard: View {
                 Rectangle().fill(Theme.attention.opacity(0.38)).frame(height: 1)
                 FreshnessNotice(report: report, forWorktree: usesWorktree,
                                 projectPath: project.path, startPoint: $startPoint,
-                                carryChanges: $carryChanges, onChoose: onChoose)
+                                carryChanges: $carryChanges,
+                                updateDefaultBranch: $updateDefaultBranch, onChoose: onChoose)
             }
         }
         .background(Theme.card)

@@ -210,6 +210,33 @@ enum GitActions {
         }
     }
 
+    // Moves `branch` up to `target` without stashing, so the folder's uncommitted work is
+    // never at risk. On the checked-out branch git refuses outright when an incoming
+    // commit would change a file the work also changes. Any other branch moves as a bare
+    // ref, which never touches the working tree; going through fetch rather than
+    // update-ref keeps git's own guards against a move that is not a fast-forward and
+    // against moving a branch another worktree has checked out.
+    static func fastForwardBranch(_ branch: String, to target: String,
+                                  at root: String) async -> String? {
+        guard let tool = await GitInspector.tool() else {
+            return "Could not find git on PATH."
+        }
+        let url = URL(fileURLWithPath: root)
+        return await GitInspector.offMain {
+            guard !GitBranches.blocksOtherActions(tool, url) else {
+                return "Finish or abort the current operation in Branches before updating \(branch)."
+            }
+            let current = GitInspector.run(
+                tool, ["symbolic-ref", "--quiet", "--short", "HEAD"], in: url)
+            let moved = current.ok && current.trimmedText == branch
+                ? GitInspector.run(tool, ["merge", "--ff-only", "--no-autostash", target], in: url)
+                : GitInspector.run(
+                    tool, ["fetch", "--quiet", ".", "refs/remotes/\(target):refs/heads/\(branch)"],
+                    in: url)
+            return moved.ok ? nil : moved.failureMessage
+        }
+    }
+
     // A branch with no upstream yet, which is every session worktree branch, is published
     // to origin under its own name and starts tracking it. Replacing origin's copy is
     // pinned to the tip the review showed, so if anyone moved it since, origin refuses

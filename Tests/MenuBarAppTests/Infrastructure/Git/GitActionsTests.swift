@@ -648,6 +648,92 @@ struct GitActionsTests {
         #expect(second.revision("main") == mainBefore)
     }
 
+    @Test func fastForwardBranchKeepsUncommittedWorkOnTheCheckedOutBranch() async throws {
+        let remote = try GitRepo.bare()
+        let first = try GitRepo()
+        try first.addRemote(remote)
+        try first.git("push", "-q", "-u", "origin", "HEAD")
+
+        let second = try remote.clone()
+        try first.write("remote.txt", "from origin")
+        try first.git("add", ".")
+        try first.git("commit", "-qm", "remote work")
+        try first.git("push", "-q")
+        try second.git("fetch", "-q")
+        try second.write("README.md", "uncommitted")
+
+        let error = await GitActions.fastForwardBranch("main", to: "origin/main", at: second.path)
+        #expect(error == nil)
+        #expect(second.revision("main") == second.revision("origin/main"))
+        #expect(second.read("remote.txt") == "from origin")
+        #expect(second.read("README.md") == "uncommitted")
+        #expect(try second.git("stash", "list").isEmpty)
+    }
+
+    // Git refuses rather than stash, so the work is left exactly as it was.
+    @Test func fastForwardBranchRefusesWhenTheWorkTouchesAnIncomingFile() async throws {
+        let remote = try GitRepo.bare()
+        let first = try GitRepo()
+        try first.addRemote(remote)
+        try first.git("push", "-q", "-u", "origin", "HEAD")
+
+        let second = try remote.clone()
+        try first.write("README.md", "remote version")
+        try first.git("commit", "-qam", "remote edit")
+        try first.git("push", "-q")
+        try second.git("fetch", "-q")
+        let mainBefore = second.revision("main")
+        try second.write("README.md", "uncommitted")
+
+        let error = await GitActions.fastForwardBranch("main", to: "origin/main", at: second.path)
+        #expect(error?.contains("README.md") == true)
+        #expect(second.revision("main") == mainBefore)
+        #expect(second.read("README.md") == "uncommitted")
+    }
+
+    @Test func fastForwardBranchMovesABranchThatIsNotCheckedOut() async throws {
+        let remote = try GitRepo.bare()
+        let first = try GitRepo()
+        try first.addRemote(remote)
+        try first.git("push", "-q", "-u", "origin", "HEAD")
+
+        let second = try remote.clone()
+        try second.git("switch", "-qc", "feature")
+        try second.write("README.md", "uncommitted")
+        try first.write("README.md", "remote version")
+        try first.git("commit", "-qam", "remote edit")
+        try first.git("push", "-q")
+        try second.git("fetch", "-q")
+
+        let error = await GitActions.fastForwardBranch("main", to: "origin/main", at: second.path)
+        #expect(error == nil)
+        #expect(second.revision("main") == second.revision("origin/main"))
+        #expect(try second.git("rev-parse", "--abbrev-ref", "HEAD") == "feature")
+        #expect(second.read("README.md") == "uncommitted")
+    }
+
+    @Test func fastForwardBranchRefusesToDropLocalCommits() async throws {
+        let remote = try GitRepo.bare()
+        let first = try GitRepo()
+        try first.addRemote(remote)
+        try first.git("push", "-q", "-u", "origin", "HEAD")
+
+        let second = try remote.clone()
+        try second.write("local.txt", "local")
+        try second.git("add", ".")
+        try second.git("commit", "-qm", "local work")
+        let mainBefore = second.revision("main")
+        try second.git("switch", "-qc", "feature")
+        try first.write("README.md", "remote version")
+        try first.git("commit", "-qam", "remote edit")
+        try first.git("push", "-q")
+        try second.git("fetch", "-q")
+
+        let error = await GitActions.fastForwardBranch("main", to: "origin/main", at: second.path)
+        #expect(error != nil)
+        #expect(second.revision("main") == mainBefore)
+    }
+
     @Test func snapshotListsBranchesAndCountsDrift() async throws {
         let repo = try GitRepo()
         let remote = try GitRepo.bare()
