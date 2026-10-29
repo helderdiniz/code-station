@@ -26,6 +26,9 @@ struct NewSessionView: View {
     // shown as choices instead of making an unchecked pair of boxes mean a third answer.
     @State private var startPoint: SessionStartPoint = .currentCheckout
     @State private var startPointWasChosen = false
+    // The folder's uncommitted work is copied into the worktree. Off until asked for,
+    // since the work may well be meant to stay where it is.
+    @State private var carryChanges = false
     // The update is running. The sheet stays up until it finishes, so the whole screen
     // goes quiet: a click anywhere while git works could only start the same work twice
     // or abandon it half done.
@@ -57,6 +60,7 @@ struct NewSessionView: View {
                 VStack(alignment: .leading, spacing: 14) {
                     SessionProjectCard(project: project, usesWorktree: useWorktree,
                                        report: freshness, startPoint: $startPoint,
+                                       carryChanges: $carryChanges,
                                        selectWorktree: selectWorktree,
                                        selectProjectFolder: selectProjectFolder,
                                        onChoose: { startPointWasChosen = true })
@@ -177,7 +181,9 @@ struct NewSessionView: View {
         let base = startPoint == .remote ? freshness?.remoteRef : nil
         let model = runner.defaults(for: agent).model
         onCreate(useWorktree
-                 ? .worktree(sessionID, base: base, agent: agent, model: model,
+                 ? .worktree(sessionID, base: base,
+                             carryChanges: carryChanges && freshness?.dirty == true,
+                             agent: agent, model: model,
                              agentAvatarName: selectedAvatarName, mode: .chat)
                  : .folder(sessionID, agent: agent, model: model,
                            agentAvatarName: selectedAvatarName, mode: .chat))
@@ -202,11 +208,12 @@ enum SessionStartPoint: Equatable {
 }
 
 // What the sheet came back with. The worktree case carries the id the session must be
-// created with, since the branch and folder shown were named after it, and the ref to
-// fork from when the user chose the remote tip over their own checkout. The agent and
-// model become part of the session record. Any requested pull has already run by then.
+// created with, since the branch and folder shown were named after it, the ref to fork
+// from when the user chose the remote tip over their own checkout, and whether the
+// folder's uncommitted work is copied in. The agent and model become part of the
+// session record. Any requested pull has already run by then.
 enum NewSessionChoice: Equatable {
-    case worktree(UUID, base: String?, agent: AgentKind, model: String?,
+    case worktree(UUID, base: String?, carryChanges: Bool, agent: AgentKind, model: String?,
                   agentAvatarName: String?, mode: SessionMode)
     case folder(UUID, agent: AgentKind, model: String?, agentAvatarName: String?,
                 mode: SessionMode)
@@ -215,16 +222,35 @@ enum NewSessionChoice: Equatable {
 // Says when the checkout a session would fork from is not the default branch at its
 // latest revision, and offers the fixes the sheet can apply itself: a worktree can fork
 // from the remote tip without touching the user's checkout, and a clean checkout can be
-// put on the default branch at that same tip first. A dirty folder only warns; saved or
-// dropped, the uncommitted work is the user's to deal with. Both new-session sheets show
-// it: the single-project one once, the workspace one per repository.
+// put on the default branch at that same tip first. A dirty folder is never changed: a
+// worktree can take a copy of the uncommitted work, and when that copy would clash with
+// the base, the files are named here before the session is made. Both new-session
+// sheets show it: the single-project one once, the workspace one per repository.
 struct FreshnessNotice: View {
     let report: GitFreshness.Report
     let forWorktree: Bool
+    let projectPath: String
     @Binding var startPoint: SessionStartPoint
+    @Binding var carryChanges: Bool
     let onChoose: () -> Void
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    // Nil while the check runs, or when there is nothing to check.
+    @State private var preview: GitCarryOver.Preview?
+
+    private struct PreviewRequest: Equatable {
+        let carry: Bool
+        let base: String?
+        let report: GitFreshness.Report
+    }
+
+    // Only the remote tip can clash: a worktree from the folder's own commit is the
+    // commit the work was written on.
+    private var carryBase: String? {
+        startPoint == .remote ? report.remoteRef : nil
+    }
+
+    private var offersCarry: Bool { forWorktree && report.dirty }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -241,7 +267,7 @@ struct FreshnessNotice: View {
                     }
                     if report.dirty {
                         Text(forWorktree
-                             ? "Uncommitted changes in the project folder stay behind: a worktree starts from the last commit."
+                             ? "The project folder has uncommitted changes. A worktree starts from the last commit, so they stay behind unless you bring them along."
                              : "The project folder has uncommitted changes. This session edits them directly.")
                             .font(.system(size: 12))
                             .foregroundStyle(.secondary)
@@ -262,12 +288,69 @@ struct FreshnessNotice: View {
                     choice(.currentCheckout, title: currentTitle, detail: currentDetail)
                 }
             }
+            if offersCarry {
+                carryToggle
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(14)
         .background(Theme.attention.opacity(0.10))
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Checkout start point")
+        .task(id: PreviewRequest(carry: carryChanges && offersCarry, base: carryBase,
+                                 report: report)) {
+            preview = nil
+            guard carryChanges, offersCarry, let base = carryBase else { return }
+            let result = await GitCarryOver.preview(at: projectPath, onto: base)
+            if !Task.isCancelled { preview = result }
+        }
+    }
+
+    private var carryToggle: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Toggle(isOn: $carryChanges) {
+                Text("Bring the uncommitted changes into the worktree")
+                    .font(.system(size: 12, weight: .semibold))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .toggleStyle(.appCheckbox)
+            if carryChanges, let status = carryStatus {
+                Text(status.text)
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(status.warns ? AnyShapeStyle(Theme.attentionText)
+                                                  : AnyShapeStyle(.secondary))
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.leading, 24)
+                    .contentTransition(.opacity)
+                    .motion(Motion.control, value: status.text)
+                    .transition(reduceMotion ? .opacity : .fadeIn)
+            }
+        }
+        .motion(Motion.reveal, value: carryChanges)
+        .padding(.leading, 19)
+        .padding(.top, 2)
+    }
+
+    private var carryStatus: (text: String, warns: Bool)? {
+        let kept = "The project folder keeps them too."
+        guard let base = carryBase else {
+            return ("They apply cleanly, since the worktree starts from the same commit. \(kept)", false)
+        }
+        switch preview {
+        case nil:
+            return ("Checking them against \(base)…", false)
+        case .clean:
+            return ("They apply cleanly on top of \(base). \(kept)", false)
+        case .unknown:
+            return ("Could not check them against \(base) ahead of time. Any clash is left as conflict markers for the session to resolve.", true)
+        case .clashes(let files):
+            let shown = files.prefix(3).joined(separator: ", ")
+                + (files.count > 3 ? " and \(files.count - 3) more" : "")
+            let avoid = report.currentBranch.map { " Start from \($0) as it is to avoid this." } ?? ""
+            return ("\(counted(files.count, "file")) clash with \(base): \(shown). "
+                    + "They start with conflict markers, and the session is asked to resolve them."
+                    + avoid, true)
+        }
     }
 
     private func choice(_ value: SessionStartPoint, title: String, detail: String) -> some View {

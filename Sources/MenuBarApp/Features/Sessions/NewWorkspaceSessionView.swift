@@ -30,6 +30,8 @@ struct NewWorkspaceSessionView: View {
     // repositories with nothing to reconcile.
     @State private var startPoints: [UUID: SessionStartPoint] = [:]
     @State private var chosenStartPoints: Set<UUID> = []
+    // Repositories whose uncommitted work is copied into their new worktree.
+    @State private var carried: Set<UUID> = []
     // Fetch passes still running, which hold the footer's button.
     @State private var activeFetches = 0
     // A requested pull is running. The sheet stays up and quiet until it finishes, since
@@ -138,6 +140,9 @@ struct NewWorkspaceSessionView: View {
         return SessionProjectCard(
             project: project, lead: lead, usesWorktree: usesWorktree,
             report: freshness[project.id], startPoint: startPoint(project.id),
+            carryChanges: Binding(get: { carried.contains(project.id) }, set: { carry in
+                if carry { carried.insert(project.id) } else { carried.remove(project.id) }
+            }),
             selectWorktree: {
                 worktrees.insert(project.id)
                 selectRecommendedStartPoint(for: project.id)
@@ -210,6 +215,7 @@ struct NewWorkspaceSessionView: View {
         worktrees.remove(id)
         startPoints.removeValue(forKey: id)
         chosenStartPoints.remove(id)
+        carried.remove(id)
     }
 
     private var chosenAgent: AgentKind? {
@@ -256,7 +262,9 @@ struct NewWorkspaceSessionView: View {
             } ?? false
             let base = useWorktree && startPoints[id] == .remote
                 ? freshness[id]?.remoteRef : nil
-            return WorkspaceProjectChoice(projectID: id, useWorktree: useWorktree, base: base)
+            return WorkspaceProjectChoice(
+                projectID: id, useWorktree: useWorktree, base: base,
+                carryChanges: useWorktree && carried.contains(id) && freshness[id]?.dirty == true)
         }
         onCreate(WorkspaceSessionChoice(sessionID: sessionID, projects: choices,
                                         agent: agent,
@@ -282,4 +290,6 @@ struct WorkspaceProjectChoice: Equatable {
     // The ref this project's worktree forks from; without one it forks from whatever
     // the project folder has checked out.
     var base: String? = nil
+    // The project folder's uncommitted work is copied into the new worktree.
+    var carryChanges = false
 }
