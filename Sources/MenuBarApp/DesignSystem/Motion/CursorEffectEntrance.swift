@@ -88,24 +88,130 @@ enum CursorEffectEntrance {
                  smooth(p / 0.16) * (1 - smooth((p - 0.66) / 0.34)))
             }
         case .aurora:
-            glow(radius: 55, tint: colour(0)) { sin(.pi * $0) * 0.13 }
-            let bands = Int(3 + intensity * 8)
-            for index in 0..<bands {
-                for broad in [true, false] {
-                    mark("entrance-band", tint: colour(Double(index % 3) / 2), width: broad ? 9 : 1) { p in
-                        let fold = ease((p - 0.35) / 0.65)
+            let release = Motion.popDuration * 2
+            let gather = release - Motion.leaveDuration
+            let fadeDuration = duration - release - Motion.revealDuration
+            let center = CGPoint(x: 7, y: 10)
+
+            func point(_ angle: Double, _ radius: Double, flat: Double = 1) -> CGPoint {
+                CGPoint(x: center.x + cos(angle) * radius * extent,
+                        y: center.y + sin(angle) * radius * flat * extent)
+            }
+            func burst(_ p: Double) -> (travel: Double, drift: Double, opacity: Double, flash: Double) {
+                let time = p * duration - release
+                let ignition = smooth(time / (Motion.controlDuration / 10))
+                let fadeDelay = Motion.leaveDuration * 2 / 3
+                let fade = 1 - smooth((time - fadeDelay) / (duration - release - fadeDelay))
+                return (ease(time / Motion.revealDuration),
+                        ease((time - Motion.revealDuration) / fadeDuration),
+                        ignition * fade,
+                        ignition * fade * exp(-pow((time - Motion.revealDuration / 5) / (Motion.revealDuration / 2), 2)))
+            }
+            func novaGlow(_ name: String, colours: [NSColor], stops: [NSNumber],
+                          frame: (Double) -> (radius: Double, opacity: Double)) {
+                let layer = CAGradientLayer()
+                layer.name = name
+                layer.contentsScale = scale
+                layer.type = .radial
+                layer.colors = colours.map(\.cgColor)
+                layer.locations = stops
+                layer.startPoint = CGPoint(x: 0.5, y: 0.5)
+                layer.endPoint = CGPoint(x: 1, y: 1)
+                layer.position = center
+                func bounds(_ radius: Double) -> CGRect {
+                    CGRect(x: 0, y: 0, width: radius * extent * 2, height: radius * extent * 2)
+                }
+                let selected = frame(inspectionProgress ?? 1)
+                layer.bounds = bounds(selected.radius)
+                layer.opacity = Float(clamp(selected.opacity * brightness))
+                if inspectionProgress == nil {
+                    let frames = progress.map(frame)
+                    animate(layer, "bounds", values: frames.map { NSValue(rect: bounds($0.radius)) })
+                    animate(layer, "opacity", values: frames.map { clamp($0.opacity * brightness) })
+                }
+                root.addSublayer(layer)
+            }
+
+            novaGlow("entrance-charge-glow", colours: [colour(0.75), colour(0.5).withAlphaComponent(0.32),
+                     colour(0.3).withAlphaComponent(0)], stops: [0, 0.3, 1]) { p in
+                (37, smooth(p * duration / (gather * 0.45))
+                    * (1 - smooth((p * duration - release) / Motion.leaveDuration)) * 0.34)
+            }
+            let coreColours = [colour(0.2).blended(withFraction: 0.82, of: .white)!,
+                               colour(0.2).withAlphaComponent(0.7), colour(0.5).withAlphaComponent(0.32),
+                               colour(0.9).withAlphaComponent(0.1), colour(0.9).withAlphaComponent(0)]
+            novaGlow("entrance-charge-core", colours: coreColours, stops: [0, 0.12, 0.36, 0.7, 1]) { p in
+                (25, smooth((p * duration / gather - 0.65) / 0.35)
+                    * (1 - smooth((p * duration - release) / Motion.leaveDuration)) * 0.5)
+            }
+            for index in 0..<12 {
+                let angle = Double(index) * .pi * 2 / 12 + noise(index) * 0.24
+                mark("entrance-charge-wisp", tint: colour(noise(index + 9)), width: 0.7) { p in
+                    let charge = clamp(p * duration / gather)
+                    let reach = 34 + (1 - ease(charge)) * (35 + noise(index + 4) * 25)
+                    let path = CGMutablePath()
+                    for step in 0...17 {
+                        let t = Double(step) / 17
+                        let location = point(angle + sin(t * .pi) * 0.18, reach + (11 - reach) * t)
+                        if step == 0 { path.move(to: location) } else { path.addLine(to: location) }
+                    }
+                    return (path, smooth(charge / 0.45)
+                            * (1 - smooth((p * duration - release) / Motion.leaveDuration)) * 0.44)
+                }
+            }
+            novaGlow("entrance-burst-core", colours: coreColours, stops: [0, 0.12, 0.36, 0.7, 1]) { p in
+                let frame = burst(p)
+                return (58 + frame.travel * 62, frame.flash * 0.95 + frame.opacity * 0.12)
+            }
+
+            // Nearby hues share paths, keeping the full burst within the entrance layer budget.
+            let hues = 8
+            for hue in 0..<hues {
+                let tint = colour(Double(hue) / Double(hues - 1))
+                let streaks = (0..<54).filter { index in
+                    let angle = Double(index) * 2.399963 + noise(index + 30) * 0.13
+                    return Int((0.06 + 0.92 * (sin(angle) + 1) / 2) * Double(hues)) == hue
+                }
+                for (band, width, alpha) in [("glow", 7.5, 0.05), ("light", 2.3, 0.3), ("streak", 0.9, 0.72)] {
+                    mark("entrance-burst-\(band)", tint: tint, width: width) { p in
+                        let frame = burst(p)
                         let path = CGMutablePath()
-                        for step in 0...40 {
-                            let t = Double(step) / 40
-                            let x = (Double(index) - Double(bands - 1) / 2) * 10 * (1 - fold)
-                                + sin(t * 4 + p * 5 + Double(index) * 0.16) * 15 * (1 - fold) - t * fold * 58
-                            let y = (1 - t) * 43 - t * 53 * smooth(p / 0.45) + sin(t * .pi) * fold * 54
-                            let point = CGPoint(x: x * extent, y: y * extent)
-                            if step == 0 { path.move(to: point) } else { path.addLine(to: point) }
+                        for index in streaks {
+                            let angle = Double(index) * 2.399963 + noise(index + 30) * 0.13
+                            let reach = (65 + noise(index + 4) * 75) * frame.travel + frame.drift * 20
+                            let tail = reach * (0.13 + noise(index + 14) * 0.44) + frame.drift * 30
+                            let bend = (noise(index + 64) - 0.5) * 0.17
+                            for step in 0...14 {
+                                let t = Double(step) / 14
+                                let location = point(angle + bend * t, tail + (reach - tail) * t, flat: 0.86)
+                                if step == 0 { path.move(to: location) } else { path.addLine(to: location) }
+                            }
                         }
-                        return (path, (broad ? 0.1 : 0.45) * sin(.pi * p))
+                        return (path, frame.opacity * alpha)
                     }
                 }
+                let points = (0..<52).filter { Int(noise($0 + 9) * Double(hues)) == hue }
+                mark("entrance-burst-point", tint: tint, width: 0, filled: true, fillOpacity: 1) { p in
+                    let frame = burst(p)
+                    let path = CGMutablePath()
+                    for index in points {
+                        let angle = Double(index) * 2.399963 + 0.64
+                        let radius = (50 + noise(index + 8) * 105) * frame.travel + frame.drift * 25
+                        let location = point(angle, radius, flat: 0.84)
+                        let size = (0.35 + noise(index + 11) * 0.95) * extent
+                        path.addEllipse(in: CGRect(x: location.x - size, y: location.y - size,
+                                                   width: size * 2, height: size * 2))
+                    }
+                    return (path, frame.opacity * 0.65)
+                }
+            }
+            mark("entrance-burst-wave", tint: colour(0.25), width: 0.7) { p in
+                let frame = burst(p)
+                let rx = (16 + frame.travel * 104) * extent
+                let ry = (12 + frame.travel * 77) * extent
+                let path = CGPath(ellipseIn: CGRect(x: center.x - rx, y: center.y - ry,
+                                                   width: rx * 2, height: ry * 2), transform: nil)
+                return (path, frame.opacity * (1 - smooth((p * duration - release) / Motion.revealDuration)) * 0.25)
             }
         case .orbit:
             for index in 0..<4 {

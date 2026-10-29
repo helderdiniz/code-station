@@ -349,17 +349,27 @@ final class CursorEffectLayerView: LoopLayerView {
             root.speed = Float(speed)
             layer?.addSublayer(root)
             entrance = root
+            let handoffStart = settings.effect == .aurora
+                ? (Motion.popDuration * 2 + Motion.revealDuration) / duration
+                : settings.effect == .orbit ? 0.86 : 0.66
             let reveal = CAKeyframeAnimation(keyPath: "opacity")
             reveal.values = [0, 0, 1]
-            reveal.keyTimes = [0, settings.effect == .orbit ? 0.86 : 0.66, 1]
+            reveal.keyTimes = [0, NSNumber(value: handoffStart), 1]
+            if settings.effect == .aurora {
+                reveal.keyTimes = nil
+                reveal.values = (0...60).map { frame in
+                    let p = min(1, max(0, (Double(frame) / 60 - handoffStart) / (1 - handoffStart)))
+                    return p * p * (3 - 2 * p)
+                }
+            }
             reveal.duration = duration / speed
             reveal.beginTime = ornament.convertTime(now, from: nil)
             reveal.fillMode = .both
             if let fraction {
                 root.speed = 0
                 root.timeOffset = fraction * duration
-                let start = settings.effect == .orbit ? 0.86 : 0.66
-                ornament.opacity = Float(min(1, max(0, (fraction - start) / (1 - start))))
+                let handoff = min(1, max(0, (fraction - handoffStart) / (1 - handoffStart)))
+                ornament.opacity = Float(settings.effect == .aurora ? handoff * handoff * (3 - 2 * handoff) : handoff)
                 let phase = (now + fraction * duration / speed)
                     .truncatingRemainder(dividingBy: Self.orbitPeriod) / Self.orbitPeriod
                 let positions = (0..<4).map { satellite($0, phase: phase, radius: 24 + settings.intensity * 17) }

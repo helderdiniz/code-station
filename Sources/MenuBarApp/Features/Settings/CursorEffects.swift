@@ -10,7 +10,7 @@ enum CursorEffect: String, CaseIterable, Identifiable {
         switch self {
         case .none: "No entrance"
         case .ember: "Kindle"
-        case .aurora: "First light"
+        case .aurora: "Nova burst"
         case .orbit: "Assemble"
         case .ripple: "First drop"
         case .prism: "Crystal bloom"
@@ -22,7 +22,7 @@ enum CursorEffect: String, CaseIterable, Identifiable {
         case .none: 0
         case .ember, .ripple: Motion.popDuration * 2
         case .orbit, .prism: Motion.controlDuration * 3
-        case .aurora: Motion.popDuration * 3
+        case .aurora: Motion.popDuration * 4
         }
     }
 
@@ -30,7 +30,7 @@ enum CursorEffect: String, CaseIterable, Identifiable {
         switch self {
         case .none: "Your pointer stays just as it is."
         case .ember: "Golden flecks gather, a warm core ignites, then the first sparks drift away."
-        case .aurora: "Soft light bands rise, fold together, and become a flowing ribbon."
+        case .aurora: "Light gathers around your cursor, bursts outward, then fades into Aurora. The cursor stays the same size."
         case .orbit: "Four satellites arrive in sequence and join their orbit tracks."
         case .ripple: "A pinpoint gathers and releases one delicate wave into stillness."
         case .prism: "Six facets unfold, turn through the light, and settle behind the pointer."
