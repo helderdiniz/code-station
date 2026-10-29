@@ -26,11 +26,10 @@ struct CursorEffectsLayoutTests {
         try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true)
         let scratch = ScratchDirectory()
         let settings = AppSettings(agentAvatarURL: scratch.path("avatar.png"), preferences: scratch.preferences.store)
-        for (width, reduced) in [(CGFloat(722), false), (460, false), (340, false), (722, true)] {
+        for width: CGFloat in [722, 460, 340] {
             for dark in [false, true] {
                 for effect in CursorEffect.allCases {
                     settings.cursorEffects.effect = effect
-                    settings.cursorEffects.reduceMotion = reduced
                     let host = NSHostingView(rootView: CursorEffectsSection()
                         .environment(settings)
                         .environment(\.colorScheme, dark ? .dark : .light)
@@ -44,25 +43,8 @@ struct CursorEffectsLayoutTests {
                     let bitmap = try #require(host.bitmapImageRepForCachingDisplay(in: host.bounds))
                     host.cacheDisplay(in: host.bounds, to: bitmap)
                     try #require(bitmap.representation(using: .png, properties: [:])).write(
-                        to: destination.appendingPathComponent("\(effect.rawValue)-\(dark ? "dark" : "light")-\(Int(width))\(reduced ? "-reduced" : "").png"))
+                        to: destination.appendingPathComponent("\(effect.rawValue)-\(dark ? "dark" : "light")-\(Int(width)).png"))
                 }
-            }
-        }
-        for effect: CursorEffect in [.ripple, .prism] {
-            for light in [false, true] {
-                let host = NSHostingView(rootView: Canvas { context, size in
-                    context.withCGContext { canvas in
-                        CursorEffectArtwork.drawIllustration(effect, in: canvas, size: size, preview: true, light: light)
-                    }
-                }
-                    .background(Color(nsColor: light ? Theme.canvasLightNSColor : Theme.canvasDarkNSColor))
-                    .frame(width: 580, height: 360))
-                host.frame = CGRect(x: 0, y: 0, width: 580, height: 360)
-                host.layoutSubtreeIfNeeded()
-                let bitmap = try #require(host.bitmapImageRepForCachingDisplay(in: host.bounds))
-                host.cacheDisplay(in: host.bounds, to: bitmap)
-                try #require(bitmap.representation(using: .png, properties: [:])).write(
-                    to: destination.appendingPathComponent("\(effect.rawValue)-surface-\(light ? "light" : "dark").png"))
             }
         }
     }

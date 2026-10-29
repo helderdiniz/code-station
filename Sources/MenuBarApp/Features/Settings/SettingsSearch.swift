@@ -80,7 +80,7 @@ enum SettingsSearchIndex {
         result("Theme", .appearance, .appearanceTheme,
                "appearance system light dark macos"),
         result("Cursor effects", .appearance, .appearanceCursorEffects,
-               "appearance pointer sparks ember aurora orbit ripple water rings prism facets spectral none animation intensity reduce motion"),
+               "appearance pointer sparks ember aurora orbit ripple water rings prism facets spectral none animation"),
         result("Session text", .appearance, .appearanceText,
                "appearance size small regular large transcript diff terminal"),
         result("Your messages", .appearance, .appearanceMessages,

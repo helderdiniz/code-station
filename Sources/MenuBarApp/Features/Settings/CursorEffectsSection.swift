@@ -5,10 +5,7 @@ struct CursorEffectsSection: View {
     @Environment(AppSettings.self) private var settings
     @State private var keys = WindowKeyHandler()
     @State private var beforeReset: CursorEffectsSettings?
-    @State private var availableWidth: CGFloat = 0
-    @Environment(\.accessibilityReduceMotion) private var systemReduced
-
-    private var reduced: Bool { systemReduced || settings.cursorEffects.reduceMotion }
+    @Environment(\.accessibilityReduceMotion) private var reduced
 
     var body: some View {
         SettingsCard {
@@ -22,11 +19,6 @@ struct CursorEffectsSection: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 gallery
-                SettingsRowDivider()
-                controlsLayout {
-                    intensity.frame(maxWidth: .infinity)
-                    motionPreference.frame(maxWidth: .infinity)
-                }
                 Text("Effects settle when a session finishes. Your macOS Reduce Motion preference is always respected.")
                     .font(.system(size: 10.5)).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -37,7 +29,6 @@ struct CursorEffectsSection: View {
             }
             .padding(14)
         }
-        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { availableWidth = $0 }
         .transaction { if reduced { $0.animation = nil; $0.disablesAnimations = true } }
         .background(WindowKeyAnchor(handler: keys))
         .onAppear {
@@ -54,20 +45,10 @@ struct CursorEffectsSection: View {
         }
     }
 
-    private var controlsLayout: AnyLayout {
-        availableWidth >= 540 ? AnyLayout(HStackLayout(alignment: .top, spacing: 24))
-            : AnyLayout(VStackLayout(alignment: .leading, spacing: 16))
-    }
-
     private var gallery: some View {
         VStack(alignment: .leading, spacing: 12) {
-            HStack(spacing: 8) {
-                choice(.ripple, featured: true)
-                choice(.prism, featured: true)
-            }
-            Text("The rest of your collection").font(.system(size: 10.5)).foregroundStyle(.secondary)
             LazyVGrid(columns: [GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8)], spacing: 8) {
-                ForEach([CursorEffect.none, .ember, .aurora, .orbit]) { choice($0) }
+                ForEach(CursorEffect.allCases) { choice($0) }
             }
             Label("Only in Code Station. Your pointer stays familiar everywhere else.", systemImage: "checkmark")
                 .font(.system(size: 10.5)).foregroundStyle(.secondary)
@@ -75,45 +56,14 @@ struct CursorEffectsSection: View {
         }
     }
 
-    private func choice(_ effect: CursorEffect, featured: Bool = false) -> some View {
-        CursorEffectChoice(effect: effect, selected: settings.cursorEffects.effect == effect,
-                           featured: featured, localReduced: reduced) {
+    private func choice(_ effect: CursorEffect) -> some View {
+        CursorEffectChoice(effect: effect, selected: settings.cursorEffects.effect == effect) {
             choose(effect)
         }
     }
 
     private func choose(_ effect: CursorEffect) {
         settings.cursorEffects.effect = effect
-    }
-
-    private var intensity: some View {
-        VStack(alignment: .leading, spacing: 5) {
-            HStack {
-                Text("Intensity").font(.system(size: 12, weight: .semibold))
-                Spacer()
-                Text(settings.cursorEffects.intensityLabel)
-                    .font(.system(size: 10.5)).foregroundStyle(Theme.accent)
-                    .contentTransition(.opacity)
-            }
-            CursorEffectIntensity(value: Binding(get: { settings.cursorEffects.intensity },
-                                                set: { settings.cursorEffects.intensity = $0 }),
-                                  label: settings.cursorEffects.intensityLabel)
-                .disabled(settings.cursorEffects.effect == .none || reduced)
-            HStack {
-                Text("Subtle")
-                Spacer()
-                Text("All out")
-            }
-            .font(.system(size: 9)).foregroundStyle(.secondary)
-        }
-    }
-
-    private var motionPreference: some View {
-        SettingsToggleRow("Reduce motion",
-                          detail: systemReduced ? "Enabled by macOS. Your system preference takes priority."
-                            : "Keep a still halo around your pointer, without the trail or click animation.",
-                          isOn: Binding(get: { reduced }, set: { settings.cursorEffects.reduceMotion = $0 }))
-            .disabled(systemReduced)
     }
 
     private var shortcuts: some View {
@@ -149,24 +99,15 @@ struct CursorEffectsSection: View {
 private struct CursorEffectChoice: View {
     let effect: CursorEffect
     let selected: Bool
-    var featured = false
-    var localReduced = false
     let choose: () -> Void
     @FocusState private var focused: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         Button(action: choose) {
-            VStack(alignment: .leading, spacing: 8) {
-                if featured {
-                    CursorEffectThumbnail(effect: effect).frame(height: 110).accessibilityHidden(true)
-                    copy
-                } else {
-                    HStack(spacing: 7) {
-                        CursorEffectThumbnail(effect: effect).frame(width: 30, height: 42).accessibilityHidden(true)
-                        copy
-                    }
-                }
+            HStack(spacing: 7) {
+                CursorEffectThumbnail(effect: effect).frame(width: 30, height: 42).accessibilityHidden(true)
+                copy
             }
             .padding(8).frame(maxWidth: .infinity, alignment: .leading)
             .surface(selected ? Theme.accent.opacity(0.08) : Theme.field, cornerRadius: 9,
@@ -174,7 +115,7 @@ private struct CursorEffectChoice: View {
             .overlay(RoundedRectangle(cornerRadius: 9).stroke(focused ? Theme.accent : .clear, lineWidth: 2))
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain).hoverLift(amount: localReduced ? 1 : Motion.lift).focused($focused)
+        .buttonStyle(.plain).hoverLift(amount: reduceMotion ? 1 : Motion.lift).focused($focused)
         .motion(Motion.control, value: selected)
         .accessibilityLabel("Cursor effect: \(effect.title)")
         .accessibilityValue(selected ? "Selected" : "Not selected")
@@ -185,11 +126,11 @@ private struct CursorEffectChoice: View {
     private var copy: some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 3) {
-                Text(effect.title).font(.system(size: featured ? 13 : 11, weight: .semibold))
+                Text(effect.title).font(.system(size: 11, weight: .semibold))
                 Spacer(minLength: 0)
                 Image(systemName: selected ? "checkmark.circle.fill" : "circle")
                     .font(.system(size: 10)).foregroundStyle(selected ? Theme.accent : Color.secondary)
-                    .contentTransition(reduceMotion || localReduced ? .identity : .symbolEffect(.replace))
+                    .contentTransition(reduceMotion ? .identity : .symbolEffect(.replace))
             }
             Text(effect.subtitle).font(.system(size: 9)).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -238,70 +179,35 @@ struct CursorEffectThumbnail: View {
                         context.fill(Path(ellipseIn: CGRect(x: center.x + offset * 16 - 1.5,
                             y: center.y + offset * 8 - 1.5, width: 3, height: 3)), with: .color(.cyan))
                     }
-                case .ripple, .prism:
-                    context.withCGContext { canvas in
-                        CursorEffectArtwork.drawIllustration(effect, in: canvas, size: size, preview: false, light: false)
+                case .ripple:
+                    let water = Color(red: 0.45, green: 0.78, blue: 0.64)
+                    for (index, radius) in [5.0, 10, 15, 20].enumerated() {
+                        let ring = Path(ellipseIn: CGRect(x: center.x - radius, y: center.y - radius,
+                                                          width: radius * 2, height: radius * 2))
+                        context.stroke(ring, with: .color(water.opacity(0.85 - Double(index) * 0.2)), lineWidth: 0.8)
+                    }
+                case .prism:
+                    for index in 0..<4 {
+                        let t = Double(index) / 3
+                        let tip = CGPoint(x: center.x - 2 - (1 - t) * 13, y: center.y + 4 + (1 - t) * 13)
+                        let side = 5 + t * 5
+                        var facet = Path()
+                        facet.move(to: tip)
+                        facet.addLine(to: CGPoint(x: tip.x - side * 0.4, y: tip.y + side))
+                        facet.addLine(to: CGPoint(x: tip.x + side * 0.9, y: tip.y + side * 0.45))
+                        facet.closeSubpath()
+                        let hue = Color(hue: 0.55 + t * 0.27, saturation: 0.5, brightness: 0.95)
+                        context.fill(facet, with: .color(hue.opacity(0.25 + t * 0.35)))
+                        context.stroke(facet, with: .color(hue.opacity(0.5 + t * 0.4)), lineWidth: 0.6)
                     }
                 }
             }
             GeometryReader { geometry in
-                let cursor = effect == .ripple || effect == .prism
-                    ? CursorEffectArtwork.cursorPosition(effect: effect, size: geometry.size, preview: false)
-                    : CGPoint(x: geometry.size.width * 0.56, y: geometry.size.height * 0.48)
                 Image(systemName: "cursorarrow").font(.system(size: 14))
                     .foregroundStyle(.white)
-                    .position(cursor)
+                    .position(x: geometry.size.width * 0.56, y: geometry.size.height * 0.48)
             }
         }
         .clipShape(RoundedRectangle(cornerRadius: 6))
-    }
-}
-
-private struct CursorEffectIntensity: View {
-    @Binding var value: Double
-    let label: String
-    @FocusState private var focused: Bool
-    @Environment(\.isEnabled) private var enabled
-    private var fraction: Double { (value - 0.1) / 0.9 }
-
-    var body: some View {
-        GeometryReader { geometry in
-            ZStack(alignment: .leading) {
-                Capsule().fill(Theme.border).frame(height: 4)
-                Capsule().fill(Theme.accent).frame(width: max(0, geometry.size.width * fraction), height: 4)
-                Circle().fill(Theme.card).overlay(Circle().stroke(Theme.accent, lineWidth: 3))
-                    .frame(width: 14, height: 14)
-                    .offset(x: max(0, geometry.size.width - 14) * fraction)
-            }
-            .frame(height: 24).contentShape(Rectangle())
-            .gesture(DragGesture(minimumDistance: 0).onChanged { drag in
-                guard enabled else { return }
-                value = 0.1 + min(1, max(0, drag.location.x / max(1, geometry.size.width))) * 0.9
-            })
-        }
-        .frame(height: 24)
-        .opacity(enabled ? 1 : 0.4)
-        .overlay(RoundedRectangle(cornerRadius: 5).stroke(focused ? Theme.accent : .clear, lineWidth: 2))
-        .focusable(enabled).focusEffectDisabled().focused($focused)
-        .hoverFill(cornerRadius: 5)
-        .onMoveCommand { direction in
-            if direction == .right || direction == .up { adjust(0.05) }
-            if direction == .left || direction == .down { adjust(-0.05) }
-        }
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel("Cursor effect intensity")
-        .accessibilityValue("\(label), \(Int(value * 100)) percent")
-        .accessibilityAdjustableAction { direction in
-            switch direction {
-            case .increment: adjust(0.05)
-            case .decrement: adjust(-0.05)
-            @unknown default: break
-            }
-        }
-    }
-
-    private func adjust(_ amount: Double) {
-        guard enabled else { return }
-        value = min(1, max(0.1, value + amount))
     }
 }

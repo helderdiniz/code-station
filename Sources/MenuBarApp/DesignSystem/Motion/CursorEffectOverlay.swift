@@ -89,7 +89,7 @@ final class CursorEffectLayerView: LoopLayerView {
         self.turnStarted = turnStarted
         environmentReduced = reduceMotion
         if changed {
-            reduced = reduceMotion || settings.reduceMotion || NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+            reduced = reduceMotion || NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
             clear(preservingTrails: preserveTrails && !reduced)
             if activate && tracksPointerEvents, foreground, let window {
                 let location = convert(window.mouseLocationOutsideOfEventStream, from: nil)
@@ -192,7 +192,7 @@ final class CursorEffectLayerView: LoopLayerView {
     @objc private func visibilityChanged() { synchronize() }
 
     @objc private func motionChanged() {
-        reduced = environmentReduced || settings.reduceMotion || NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        reduced = environmentReduced || NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
         clear()
         rebuild()
     }

@@ -133,8 +133,8 @@ struct CursorEntranceTests {
         let view = makeView(.prism)
         let turn = Date()
         configure(view, .prism, .running, turn)
-        view.configure(settings: CursorEffectsSettings(effect: .prism, reduceMotion: true),
-                       activity: .running, reduceMotion: false, turnStarted: turn)
+        view.configure(settings: CursorEffectsSettings(effect: .prism),
+                       activity: .running, reduceMotion: true, turnStarted: turn)
         #expect(view.entrance == nil)
         #expect(layers(view.layer).allSatisfy { ($0.animationKeys() ?? []).isEmpty })
         configure(view, .prism, .running, turn)

@@ -96,29 +96,7 @@ enum CursorEffect: String, CaseIterable, Identifiable {
 
 struct CursorEffectsSettings: Equatable {
     var effect: CursorEffect = .none
-    var intensity: Double = 0.55 {
-        didSet { intensity = Self.validIntensity(intensity) }
-    }
-    var reduceMotion = false
-
-    init(effect: CursorEffect = .none, intensity: Double = 0.55, reduceMotion: Bool = false) {
-        self.effect = effect
-        self.intensity = Self.validIntensity(intensity)
-        self.reduceMotion = reduceMotion
-    }
-
-    var intensityLabel: String {
-        switch intensity {
-        case ..<0.35: "Subtle"
-        case ..<0.65: "Balanced"
-        case ..<0.85: "Expressive"
-        default: "All out"
-        }
-    }
-
-    private static func validIntensity(_ value: Double) -> Double {
-        value.isFinite ? min(1, max(0.1, value)) : 0.55
-    }
+    let intensity = 0.55
 }
 
 enum CursorEffectActivity: Hashable {
@@ -154,14 +132,10 @@ extension Preferences {
     static func cursorEffects(in store: UserDefaults = .standard) -> CursorEffectsSettings {
         let values = store.dictionary(forKey: "cursorEffects") ?? [:]
         return CursorEffectsSettings(
-            effect: (values["effect"] as? String).flatMap(CursorEffect.init(rawValue:)) ?? .none,
-            intensity: values["intensity"] as? Double ?? 0.55,
-            reduceMotion: values["reduceMotion"] as? Bool ?? false)
+            effect: (values["effect"] as? String).flatMap(CursorEffect.init(rawValue:)) ?? .none)
     }
 
     static func setCursorEffects(_ value: CursorEffectsSettings, in store: UserDefaults = .standard) {
-        store.set(["effect": value.effect.rawValue,
-                   "intensity": value.intensity,
-                   "reduceMotion": value.reduceMotion], forKey: "cursorEffects")
+        store.set(["effect": value.effect.rawValue], forKey: "cursorEffects")
     }
 }

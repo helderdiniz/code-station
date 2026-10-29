@@ -12,25 +12,13 @@ struct CursorEffectsTests {
         }
     }
 
-    @Test func intensityIsFiniteAndBounded() {
-        #expect(CursorEffectsSettings(intensity: .nan).intensity == 0.55)
-        #expect(CursorEffectsSettings(intensity: .infinity).intensity == 0.55)
-        #expect(CursorEffectsSettings(intensity: -10).intensity == 0.1)
-        #expect(CursorEffectsSettings(intensity: 10).intensity == 1)
-        var settings = CursorEffectsSettings()
-        settings.intensity = .nan
-        #expect(settings.intensity == 0.55)
-    }
-
     @MainActor @Test func choicesPersistIndependentlyAndResetRestoresDefaults() {
         let scratch = ScratchDirectory()
         let settings = AppSettings(agentAvatarURL: scratch.path("avatar.png"), preferences: scratch.preferences.store)
-        settings.cursorEffects.intensity = 0.83
-        settings.cursorEffects.reduceMotion = true
         for effect in CursorEffect.allCases {
             settings.cursorEffects.effect = effect
             let restored = AppSettings(agentAvatarURL: scratch.path("avatar.png"), preferences: scratch.preferences.store)
-            #expect(restored.cursorEffects == CursorEffectsSettings(effect: effect, intensity: 0.83, reduceMotion: true))
+            #expect(restored.cursorEffects == CursorEffectsSettings(effect: effect))
         }
         let previous = settings.cursorEffects
         settings.resetAppearance()
@@ -106,11 +94,11 @@ struct CursorEffectLayerTests {
         }
     }
 
-    @Test(arguments: CursorEffect.allCases.filter { $0 != .none }, [false, true])
-    func reducedMotionHasAStillHaloOnlyWhileRunning(effect: CursorEffect, userPreference: Bool) {
+    @Test(arguments: CursorEffect.allCases.filter { $0 != .none })
+    func reducedMotionHasAStillHaloOnlyWhileRunning(effect: CursorEffect) {
         let view = makeView()
         for state: CursorEffectActivity in [.running, .waiting, .finished] {
-            configure(view, effect: effect, activity: state, reduced: !userPreference, userReduced: userPreference)
+            configure(view, effect: effect, activity: state, reduced: true)
             view.movePointer(to: CGPoint(x: 100, y: 100))
             #expect(animations(view).isEmpty)
             let marks = layers(view).compactMap { $0 as? CAShapeLayer }
@@ -388,7 +376,7 @@ struct CursorEffectLayerTests {
     @Test func rippleClickHasThreeStaggeredRingsWithBoundedRadius() throws {
         guard !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else { return }
         let view = makeView()
-        view.configure(settings: CursorEffectsSettings(effect: .ripple, intensity: 1), activity: .running, reduceMotion: false)
+        view.configure(settings: CursorEffectsSettings(effect: .ripple), activity: .running, reduceMotion: false)
         view.movePointer(to: CGPoint(x: 100, y: 100))
         view.click()
         let rings = layers(view).compactMap { $0.name == "ripple-ring" ? $0 as? CAShapeLayer : nil }
@@ -514,8 +502,8 @@ struct CursorEffectLayerTests {
     }
 
     private func configure(_ view: CursorEffectLayerView, effect: CursorEffect,
-                           activity: CursorEffectActivity, reduced: Bool = false, userReduced: Bool = false) {
-        view.configure(settings: CursorEffectsSettings(effect: effect, reduceMotion: userReduced), activity: activity,
+                           activity: CursorEffectActivity, reduced: Bool = false) {
+        view.configure(settings: CursorEffectsSettings(effect: effect), activity: activity,
                        reduceMotion: reduced)
     }
 
