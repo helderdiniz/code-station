@@ -61,12 +61,12 @@ struct RootView: View {
                 detail
             }
             .overlay {
-                if settings.cursorEffects.effect != .none,
-                   sheet == nil, !commandPalette.isPresented,
-                   case .session(let id) = store.selection {
+                if case .session(let id) = store.selection {
                     CursorEffectOverlay(settings: settings.cursorEffects,
                                         activity: CursorEffectActivity(session: runner.state(id),
-                                                                       needsInput: runner.question(id) != nil))
+                                                                       needsInput: runner.question(id) != nil),
+                                        turnStarted: runner.turnStarted(id),
+                                        enabled: sheet == nil && !commandPalette.isPresented)
                         .allowsHitTesting(false)
                         .accessibilityHidden(true)
                         .id(id)

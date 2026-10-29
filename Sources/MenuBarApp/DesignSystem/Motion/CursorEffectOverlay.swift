@@ -5,6 +5,8 @@ import SwiftUI
 struct CursorEffectOverlay: NSViewRepresentable {
     let settings: CursorEffectsSettings
     let activity: CursorEffectActivity
+    var turnStarted: Date? = nil
+    var enabled = true
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     func makeNSView(context: Context) -> CursorEffectLayerView {
@@ -12,7 +14,8 @@ struct CursorEffectOverlay: NSViewRepresentable {
     }
 
     func updateNSView(_ view: CursorEffectLayerView, context: Context) {
-        view.configure(settings: settings, activity: activity, reduceMotion: reduceMotion)
+        view.setEnabled(enabled)
+        view.configure(settings: settings, activity: activity, reduceMotion: reduceMotion, turnStarted: turnStarted)
     }
 
     static func dismantleNSView(_ view: CursorEffectLayerView, coordinator: ()) {
@@ -40,12 +43,18 @@ final class CursorEffectLayerView: LoopLayerView {
     private var tracking: NSTrackingArea?
     private var observing = false
     private var foreground = false
+    private var foregroundSince: Date?
     private var lastSize = CGSize.zero
     private let ornament = CALayer()
     private var particles: [CAShapeLayer] = []
     private var nextParticle = 0
     var tracksPointerEvents = true
     private var sampleParticles: [CAShapeLayer]?
+    var automaticallyPlaysEntrance = true
+    private var enabled = true
+    private var turnStarted: Date?
+    private(set) var entrance: CALayer?
+    private var entranceEnd: DispatchWorkItem?
 
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -57,11 +66,17 @@ final class CursorEffectLayerView: LoopLayerView {
     convenience init() { self.init(frame: .zero) }
 
     func configure(settings: CursorEffectsSettings, activity: CursorEffectActivity,
-                   reduceMotion: Bool) {
+                   reduceMotion: Bool, turnStarted: Date? = nil) {
         let appearanceChanged = self.settings != settings || environmentReduced != reduceMotion
-        let changed = appearanceChanged || self.activity != activity
+        let turnChanged = turnStarted != nil && self.turnStarted != turnStarted
+        let changed = appearanceChanged || self.activity != activity || turnChanged
         let wasActive = self.activity == .running || self.activity == .waiting
-        let preserveTrails = !appearanceChanged && wasActive && (activity == .running || activity == .waiting)
+        let active = activity == .running || activity == .waiting
+        // A background start can reach SwiftUI after focus returns.
+        let startedInForeground = turnStarted.map { $0 >= (foregroundSince ?? .distantFuture) } ?? foreground
+        let activate = active && (self.settings.effect != settings.effect
+            || ((!wasActive || turnChanged) && startedInForeground))
+        let preserveTrails = !appearanceChanged && !turnChanged && wasActive && active
         let completed = wasActive && activity == .finished && self.settings.effect == settings.effect
         let presentedPoint = ornament.presentation()?.position ?? point
         if self.settings.effect != settings.effect {
@@ -71,11 +86,18 @@ final class CursorEffectLayerView: LoopLayerView {
         }
         self.settings = settings
         self.activity = activity
+        self.turnStarted = turnStarted
         environmentReduced = reduceMotion
         if changed {
             reduced = reduceMotion || settings.reduceMotion || NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
             clear(preservingTrails: preserveTrails && !reduced)
+            if activate && tracksPointerEvents, foreground, let window {
+                let location = convert(window.mouseLocationOutsideOfEventStream, from: nil)
+                pointerInside = visibleRect.contains(location)
+                if pointerInside { point = location }
+            }
             rebuild()
+            if activate && automaticallyPlaysEntrance { startEntrance() }
             if completed && foreground && !reduced && settings.effect != .none && pointerInside {
                 ring(at: presentedPoint, finished: true)
             }
@@ -176,7 +198,7 @@ final class CursorEffectLayerView: LoopLayerView {
     }
 
     private var isForegroundVisible: Bool {
-        guard observing, let window else { return false }
+        guard enabled, observing, let window else { return false }
         return NSApp.isActive && WindowKeyMonitor.frontmostWindow === window
             && window.isVisible && window.occlusionState.contains(.visible)
             && !isHiddenOrHasHiddenAncestor && !visibleRect.isEmpty
@@ -186,9 +208,16 @@ final class CursorEffectLayerView: LoopLayerView {
         setForeground(isForegroundVisible)
     }
 
+    func setEnabled(_ enabled: Bool) {
+        guard self.enabled != enabled else { return }
+        self.enabled = enabled
+        synchronize()
+    }
+
     func setForeground(_ visible: Bool) {
         if foreground != visible {
             foreground = visible
+            foregroundSince = visible ? Date() : nil
             previous = nil
             clear()
             if visible, tracksPointerEvents, let window {
@@ -221,8 +250,15 @@ final class CursorEffectLayerView: LoopLayerView {
         }
         let from = previous ?? location
         point = location
-        LayerLoop.still { ornament.position = location }
+        LayerLoop.still {
+            ornament.position = location
+            entrance?.position = location
+        }
         rebuild()
+        if entrance != nil {
+            previous = location
+            return
+        }
         if activity == .running && !reduced {
             let spacing: Double = switch settings.effect {
             case .ripple: 14 - settings.intensity * 4
@@ -245,6 +281,7 @@ final class CursorEffectLayerView: LoopLayerView {
     }
 
     private func clear(preservingTrails: Bool = false) {
+        finishEntrance()
         previous = nil
         ribbonStart = nil
         lastEmission = 0
@@ -257,6 +294,105 @@ final class CursorEffectLayerView: LoopLayerView {
                     particle.opacity = 0
                 }
             }
+        }
+    }
+
+    func playEntrance(at location: CGPoint, speed: Double = 1, progress: Double? = nil) {
+        guard foreground, bounds.contains(location), location.x.isFinite, location.y.isFinite else { return }
+        clear()
+        point = location
+        pointerInside = true
+        rebuild()
+        startEntrance(speed: speed, progress: progress)
+    }
+
+    private func startEntrance(speed: Double = 1, progress: Double? = nil) {
+        guard foreground, pointerInside, !reduced, settings.effect != .none,
+              activity == .running || activity == .waiting else { return }
+        finishEntrance()
+        let speed = speed == 0.25 ? 0.25 : 1
+        let duration = settings.effect.entranceDuration
+        let now = CACurrentMediaTime()
+        let fraction = progress.map { $0.isFinite ? min(1, max(0, $0)) : 0 }
+        let root = CursorEffectEntrance.make(effect: settings.effect, intensity: settings.intensity,
+            scale: window?.backingScaleFactor ?? 2, progress: fraction, colour: colour) { index, elapsed in
+                let phase = (now + elapsed / speed).truncatingRemainder(dividingBy: Self.orbitPeriod) / Self.orbitPeriod
+                return self.satellite(index, phase: phase, radius: 24 + self.settings.intensity * 17)
+            }
+        if settings.effect == .orbit {
+            for track in ornament.sublayers?.compactMap({ $0.name == "orbit-track" ? $0 as? CAShapeLayer : nil }) ?? [] {
+                guard let path = track.path, let stroke = track.strokeColor,
+                      let tint = NSColor(cgColor: stroke) else { continue }
+                let arrival = shape(path: path, colour: tint, width: track.lineWidth)
+                arrival.name = "entrance-track"
+                arrival.opacity = 0
+                let reveal = CAKeyframeAnimation(keyPath: "opacity")
+                reveal.values = [0, 0, track.opacity, track.opacity, 0]
+                reveal.keyTimes = [0, 0.25, 0.65, 0.86, 1]
+                reveal.duration = duration
+                reveal.beginTime = .leastNonzeroMagnitude
+                reveal.fillMode = .both
+                reveal.isRemovedOnCompletion = false
+                if let fraction {
+                    let capture = min(1, max(0, (fraction - 0.25) / 0.4))
+                    let handoff = min(1, max(0, (fraction - 0.86) / 0.14))
+                    arrival.opacity = track.opacity * Float(capture * (1 - handoff))
+                } else {
+                    arrival.add(reveal, forKey: "entrance-track")
+                }
+                root.insertSublayer(arrival, at: 0)
+            }
+        }
+        LayerLoop.still {
+            root.position = point
+            root.beginTime = root.convertTime(now, from: nil)
+            root.speed = Float(speed)
+            layer?.addSublayer(root)
+            entrance = root
+            let reveal = CAKeyframeAnimation(keyPath: "opacity")
+            reveal.values = [0, 0, 1]
+            reveal.keyTimes = [0, settings.effect == .orbit ? 0.86 : 0.66, 1]
+            reveal.duration = duration / speed
+            reveal.beginTime = ornament.convertTime(now, from: nil)
+            reveal.fillMode = .both
+            if let fraction {
+                root.speed = 0
+                root.timeOffset = fraction * duration
+                let start = settings.effect == .orbit ? 0.86 : 0.66
+                ornament.opacity = Float(min(1, max(0, (fraction - start) / (1 - start))))
+                let phase = (now + fraction * duration / speed)
+                    .truncatingRemainder(dividingBy: Self.orbitPeriod) / Self.orbitPeriod
+                let positions = (0..<4).map { satellite($0, phase: phase, radius: 24 + settings.intensity * 17) }
+                let satellites = ornament.sublayers?.filter { $0.name == "orbit-satellite" } ?? []
+                for (index, satellite) in satellites.enumerated() { satellite.position = positions[index] }
+                for mark in ornament.sublayers ?? [] {
+                    if mark.animation(forKey: "constellation") != nil, let shape = mark as? CAShapeLayer {
+                        let path = CGMutablePath()
+                        path.addLines(between: positions)
+                        path.closeSubpath()
+                        shape.path = path
+                    }
+                    mark.removeAllAnimations()
+                }
+            } else {
+                ornament.add(reveal, forKey: "entrance-handoff")
+            }
+        }
+        if progress == nil {
+            let work = DispatchWorkItem { [weak self] in self?.finishEntrance() }
+            entranceEnd = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + duration / speed, execute: work)
+        }
+    }
+
+    func finishEntrance() {
+        entranceEnd?.cancel()
+        entranceEnd = nil
+        LayerLoop.still {
+            entrance?.removeFromSuperlayer()
+            entrance = nil
+            ornament.removeAnimation(forKey: "entrance-handoff")
+            ornament.opacity = 1
         }
     }
 
@@ -511,7 +647,7 @@ final class CursorEffectLayerView: LoopLayerView {
     }
 
     func click() {
-        guard foreground, pointerInside, settings.effect != .none, activity == .running, !reduced else { return }
+        guard foreground, pointerInside, entrance == nil, settings.effect != .none, activity == .running, !reduced else { return }
         LayerLoop.still {
             let origin = sampleParticles == nil ? ornament.presentation()?.position ?? point : point
             let center = CGPoint(x: origin.x + 7, y: origin.y + 10)
@@ -685,6 +821,7 @@ final class CursorEffectLayerView: LoopLayerView {
     }
 
     private func addOrbits() {
+        let now = CACurrentMediaTime()
         let radius = 24 + settings.intensity * 17
         let center = CGPoint(x: 8, y: 10)
         ornament.addSublayer(glow(at: center, radius: 18, colour: colour(0).withAlphaComponent(0.1)))
@@ -716,7 +853,10 @@ final class CursorEffectLayerView: LoopLayerView {
             let travel = CAKeyframeAnimation(keyPath: "position")
             travel.values = points.map { NSValue(point: $0) }
             travel.duration = Self.orbitPeriod
-            dot.add(LayerLoop.repeating(travel, period: Self.orbitPeriod), forKey: "orbit")
+            _ = LayerLoop.repeating(travel, period: Self.orbitPeriod)
+            travel.beginTime = now
+            travel.timeOffset = now.truncatingRemainder(dividingBy: Self.orbitPeriod)
+            dot.add(travel, forKey: "orbit")
             ornament.addSublayer(dot)
         }
         let paths = (0...frames).map { frame in
@@ -729,7 +869,10 @@ final class CursorEffectLayerView: LoopLayerView {
         let links = CAKeyframeAnimation(keyPath: "path")
         links.values = paths
         links.duration = Self.orbitPeriod
-        constellation.add(LayerLoop.repeating(links, period: Self.orbitPeriod), forKey: "constellation")
+        _ = LayerLoop.repeating(links, period: Self.orbitPeriod)
+        links.beginTime = now
+        links.timeOffset = now.truncatingRemainder(dividingBy: Self.orbitPeriod)
+        constellation.add(links, forKey: "constellation")
         ornament.insertSublayer(constellation, at: 0)
     }
 
