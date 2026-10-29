@@ -44,6 +44,8 @@ final class CursorEffectLayerView: LoopLayerView {
     private let ornament = CALayer()
     private var particles: [CAShapeLayer] = []
     private var nextParticle = 0
+    var tracksPointerEvents = true
+    private var sampleParticles: [CAShapeLayer]?
 
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -91,7 +93,7 @@ final class CursorEffectLayerView: LoopLayerView {
             NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(motionChanged),
                 name: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification, object: nil)
         }
-        if monitor == nil {
+        if tracksPointerEvents && monitor == nil {
             monitor = NSEvent.addLocalMonitorForEvents(matching: [.mouseMoved, .leftMouseDragged,
                 .rightMouseDragged, .otherMouseDragged, .leftMouseDown, .rightMouseDown]) { [weak self] event in
                 nonisolated(unsafe) let event = event
@@ -128,9 +130,15 @@ final class CursorEffectLayerView: LoopLayerView {
         self.tracking = tracking
     }
 
-    override func mouseEntered(with event: NSEvent) { receive(event) }
+    override func mouseEntered(with event: NSEvent) {
+        if tracksPointerEvents { receive(event) }
+    }
 
     override func mouseExited(with event: NSEvent) {
+        if tracksPointerEvents { leavePointer() }
+    }
+
+    func leavePointer() {
         pointerInside = false
         clear(preservingTrails: true)
     }
@@ -178,7 +186,7 @@ final class CursorEffectLayerView: LoopLayerView {
             foreground = visible
             previous = nil
             clear()
-            if visible, let window {
+            if visible, tracksPointerEvents, let window {
                 let location = convert(window.mouseLocationOutsideOfEventStream, from: nil)
                 pointerInside = visibleRect.contains(location)
                 if pointerInside { point = location }
@@ -211,7 +219,17 @@ final class CursorEffectLayerView: LoopLayerView {
         LayerLoop.still { ornament.position = location }
         rebuild()
         if activity == .running && !reduced {
-            if hypot(location.x - from.x, location.y - from.y) > 2 && time - lastEmission > 1.0 / 90 {
+            let spacing: Double = switch settings.effect {
+            case .ripple: 18 - settings.intensity * 6
+            case .prism: 11 - settings.intensity * 4
+            default: 2
+            }
+            let interval: Double = switch settings.effect {
+            case .ripple: 0.12 - settings.intensity * 0.04
+            case .prism: 0.055 - settings.intensity * 0.023
+            default: 1.0 / 90
+            }
+            if hypot(location.x - from.x, location.y - from.y) > spacing && time - lastEmission > interval {
                 emit(from: from, to: location, elapsed: max(1.0 / 90, min(0.1, time - lastEmission)))
                 lastEmission = time
                 previous = location
@@ -224,6 +242,7 @@ final class CursorEffectLayerView: LoopLayerView {
     private func clear(preservingTrails: Bool = false) {
         previous = nil
         ribbonStart = nil
+        lastEmission = 0
         LayerLoop.still {
             ornament.removeAllAnimations()
             ornament.sublayers?.forEach { $0.removeFromSuperlayer() }
@@ -252,7 +271,7 @@ final class CursorEffectLayerView: LoopLayerView {
                 ornament.addSublayer(dot)
             } else if settings.effect == .orbit {
                 addOrbits()
-            } else {
+            } else if settings.effect == .ember || settings.effect == .aurora {
                 let radius = settings.effect == .ember ? 26 + settings.intensity * 13 : 22
                 ornament.addSublayer(glow(at: CGPoint(x: 7, y: 10), radius: radius,
                                          colour: colour(settings.effect == .ember ? 0.4 : 1).withAlphaComponent(0.16)))
@@ -270,6 +289,10 @@ final class CursorEffectLayerView: LoopLayerView {
                                     brightness: dark ? 1 : 0.7, alpha: 1)
         case .orbit: return NSColor(calibratedHue: 0.5 + fraction * 0.16, saturation: 0.35,
                                    brightness: dark ? 1 : 0.65, alpha: 1)
+        case .ripple: return NSColor(calibratedHue: 0.47, saturation: 0.15 + fraction * 0.35,
+                                    brightness: dark ? 0.95 : 0.48, alpha: 1)
+        case .prism: return NSColor(calibratedHue: 0.49 + fraction * 0.41, saturation: dark ? 0.45 : 0.65,
+                                   brightness: dark ? 1 : 0.7, alpha: 1)
         }
     }
 
@@ -297,10 +320,14 @@ final class CursorEffectLayerView: LoopLayerView {
             nextParticle = (nextParticle + 1) % Self.particleLimit
         }
         particle.removeAllAnimations()
+        particle.name = nil
         particle.opacity = 0
         particle.position = .zero
+        particle.transform = CATransform3DIdentity
         particle.fillColor = nil
         particle.lineCap = .round
+        particle.lineJoin = .round
+        sampleParticles?.append(particle)
         return particle
     }
 
@@ -309,7 +336,13 @@ final class CursorEffectLayerView: LoopLayerView {
         let speed = min(2500, hypot(velocity.dx, velocity.dy))
         let origin = CGPoint(x: end.x + 7, y: end.y + 10)
         LayerLoop.still {
-            if settings.effect == .aurora {
+            if settings.effect == .ripple {
+                ripple(at: origin, radius: 24 + settings.intensity * 24,
+                       duration: 1 + settings.intensity * 0.22, opacity: 0.42 + settings.intensity * 0.35)
+            } else if settings.effect == .prism {
+                let angle = atan2(velocity.dy, velocity.dx)
+                facet(at: origin, angle: angle, fraction: Double.random(in: 0...1), burst: false)
+            } else if settings.effect == .aurora {
                 let control = CGPoint(x: start.x + 7, y: start.y + 10)
                 let midpoint = CGPoint(x: (control.x + origin.x) / 2, y: (control.y + origin.y) / 2)
                 let path = CGMutablePath()
@@ -433,13 +466,133 @@ final class CursorEffectLayerView: LoopLayerView {
         layer.add(fade, forKey: "decay")
     }
 
-    private func click() {
-        guard foreground, settings.effect != .none, activity == .running, !reduced else { return }
+    func click() {
+        guard foreground, pointerInside, settings.effect != .none, activity == .running, !reduced else { return }
         LayerLoop.still {
-            let origin = ornament.presentation()?.position ?? point
-            for _ in 0..<Int(12 + settings.intensity * 20) { spark(at: CGPoint(x: origin.x + 7, y: origin.y + 10), spread: 175) }
-            ring(at: origin, finished: false)
+            let origin = sampleParticles == nil ? ornament.presentation()?.position ?? point : point
+            let center = CGPoint(x: origin.x + 7, y: origin.y + 10)
+            switch settings.effect {
+            case .ripple:
+                for index in 0..<3 {
+                    ripple(at: center, radius: 63 + settings.intensity * 37 - Double(index) * 12,
+                           duration: 1.25, opacity: (0.5 + settings.intensity * 0.2) - Double(index) * 0.13,
+                           delay: Double(index) * 0.1)
+                }
+            case .prism:
+                for index in 0..<7 {
+                    facet(at: center, angle: Double(index) / 7 * .pi * 2,
+                          fraction: Double(index) / 6, burst: true)
+                }
+            default:
+                for _ in 0..<Int(12 + settings.intensity * 20) { spark(at: center, spread: 175) }
+                ring(at: origin, finished: false)
+            }
         }
+    }
+
+    private func ripple(at origin: CGPoint, radius: Double, duration: Double, opacity: Double, delay: Double = 0) {
+        let ring = transient()
+        ring.name = "ripple-ring"
+        ring.position = origin
+        ring.strokeColor = colour(0.5).cgColor
+        ring.lineWidth = 1
+        let opening = CGPath(ellipseIn: CGRect(x: -3, y: -3, width: 6, height: 6), transform: nil)
+        let closing = CGPath(ellipseIn: CGRect(x: -radius, y: -radius, width: radius * 2, height: radius * 2), transform: nil)
+        ring.path = closing
+        let expansion = CABasicAnimation(keyPath: "path")
+        expansion.fromValue = opening
+        expansion.toValue = closing
+        expansion.timingFunction = CAMediaTimingFunction(name: .easeOut)
+        let thinning = CABasicAnimation(keyPath: "lineWidth")
+        thinning.fromValue = 0.8 + settings.intensity * 0.4
+        thinning.toValue = 0.35
+        let fade = CABasicAnimation(keyPath: "opacity")
+        fade.fromValue = opacity
+        fade.toValue = 0
+        let decay = CAAnimationGroup()
+        decay.animations = [expansion, thinning, fade]
+        decay.animations?.forEach { $0.duration = duration }
+        decay.duration = duration
+        if delay > 0 { decay.beginTime = ring.convertTime(CACurrentMediaTime(), from: nil) + delay }
+        ring.add(decay, forKey: "decay")
+    }
+
+    private func facet(at origin: CGPoint, angle: Double, fraction: Double, burst: Bool) {
+        let size = (burst ? 8 : Double.random(in: 5...12)) + settings.intensity * (burst ? 9 : 5)
+        let duration = 0.47 + settings.intensity * 0.32
+        let drift = burst ? 25 + settings.intensity * 20 : -8.0
+        let rotation = angle + 0.3
+        let vertices = [CGPoint(x: size, y: -size * 0.35), CGPoint(x: -size * 0.8, y: -size * 0.55),
+                        CGPoint(x: -size * 0.35, y: size * 0.7)]
+            .map { $0.applying(CGAffineTransform(rotationAngle: rotation)) }
+        // Each edge has its own tint. All three layers share one flight and count toward the pool cap.
+        for index in 0..<3 {
+            let shard = transient()
+            shard.name = index == 0 ? "prism-facet" : "prism-edge"
+            let path = CGMutablePath()
+            if index == 0 {
+                path.addLines(between: vertices)
+                path.closeSubpath()
+                shard.fillColor = colour(fraction).withAlphaComponent(0.13 + settings.intensity * 0.09).cgColor
+            } else {
+                path.move(to: vertices[index - 1])
+                path.addLine(to: vertices[index])
+            }
+            shard.path = path
+            shard.lineWidth = 0.7
+            shard.strokeColor = colour((fraction + Double(index) * 0.3).truncatingRemainder(dividingBy: 1)).cgColor
+            let flight = CABasicAnimation(keyPath: "position")
+            flight.fromValue = NSValue(point: origin)
+            flight.toValue = NSValue(point: CGPoint(x: origin.x + cos(angle) * drift, y: origin.y + sin(angle) * drift))
+            flight.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            let shrink = CABasicAnimation(keyPath: "transform.scale")
+            shrink.fromValue = 1
+            shrink.toValue = 0.55
+            let fade = CABasicAnimation(keyPath: "opacity")
+            fade.fromValue = 0.65 + settings.intensity * 0.3
+            fade.toValue = 0
+            let decay = CAAnimationGroup()
+            decay.animations = [flight, shrink, fade]
+            decay.animations?.forEach { $0.duration = duration }
+            decay.duration = duration
+            shard.add(decay, forKey: "decay")
+        }
+    }
+
+    func playPreviewSample() {
+        guard foreground, !reduced, settings.effect != .none else { return }
+        clear()
+        pointerInside = false
+        let start = CACurrentMediaTime()
+        var cursorPoints: [NSValue] = []
+        for index in 0...30 {
+            let progress = Double(index) / 30
+            let location = CGPoint(x: bounds.width * (0.24 + 0.52 * progress),
+                                   y: bounds.height * (0.6 - sin(progress * .pi * 2) * 0.16))
+            sampleParticles = []
+            movePointer(to: location, at: start + progress * 3.6)
+            if index == 19 { click() }
+            for particle in sampleParticles ?? [] {
+                for key in particle.animationKeys() ?? [] {
+                    guard let animation = particle.animation(forKey: key)?.copy() as? CAAnimation else { continue }
+                    let delay = animation.beginTime > 0 ? max(0, animation.beginTime - start) : 0
+                    animation.beginTime = particle.convertTime(start, from: nil) + progress * 3.6 + delay
+                    particle.add(animation, forKey: key)
+                }
+            }
+            cursorPoints.append(NSValue(point: location))
+        }
+        sampleParticles = nil
+        let cursor = CGMutablePath()
+        cursor.addLines(between: [.zero, CGPoint(x: 4, y: 19), CGPoint(x: 9, y: 13), CGPoint(x: 16, y: 12)])
+        cursor.closeSubpath()
+        let mark = shape(path: cursor, colour: .darkGray, width: 1)
+        mark.fillColor = NSColor.white.cgColor
+        ornament.addSublayer(mark)
+        let travel = CAKeyframeAnimation(keyPath: "position")
+        travel.values = cursorPoints
+        travel.duration = 3.6
+        ornament.add(travel, forKey: "preview-path")
     }
 
     private func ring(at origin: CGPoint, finished: Bool) {

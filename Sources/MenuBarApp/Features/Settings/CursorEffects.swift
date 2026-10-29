@@ -1,7 +1,7 @@
 import Foundation
 
 enum CursorEffect: String, CaseIterable, Identifiable {
-    case none, ember, aurora, orbit
+    case none, ember, aurora, orbit, ripple, prism
 
     var id: Self { self }
     var title: String { rawValue.capitalized }
@@ -12,6 +12,8 @@ enum CursorEffect: String, CaseIterable, Identifiable {
         case .ember: "Golden sparks"
         case .aurora: "A ribbon of light"
         case .orbit: "A constellation"
+        case .ripple: "A moment of calm"
+        case .prism: "Light, with an edge"
         }
     }
 
@@ -21,6 +23,42 @@ enum CursorEffect: String, CaseIterable, Identifiable {
         case .ember: "Golden sparks catch your movement, scatter, and cool into nothing."
         case .aurora: "Teal turns to violet as a ribbon of light follows your lead, then fades."
         case .orbit: "Satellites gather around your cursor and leave a dusting of distant stars."
+        case .ripple: "Fine teal and silver rings follow your path, like a fingertip across water."
+        case .prism: "Translucent facets catch your direction and separate into cyan, violet and rose."
+        }
+    }
+
+    var clickDetail: String {
+        switch self {
+        case .none: "No additional click animation."
+        case .ember: "A small burst of warm sparks scatters from your pointer."
+        case .aurora: "A gentle bloom of colour opens around your pointer."
+        case .orbit: "A fine ring expands through the constellation."
+        case .ripple: "Three wider ripples open out, then softly dissolve."
+        case .prism: "A crisp fan of seven facets opens for a moment, then disappears."
+        }
+    }
+
+    var restDetail: String {
+        switch self {
+        case .none: "A quiet workspace, all the time."
+        case .ember: "The sparks cool and fade away."
+        case .aurora: "The ribbon thins and fades into the background."
+        case .orbit: "Satellites quietly circle while your session runs."
+        case .ripple: "The last wave fades. Everything returns to stillness."
+        case .prism: "The last facet catches the light, then fades completely."
+        }
+    }
+
+    static func shortcut(_ key: String) -> Self? {
+        switch key {
+        case "0": Self.none
+        case "1": .ember
+        case "2": .aurora
+        case "3": .orbit
+        case "4": .ripple
+        case "5": .prism
+        default: nil
         }
     }
 }

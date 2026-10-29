@@ -52,11 +52,22 @@ struct CursorEffectsTests {
         #expect(CursorEffectActivity(session: .failed("stopped"), needsInput: false) == .inactive)
     }
 
-    @Test(arguments: ["cursor", "pointer", "sparks", "ember", "aurora", "orbit"])
+    @Test(arguments: ["cursor", "pointer", "sparks", "ember", "aurora", "orbit", "ripple", "prism", "facets", "water"])
     func findsCursorEffects(query: String) {
         #expect(SettingsSearchIndex.results(for: query).contains {
             $0.tab == .appearance && $0.target == .appearanceCursorEffects
         })
+    }
+
+    @Test func shortcutsKeepTheirOriginalAssignmentsAndAddTheTwoEffects() {
+        let effects: [CursorEffect] = [.none, .ember, .aurora, .orbit, .ripple, .prism]
+        #expect(CursorEffect.allCases == effects)
+        #expect(effects.map(\.rawValue) == ["none", "ember", "aurora", "orbit", "ripple", "prism"])
+        for (index, effect) in effects.enumerated() {
+            #expect(CursorEffect.shortcut(String(index)) == effect)
+            #expect(CursorEffect(rawValue: effect.rawValue) == effect)
+        }
+        for key in ["6", "-1", "01", "x", ""] { #expect(CursorEffect.shortcut(key) == nil) }
     }
 
     @Test func textSearchGoesToTextBelowTheCursorEffects() {
@@ -94,7 +105,7 @@ struct CursorEffectLayerTests {
         }
     }
 
-    @Test(arguments: [CursorEffect.ember, .aurora, .orbit], [false, true])
+    @Test(arguments: CursorEffect.allCases.filter { $0 != .none }, [false, true])
     func reducedMotionHasAStillHaloOnlyWhileRunning(effect: CursorEffect, userPreference: Bool) {
         let view = makeView()
         for state: CursorEffectActivity in [.running, .waiting, .finished] {
@@ -106,7 +117,7 @@ struct CursorEffectLayerTests {
         }
     }
 
-    @Test(arguments: [CursorEffect.ember, .aurora, .orbit])
+    @Test(arguments: CursorEffect.allCases.filter { $0 != .none })
     func movementIsBoundedAndWindowChangesRemoveAllAnimations(effect: CursorEffect) {
         let view = makeView()
         configure(view, effect: effect, activity: .running)
@@ -135,29 +146,30 @@ struct CursorEffectLayerTests {
         #expect(animations(view).isEmpty)
     }
 
-    @Test func waitingStopsEmissionAndCompletionPlaysOnlyOnce() {
+    @Test(arguments: CursorEffect.allCases.filter { $0 != .none })
+    func waitingStopsEmissionAndCompletionPlaysOnlyOnce(effect: CursorEffect) {
         let view = makeView()
-        configure(view, effect: .orbit, activity: .running)
+        configure(view, effect: effect, activity: .running)
         view.movePointer(to: CGPoint(x: 100, y: 100))
-        configure(view, effect: .orbit, activity: .waiting)
+        configure(view, effect: effect, activity: .waiting)
         #expect(animations(view).isEmpty)
-        configure(view, effect: .orbit, activity: .finished)
+        configure(view, effect: effect, activity: .finished)
         let rings = layers(view).filter { $0.animationKeys()?.contains("ring") == true }
         #expect(rings.count == (NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? 0 : 1))
-        configure(view, effect: .orbit, activity: .finished)
+        configure(view, effect: effect, activity: .finished)
         #expect(layers(view).filter { $0.animationKeys()?.contains("ring") == true }.count == rings.count)
         configure(view, effect: .none, activity: .finished)
         #expect(animations(view).isEmpty)
     }
 
-    @Test(arguments: [CursorEffect.ember, .aurora, .orbit])
+    @Test(arguments: CursorEffect.allCases.filter { $0 != .none })
     func pointerExitLetsTrailsDecayWithoutInterruptingThemOnReentry(effect: CursorEffect) throws {
         guard !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else { return }
         let view = makeView()
         configure(view, effect: effect, activity: .running)
         let start = CACurrentMediaTime()
         view.movePointer(to: CGPoint(x: 100, y: 100), at: start)
-        view.movePointer(to: CGPoint(x: 120, y: 100), at: start + 1.0 / 60)
+        view.movePointer(to: CGPoint(x: 120, y: 100), at: start + 0.2)
         let trails = layers(view).filter { $0.animation(forKey: "decay") != nil }
         #expect(!trails.isEmpty)
 
@@ -174,10 +186,10 @@ struct CursorEffectLayerTests {
             #expect(try #require(opacity?.toValue as? Double) == 0)
         }
 
-        view.movePointer(to: CGPoint(x: 350, y: 200), at: start + 2.0 / 60)
+        view.movePointer(to: CGPoint(x: 350, y: 200), at: start + 0.4)
         #expect(layers(view).filter { $0.animation(forKey: "decay") != nil }.count == trails.count)
         #expect(trails.allSatisfy { $0.animation(forKey: "decay") != nil })
-        view.movePointer(to: CGPoint(x: 370, y: 200), at: start + 3.0 / 60)
+        view.movePointer(to: CGPoint(x: 370, y: 200), at: start + 0.6)
         let fresh = layers(view).filter { layer in
             layer.animation(forKey: "decay") != nil && !trails.contains { $0 === layer }
         }
@@ -207,21 +219,21 @@ struct CursorEffectLayerTests {
         }
     }
 
-    @Test(arguments: [CursorEffect.ember, .aurora, .orbit])
+    @Test(arguments: CursorEffect.allCases.filter { $0 != .none })
     func questionPromptKeepsTheTrailGoing(effect: CursorEffect) {
         guard !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else { return }
         let view = makeView()
         configure(view, effect: effect, activity: CursorEffectActivity(session: .streaming, needsInput: false))
         let start = CACurrentMediaTime()
         view.movePointer(to: CGPoint(x: 100, y: 100), at: start)
-        view.movePointer(to: CGPoint(x: 120, y: 100), at: start + 1.0 / 60)
+        view.movePointer(to: CGPoint(x: 120, y: 100), at: start + 0.2)
         let trails = layers(view).filter { $0.animation(forKey: "decay") != nil }
         #expect(!trails.isEmpty)
 
         configure(view, effect: effect, activity: CursorEffectActivity(session: .streaming, needsInput: true))
         #expect(trails.allSatisfy { $0.animation(forKey: "decay") != nil })
-        view.movePointer(to: CGPoint(x: 350, y: 200), at: start + 2.0 / 60)
-        view.movePointer(to: CGPoint(x: 370, y: 200), at: start + 3.0 / 60)
+        view.movePointer(to: CGPoint(x: 350, y: 200), at: start + 0.4)
+        view.movePointer(to: CGPoint(x: 370, y: 200), at: start + 0.6)
         let fresh = layers(view).filter { layer in
             layer.animation(forKey: "decay") != nil && !trails.contains { $0 === layer }
         }
@@ -332,6 +344,93 @@ struct CursorEffectLayerTests {
         configure(view, effect: .orbit, activity: .waiting)
         #expect(animations(view).isEmpty)
         #expect(layers(view).allSatisfy { $0.name != "cursor-glow" })
+    }
+
+    @Test(arguments: [CursorEffect.ripple, .prism])
+    func newEffectsDecayAtRestAndReuseThePool(effect: CursorEffect) throws {
+        guard !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else { return }
+        let view = makeView()
+        configure(view, effect: effect, activity: .running)
+        let start = CACurrentMediaTime()
+        view.movePointer(to: CGPoint(x: 100, y: 100), at: start)
+        view.movePointer(to: CGPoint(x: 140, y: 100), at: start + 0.2)
+        let emitted = layers(view).filter { $0.animation(forKey: "decay") != nil }
+        #expect(emitted.count == (effect == .ripple ? 1 : 3))
+        view.movePointer(to: CGPoint(x: 140, y: 100), at: start + 1)
+        #expect(layers(view).filter { $0.animation(forKey: "decay") != nil }.count == emitted.count)
+        view.leavePointer()
+        for particle in emitted {
+            let decay = try #require(particle.animation(forKey: "decay"))
+            #expect(decay.repeatCount == 0 && decay.isRemovedOnCompletion)
+            #expect(particle.opacity == 0)
+        }
+        for index in 0..<500 {
+            view.movePointer(to: CGPoint(x: 50 + index * 19 % 400, y: 50 + index * 13 % 200),
+                             at: start + 2 + Double(index) * 0.2)
+            view.click()
+        }
+        #expect(layers(view).count == CursorEffectLayerView.particleLimit + 2)
+        #expect(layers(view).allSatisfy { layer in
+            (layer.animationKeys() ?? []).allSatisfy { layer.animation(forKey: $0)?.repeatCount == 0 }
+        })
+        view.setForeground(false)
+        view.click()
+        view.movePointer(to: CGPoint(x: 200, y: 200))
+        #expect(animations(view).isEmpty)
+    }
+
+    @Test func rippleClickHasThreeStaggeredRingsWithBoundedRadius() throws {
+        guard !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else { return }
+        let view = makeView()
+        view.configure(settings: CursorEffectsSettings(effect: .ripple, intensity: 1), activity: .running, reduceMotion: false)
+        view.movePointer(to: CGPoint(x: 100, y: 100))
+        view.click()
+        let rings = layers(view).compactMap { $0.name == "ripple-ring" ? $0 as? CAShapeLayer : nil }
+        #expect(rings.count == 3)
+        let decays = try rings.map { try #require($0.animation(forKey: "decay") as? CAAnimationGroup) }
+        #expect(decays.allSatisfy { $0.duration == 1.25 })
+        #expect(decays[2].beginTime > decays[1].beginTime)
+        #expect(rings.allSatisfy { ($0.path?.boundingBoxOfPath.width ?? 0) <= 200 })
+        #expect(rings.allSatisfy { $0.fillColor == nil })
+    }
+
+    @Test func prismClickHasSevenTranslucentFacetsAndSeparateSpectralEdges() throws {
+        guard !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else { return }
+        let view = makeView()
+        configure(view, effect: .prism, activity: .running)
+        view.movePointer(to: CGPoint(x: 100, y: 100))
+        view.click()
+        let facets = layers(view).compactMap { $0.name == "prism-facet" ? $0 as? CAShapeLayer : nil }
+        let edges = layers(view).compactMap { $0.name == "prism-edge" ? $0 as? CAShapeLayer : nil }
+        #expect(facets.count == 7)
+        #expect(edges.count == 14)
+        #expect(facets.allSatisfy { ($0.fillColor?.alpha ?? 0) > 0 && ($0.fillColor?.alpha ?? 1) < 0.3 })
+        #expect(edges.allSatisfy { $0.fillColor == nil && $0.strokeColor != nil })
+        for facet in facets {
+            let decay = try #require(facet.animation(forKey: "decay"))
+            #expect((0.5...0.8).contains(decay.duration))
+        }
+    }
+
+    @Test(arguments: CursorEffect.allCases.filter { $0 != .none })
+    func previewSamplesAreFiniteAndInterruptible(effect: CursorEffect) {
+        guard !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else { return }
+        let view = makeView()
+        configure(view, effect: effect, activity: .running)
+        view.playPreviewSample()
+        #expect(layers(view).count < CursorEffectLayerView.particleLimit + 80)
+        #expect(layers(view).contains { $0.animation(forKey: "preview-path")?.duration == 3.6 })
+        view.leavePointer()
+        #expect(!animations(view).contains("preview-path"))
+        view.movePointer(to: CGPoint(x: 100, y: 100))
+        view.movePointer(to: CGPoint(x: 160, y: 100), at: CACurrentMediaTime() + 0.2)
+        view.setForeground(false)
+        #expect(animations(view).isEmpty)
+        configure(view, effect: effect, activity: .running, reduced: true)
+        view.setForeground(true)
+        view.playPreviewSample()
+        view.click()
+        #expect(animations(view).isEmpty)
     }
 
     private func makeView() -> CursorEffectLayerView {
