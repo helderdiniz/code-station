@@ -39,13 +39,14 @@ struct CursorEffectsTests {
         #expect(Preferences.cursorEffects(in: scratch.preferences.store) == previous)
     }
 
-    @Test func onlyRunningWorkAnimatesAndQuestionsTakePrecedence() {
+    @Test func runningWorkAndOpenQuestionsAnimate() {
         for state: SessionState in [.starting, .streaming] {
             #expect(CursorEffectActivity(session: state, needsInput: false) == .running)
-            #expect(CursorEffectActivity(session: state, needsInput: true) == .waiting)
+            #expect(CursorEffectActivity(session: state, needsInput: true) == .running)
         }
         for state: SessionState in [.waiting, .reconnecting("retrying"), .stalled, .stopping] {
             #expect(CursorEffectActivity(session: state, needsInput: false) == .waiting)
+            #expect(CursorEffectActivity(session: state, needsInput: true) == .running)
         }
         #expect(CursorEffectActivity(session: .idle, needsInput: false) == .finished)
         #expect(CursorEffectActivity(session: .failed("stopped"), needsInput: false) == .inactive)
@@ -207,10 +208,10 @@ struct CursorEffectLayerTests {
     }
 
     @Test(arguments: [CursorEffect.ember, .aurora, .orbit])
-    func questionPromptLetsTrailsFinishAndResumesWithoutABridge(effect: CursorEffect) throws {
+    func questionPromptKeepsTheTrailGoing(effect: CursorEffect) {
         guard !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else { return }
         let view = makeView()
-        configure(view, effect: effect, activity: .running)
+        configure(view, effect: effect, activity: CursorEffectActivity(session: .streaming, needsInput: false))
         let start = CACurrentMediaTime()
         view.movePointer(to: CGPoint(x: 100, y: 100), at: start)
         view.movePointer(to: CGPoint(x: 120, y: 100), at: start + 1.0 / 60)
@@ -219,35 +220,12 @@ struct CursorEffectLayerTests {
 
         configure(view, effect: effect, activity: CursorEffectActivity(session: .streaming, needsInput: true))
         #expect(trails.allSatisfy { $0.animation(forKey: "decay") != nil })
-        let marks = layers(view).compactMap { $0 as? CAShapeLayer }.filter { mark in
-            !trails.contains { $0 === mark }
-        }
-        #expect(marks.isEmpty)
-        for layer in layers(view) {
-            for key in layer.animationKeys() ?? [] {
-                #expect(layer.animation(forKey: key)?.repeatCount == 0)
-            }
-        }
         view.movePointer(to: CGPoint(x: 350, y: 200), at: start + 2.0 / 60)
-        #expect(layers(view).filter { $0.animation(forKey: "decay") != nil }.count == trails.count)
-
-        configure(view, effect: effect, activity: CursorEffectActivity(session: .streaming, needsInput: false))
-        view.movePointer(to: CGPoint(x: 350, y: 200), at: start + 3.0 / 60)
-        #expect(layers(view).filter { $0.animation(forKey: "decay") != nil }.count == trails.count)
-        #expect(trails.allSatisfy { $0.animation(forKey: "decay") != nil })
-        view.movePointer(to: CGPoint(x: 370, y: 200), at: start + 4.0 / 60)
+        view.movePointer(to: CGPoint(x: 370, y: 200), at: start + 3.0 / 60)
         let fresh = layers(view).filter { layer in
             layer.animation(forKey: "decay") != nil && !trails.contains { $0 === layer }
         }
         #expect(!fresh.isEmpty)
-        if effect == .aurora {
-            for ribbon in fresh.compactMap({ $0 as? CAShapeLayer }) {
-                #expect(try #require(ribbon.path).boundingBoxOfPath.minX >= 350)
-            }
-        }
-        configure(view, effect: effect, activity: .waiting)
-        configure(view, effect: .none, activity: .waiting)
-        #expect(animations(view).isEmpty)
     }
 
     @Test func enablingReduceMotionAtAQuestionClearsTrailsImmediately() {

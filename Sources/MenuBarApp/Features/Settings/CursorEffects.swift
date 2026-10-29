@@ -60,8 +60,9 @@ enum CursorEffectActivity: Hashable {
             self = session.isFailed ? .inactive : .finished
             return
         }
+        // A question is still live work, so the trail keeps following the pointer while it is answered.
         if needsInput {
-            self = .waiting
+            self = .running
         } else {
             switch session {
             case .starting, .streaming: self = .running
