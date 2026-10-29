@@ -4,7 +4,6 @@ import SwiftUI
 struct CursorEffectsSection: View {
     @Environment(AppSettings.self) private var settings
     @State private var keys = WindowKeyHandler()
-    @State private var preview = CursorEffectsPreviewController()
     @State private var beforeReset: CursorEffectsSettings?
     @State private var availableWidth: CGFloat = 0
     @Environment(\.accessibilityReduceMotion) private var systemReduced
@@ -22,10 +21,7 @@ struct CursorEffectsSection: View {
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
-                workbenchLayout {
-                    gallery.frame(width: availableWidth >= 620 ? 260 : nil)
-                    livePreview
-                }
+                gallery
                 SettingsRowDivider()
                 controlsLayout {
                     intensity.frame(maxWidth: .infinity)
@@ -47,25 +43,15 @@ struct CursorEffectsSection: View {
         .onAppear {
             keys.start { event in
                 guard event.modifierFlags.intersection([.command, .control, .option]).isEmpty else { return false }
-                if event.keyCode == 53 && preview.playing {
-                    preview.stop()
-                    return true
-                }
                 guard let key = event.characters, let effect = CursorEffect.shortcut(key) else { return false }
                 choose(effect)
                 return true
             }
         }
-        .onDisappear { keys.stop(); preview.stop() }
+        .onDisappear { keys.stop() }
         .onChange(of: settings.cursorEffects.effect) { _, effect in
             announce("\(effect.title) selected. Changes saved.")
         }
-        .onChange(of: reduced) { _, _ in preview.stop() }
-    }
-
-    private var workbenchLayout: AnyLayout {
-        availableWidth >= 620 ? AnyLayout(HStackLayout(alignment: .top, spacing: 18))
-            : AnyLayout(VStackLayout(alignment: .leading, spacing: 18))
     }
 
     private var controlsLayout: AnyLayout {
@@ -89,10 +75,6 @@ struct CursorEffectsSection: View {
         }
     }
 
-    private var livePreview: some View {
-        CursorEffectsPreview(settings: settings.cursorEffects, reduced: reduced, controller: preview)
-    }
-
     private func choice(_ effect: CursorEffect, featured: Bool = false) -> some View {
         CursorEffectChoice(effect: effect, selected: settings.cursorEffects.effect == effect,
                            featured: featured, localReduced: reduced) {
@@ -102,7 +84,6 @@ struct CursorEffectsSection: View {
 
     private func choose(_ effect: CursorEffect) {
         settings.cursorEffects.effect = effect
-        preview.play(settings: settings.cursorEffects, reduced: reduced)
     }
 
     private var intensity: some View {
@@ -116,9 +97,7 @@ struct CursorEffectsSection: View {
             }
             CursorEffectIntensity(value: Binding(get: { settings.cursorEffects.intensity },
                                                 set: { settings.cursorEffects.intensity = $0 }),
-                                  label: settings.cursorEffects.intensityLabel) {
-                preview.play(settings: settings.cursorEffects, reduced: reduced)
-            }
+                                  label: settings.cursorEffects.intensityLabel)
                 .disabled(settings.cursorEffects.effect == .none || reduced)
             HStack {
                 Text("Subtle")
@@ -146,14 +125,12 @@ struct CursorEffectsSection: View {
             InlineLink(title: "Reset cursor effects") {
                 beforeReset = settings.cursorEffects
                 settings.cursorEffects = CursorEffectsSettings()
-                preview.stop()
                 announce("Cursor effects reset to None. Changes saved.")
             }
             if let previous = beforeReset {
                 InlineLink(title: "Undo reset") {
                     settings.cursorEffects = previous
                     beforeReset = nil
-                    preview.stop()
                     announce("Your cursor effect has been restored. Changes saved.")
                 }
                 .transition(.fadeIn)
@@ -222,22 +199,12 @@ private struct CursorEffectChoice: View {
 
 struct CursorEffectThumbnail: View {
     let effect: CursorEffect
-    var reduced = false
-    var light = false
-    var preview = false
 
     var body: some View {
         ZStack {
-            (light ? Color(nsColor: Theme.canvasLightNSColor) : Color(nsColor: Theme.canvasDarkNSColor))
+            Color(nsColor: Theme.canvasDarkNSColor)
             Canvas { context, size in
-                let center = CGPoint(x: size.width * (preview ? 0.65 : 0.56), y: size.height * (preview ? 0.6 : 0.48))
-                if reduced && effect != .none {
-                    context.stroke(Path(ellipseIn: CGRect(x: center.x - 8, y: center.y - 5, width: 30, height: 30)),
-                                   with: .color(Theme.accent), lineWidth: 1.2)
-                    context.fill(Path(ellipseIn: CGRect(x: center.x + 17, y: center.y + 19, width: 4.6, height: 4.6)),
-                                 with: .color(Theme.accent))
-                    return
-                }
+                let center = CGPoint(x: size.width * 0.56, y: size.height * 0.48)
                 switch effect {
                 case .none: break
                 case .ember:
@@ -272,18 +239,18 @@ struct CursorEffectThumbnail: View {
                             y: center.y + offset * 8 - 1.5, width: 3, height: 3)), with: .color(.cyan))
                     }
                 case .ripple:
-                    let scale = min(size.width, size.height) / (preview ? 2.6 : 2.1)
+                    let scale = min(size.width, size.height) / 2.1
                     for index in 0..<6 {
                         let radius = scale * (0.18 + Double(index) * 0.19)
                         let rect = CGRect(x: center.x - radius - Double(index) * 2,
                                           y: center.y - radius * 0.86 + Double(index),
                                           width: radius * 2, height: radius * 1.72)
                         context.stroke(Path(ellipseIn: rect),
-                                       with: .color((light ? Color.teal : Color(red: 0.65, green: 0.85, blue: 0.8))
+                                       with: .color(Color(red: 0.65, green: 0.85, blue: 0.8)
                                         .opacity(0.65 - Double(index) * 0.095)), lineWidth: 0.8)
                     }
                 case .prism:
-                    let scale = min(size.width, size.height) / (preview ? 180 : 145)
+                    let scale = min(size.width, size.height) / 145
                     for index in 0..<7 {
                         let t = Double(index) / 6
                         let x = center.x + (-62 + t * 95) * scale
@@ -295,18 +262,16 @@ struct CursorEffectThumbnail: View {
                         var face = Path()
                         face.addLines(vertices)
                         face.closeSubpath()
-                        let colour = Color(hue: 0.49 + t * 0.4, saturation: light ? 0.65 : 0.4,
-                                           brightness: light ? 0.65 : 0.95)
+                        let colour = Color(hue: 0.49 + t * 0.4, saturation: 0.4, brightness: 0.95)
                         context.fill(face, with: .color(colour.opacity(0.1 + t * 0.17)))
                         context.stroke(face, with: .color(colour.opacity(0.25 + t * 0.4)), lineWidth: 0.8)
                     }
                 }
             }
             GeometryReader { geometry in
-                Image(systemName: "cursorarrow").font(.system(size: preview ? 19 : 14))
-                    .foregroundStyle(light ? Color.black : .white)
-                    .position(x: geometry.size.width * (preview ? 0.65 : 0.56),
-                              y: geometry.size.height * (preview ? 0.6 : 0.48))
+                Image(systemName: "cursorarrow").font(.system(size: 14))
+                    .foregroundStyle(.white)
+                    .position(x: geometry.size.width * 0.56, y: geometry.size.height * 0.48)
             }
         }
         .clipShape(RoundedRectangle(cornerRadius: 6))
@@ -316,7 +281,6 @@ struct CursorEffectThumbnail: View {
 private struct CursorEffectIntensity: View {
     @Binding var value: Double
     let label: String
-    let onCommit: () -> Void
     @FocusState private var focused: Bool
     @Environment(\.isEnabled) private var enabled
     private var fraction: Double { (value - 0.1) / 0.9 }
@@ -334,7 +298,7 @@ private struct CursorEffectIntensity: View {
             .gesture(DragGesture(minimumDistance: 0).onChanged { drag in
                 guard enabled else { return }
                 value = 0.1 + min(1, max(0, drag.location.x / max(1, geometry.size.width))) * 0.9
-            }.onEnded { _ in if enabled { onCommit() } })
+            })
         }
         .frame(height: 24)
         .opacity(enabled ? 1 : 0.4)
@@ -360,6 +324,5 @@ private struct CursorEffectIntensity: View {
     private func adjust(_ amount: Double) {
         guard enabled else { return }
         value = min(1, max(0.1, value + amount))
-        onCommit()
     }
 }
