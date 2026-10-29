@@ -48,5 +48,22 @@ struct CursorEffectsLayoutTests {
                 }
             }
         }
+        for effect: CursorEffect in [.ripple, .prism] {
+            for light in [false, true] {
+                let host = NSHostingView(rootView: Canvas { context, size in
+                    context.withCGContext { canvas in
+                        CursorEffectArtwork.drawIllustration(effect, in: canvas, size: size, preview: true, light: light)
+                    }
+                }
+                    .background(Color(nsColor: light ? Theme.canvasLightNSColor : Theme.canvasDarkNSColor))
+                    .frame(width: 580, height: 360))
+                host.frame = CGRect(x: 0, y: 0, width: 580, height: 360)
+                host.layoutSubtreeIfNeeded()
+                let bitmap = try #require(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+                host.cacheDisplay(in: host.bounds, to: bitmap)
+                try #require(bitmap.representation(using: .png, properties: [:])).write(
+                    to: destination.appendingPathComponent("\(effect.rawValue)-surface-\(light ? "light" : "dark").png"))
+            }
+        }
     }
 }

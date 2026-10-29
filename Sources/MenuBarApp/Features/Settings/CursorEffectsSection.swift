@@ -238,40 +238,19 @@ struct CursorEffectThumbnail: View {
                         context.fill(Path(ellipseIn: CGRect(x: center.x + offset * 16 - 1.5,
                             y: center.y + offset * 8 - 1.5, width: 3, height: 3)), with: .color(.cyan))
                     }
-                case .ripple:
-                    let scale = min(size.width, size.height) / 2.1
-                    for index in 0..<6 {
-                        let radius = scale * (0.18 + Double(index) * 0.19)
-                        let rect = CGRect(x: center.x - radius - Double(index) * 2,
-                                          y: center.y - radius * 0.86 + Double(index),
-                                          width: radius * 2, height: radius * 1.72)
-                        context.stroke(Path(ellipseIn: rect),
-                                       with: .color(Color(red: 0.65, green: 0.85, blue: 0.8)
-                                        .opacity(0.65 - Double(index) * 0.095)), lineWidth: 0.8)
-                    }
-                case .prism:
-                    let scale = min(size.width, size.height) / 145
-                    for index in 0..<7 {
-                        let t = Double(index) / 6
-                        let x = center.x + (-62 + t * 95) * scale
-                        let y = center.y + (27 - t * 48) * scale
-                        let radius = (10 + t * 18) * scale
-                        let vertices = [CGPoint(x: x + radius, y: y - radius),
-                                        CGPoint(x: x - radius, y: y + radius * 0.7),
-                                        CGPoint(x: x + radius * 0.5, y: y + radius)]
-                        var face = Path()
-                        face.addLines(vertices)
-                        face.closeSubpath()
-                        let colour = Color(hue: 0.49 + t * 0.4, saturation: 0.4, brightness: 0.95)
-                        context.fill(face, with: .color(colour.opacity(0.1 + t * 0.17)))
-                        context.stroke(face, with: .color(colour.opacity(0.25 + t * 0.4)), lineWidth: 0.8)
+                case .ripple, .prism:
+                    context.withCGContext { canvas in
+                        CursorEffectArtwork.drawIllustration(effect, in: canvas, size: size, preview: false, light: false)
                     }
                 }
             }
             GeometryReader { geometry in
+                let cursor = effect == .ripple || effect == .prism
+                    ? CursorEffectArtwork.cursorPosition(effect: effect, size: geometry.size, preview: false)
+                    : CGPoint(x: geometry.size.width * 0.56, y: geometry.size.height * 0.48)
                 Image(systemName: "cursorarrow").font(.system(size: 14))
                     .foregroundStyle(.white)
-                    .position(x: geometry.size.width * 0.56, y: geometry.size.height * 0.48)
+                    .position(cursor)
             }
         }
         .clipShape(RoundedRectangle(cornerRadius: 6))

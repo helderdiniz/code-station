@@ -90,6 +90,7 @@ struct CursorEffectsTests {
     @MainActor private func animations(in layer: CALayer?) -> [String] {
         guard let layer else { return [] }
         return (layer.animationKeys() ?? []) + (layer.sublayers ?? []).flatMap { animations(in: $0) }
+            + animations(in: layer.mask)
     }
 }
 
@@ -174,7 +175,8 @@ struct CursorEffectLayerTests {
         #expect(!trails.isEmpty)
 
         view.mouseExited(with: try exitEvent())
-        #expect(layers(view).count == trails.count + 2)
+        let cost = effect == .prism ? 5 : effect == .ripple ? 3 : 1
+        #expect(layers(view).count == trails.count * cost + 2)
         for trail in trails {
             let decay = try #require(trail.animation(forKey: "decay"))
             #expect(decay.duration > 0 && decay.duration.isFinite)
@@ -183,7 +185,9 @@ struct CursorEffectLayerTests {
             let opacity = (decay as? CAAnimationGroup)?.animations?
                 .compactMap { $0 as? CABasicAnimation }.first { $0.keyPath == "opacity" }
                 ?? decay as? CABasicAnimation
-            #expect(try #require(opacity?.toValue as? Double) == 0)
+            let curve = (decay as? CAAnimationGroup)?.animations?
+                .compactMap { $0 as? CAKeyframeAnimation }.first { $0.keyPath == "opacity" }
+            #expect(try #require(opacity?.toValue as? Double ?? curve?.values?.last as? Double) == 0)
         }
 
         view.movePointer(to: CGPoint(x: 350, y: 200), at: start + 0.4)
@@ -355,7 +359,7 @@ struct CursorEffectLayerTests {
         view.movePointer(to: CGPoint(x: 100, y: 100), at: start)
         view.movePointer(to: CGPoint(x: 140, y: 100), at: start + 0.2)
         let emitted = layers(view).filter { $0.animation(forKey: "decay") != nil }
-        #expect(emitted.count == (effect == .ripple ? 1 : 3))
+        #expect(emitted.count == 1)
         view.movePointer(to: CGPoint(x: 140, y: 100), at: start + 1)
         #expect(layers(view).filter { $0.animation(forKey: "decay") != nil }.count == emitted.count)
         view.leavePointer()
@@ -369,7 +373,9 @@ struct CursorEffectLayerTests {
                              at: start + 2 + Double(index) * 0.2)
             view.click()
         }
-        #expect(layers(view).count == CursorEffectLayerView.particleLimit + 2)
+        let cost = effect == .ripple ? 3 : 5
+        #expect(layers(view).count == CursorEffectLayerView.particleLimit / cost * cost + 2)
+        #expect(layers(view).count <= CursorEffectLayerView.particleLimit + 2)
         #expect(layers(view).allSatisfy { layer in
             (layer.animationKeys() ?? []).allSatisfy { layer.animation(forKey: $0)?.repeatCount == 0 }
         })
@@ -390,7 +396,19 @@ struct CursorEffectLayerTests {
         let decays = try rings.map { try #require($0.animation(forKey: "decay") as? CAAnimationGroup) }
         #expect(decays.allSatisfy { $0.duration == 1.25 })
         #expect(decays[2].beginTime > decays[1].beginTime)
-        #expect(rings.allSatisfy { ($0.path?.boundingBoxOfPath.width ?? 0) <= 200 })
+        for ring in rings {
+            #expect(ring.position == CGPoint(x: 100, y: 100))
+            let gradient = try #require(ring.sublayers?.first as? CAGradientLayer)
+            let mask = try #require(gradient.mask as? CAShapeLayer)
+            let bounds = try #require(mask.path?.boundingBoxOfPath)
+            #expect(bounds.width <= 200)
+            #expect(abs(bounds.height / bounds.width - 0.94) < 0.001)
+            #expect(ring.bounds.contains(bounds.insetBy(dx: -0.4, dy: -0.4)))
+            #expect(gradient.colors?.count == 4)
+            #expect(mask.fillColor == nil && mask.strokeColor != nil)
+            #expect(mask.animation(forKey: "ripple-shape")?.beginTime == ring.animation(forKey: "decay")?.beginTime)
+            #expect(gradient.animation(forKey: "ripple-colour")?.beginTime == ring.animation(forKey: "decay")?.beginTime)
+        }
         #expect(rings.allSatisfy { $0.fillColor == nil })
     }
 
@@ -401,14 +419,64 @@ struct CursorEffectLayerTests {
         view.movePointer(to: CGPoint(x: 100, y: 100))
         view.click()
         let facets = layers(view).compactMap { $0.name == "prism-facet" ? $0 as? CAShapeLayer : nil }
-        let edges = layers(view).compactMap { $0.name == "prism-edge" ? $0 as? CAShapeLayer : nil }
         #expect(facets.count == 7)
-        #expect(edges.count == 14)
-        #expect(facets.allSatisfy { ($0.fillColor?.alpha ?? 0) > 0 && ($0.fillColor?.alpha ?? 1) < 0.3 })
-        #expect(edges.allSatisfy { $0.fillColor == nil && $0.strokeColor != nil })
         for facet in facets {
-            let decay = try #require(facet.animation(forKey: "decay"))
+            let face = try #require(facet.sublayers?.first as? CAGradientLayer)
+            let edge = try #require(facet.sublayers?.last as? CAGradientLayer)
+            let faceMask = try #require(face.mask as? CAShapeLayer)
+            let edgeMask = try #require(edge.mask as? CAShapeLayer)
+            let colours = try #require(face.colors as? [CGColor])
+            #expect(colours.count == 3 && colours.allSatisfy { $0.alpha > 0 && $0.alpha <= 0.4 })
+            #expect(edge.colors?.count == 3)
+            #expect(faceMask.path == edgeMask.path)
+            #expect(faceMask.fillColor != nil && faceMask.strokeColor == nil)
+            #expect(edgeMask.fillColor == nil && edgeMask.strokeColor != nil)
+            #expect(facet.path != nil && facet.strokeColor != nil && facet.lineWidth == 0.5)
+            #expect(facet.bounds.contains(try #require(faceMask.path?.boundingBoxOfPath).insetBy(dx: -0.4, dy: -0.4)))
+            let decay = try #require(facet.animation(forKey: "decay") as? CAAnimationGroup)
             #expect((0.5...0.8).contains(decay.duration))
+            let turn = try #require(decay.animations?.compactMap { $0 as? CABasicAnimation }.first { $0.keyPath == "transform.rotation.z" })
+            #expect(abs(try #require(turn.toValue as? Double) - #require(turn.fromValue as? Double) - 0.13) < 0.001)
+            let fade = try #require(decay.animations?.compactMap { $0 as? CAKeyframeAnimation }.first { $0.keyPath == "opacity" })
+            let values = try #require(fade.values as? [Double])
+            #expect(values.last == 0)
+            #expect(abs(values[12] / values[0] - pow(0.5, 1.5)) < 0.001)
+        }
+    }
+
+    @Test func switchingEffectsRebuildsThePoolWithinItsLayerBudget() {
+        guard !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else { return }
+        let view = makeView()
+        for effect: CursorEffect in [.prism, .ripple, .ember, .prism] {
+            view.leavePointer()
+            configure(view, effect: effect, activity: .running)
+            #expect(layers(view).count == 2)
+            view.movePointer(to: CGPoint(x: 100, y: 100))
+            view.click()
+            #expect(layers(view).count <= CursorEffectLayerView.particleLimit + 2)
+            if effect == .ember { #expect(!layers(view).contains { $0.name == "prism-face" }) }
+        }
+    }
+
+    @Test(arguments: [CursorEffect.ripple, .prism])
+    func previewKeepsItsFirstAndLastEmissionsAndSynchronizesMasks(effect: CursorEffect) throws {
+        guard !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else { return }
+        let view = makeView()
+        configure(view, effect: effect, activity: .running)
+        let start = CACurrentMediaTime()
+        view.playPreviewSample()
+        let births = layers(view).compactMap { $0.animation(forKey: "decay")?.beginTime }.sorted()
+        #expect(try #require(births.first) - start < 0.2)
+        #expect(try #require(births.last) - start > 3.3)
+        #expect(layers(view).count <= CursorEffectLayerView.particleLimit + 3)
+        if effect == .ripple {
+            for ring in layers(view).filter({ $0.name == "ripple-ring" }) {
+                let colour = try #require(ring.sublayers?.first)
+                let mask = try #require(colour.mask)
+                let birth = try #require(ring.animation(forKey: "decay")?.beginTime)
+                #expect(abs(try #require(colour.animation(forKey: "ripple-colour")?.beginTime) - birth) < 0.001)
+                #expect(abs(try #require(mask.animation(forKey: "ripple-shape")?.beginTime) - birth) < 0.001)
+            }
         }
     }
 
@@ -453,7 +521,7 @@ struct CursorEffectLayerTests {
 
     private func layers(_ view: CursorEffectLayerView) -> [CALayer] {
         func descendants(_ layer: CALayer) -> [CALayer] {
-            [layer] + (layer.sublayers ?? []).flatMap(descendants)
+            [layer] + (layer.sublayers ?? []).flatMap(descendants) + (layer.mask.map(descendants) ?? [])
         }
         return view.layer.map(descendants) ?? []
     }
