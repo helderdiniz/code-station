@@ -80,6 +80,7 @@ final class CursorEffectLayerView: LoopLayerView {
         let completed = wasActive && activity == .finished && self.settings.effect == settings.effect
         let presentedPoint = ornament.presentation()?.position ?? point
         if self.settings.effect != settings.effect {
+            layerUsesCoreImageFilters = settings.effect == .aurora
             particles.forEach { $0.removeFromSuperlayer() }
             particles.removeAll()
             nextParticle = 0
@@ -310,6 +311,12 @@ final class CursorEffectLayerView: LoopLayerView {
         guard foreground, pointerInside, !reduced, settings.effect != .none,
               activity == .running || activity == .waiting else { return }
         finishEntrance()
+        if settings.effect == .aurora {
+            // The entrance replaces the cleared trail, so both pools need not occupy the layer budget.
+            particles.forEach { $0.removeFromSuperlayer() }
+            particles.removeAll()
+            nextParticle = 0
+        }
         let speed = speed == 0.25 ? 0.25 : 1
         let duration = settings.effect.entranceDuration
         let now = CACurrentMediaTime()

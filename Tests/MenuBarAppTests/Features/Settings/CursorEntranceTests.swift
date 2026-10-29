@@ -156,7 +156,7 @@ struct CursorEntranceTests {
                 colour: { NSColor(calibratedHue: $0 * 0.8, saturation: 0.6, brightness: dark ? 1 : 0.6, alpha: 1) },
                 satellite: { index, time in CGPoint(x: cos(Double(index) + time) * 33, y: sin(Double(index) + time) * 24) })
             let marks = layers(root)
-            #expect(marks.count < 60)
+            #expect(marks.count < (effect == .aurora ? CursorEffectLayerView.particleLimit : 60))
             if effect == .orbit { #expect(marks.filter { $0.name == "entrance-satellite" }.count == 4) }
             if effect == .prism { #expect(marks.filter { $0.name == "entrance-facet" }.count == 6) }
             if effect == .ripple { #expect(marks.filter { $0.name == "entrance-wave" }.count == 1) }
@@ -190,52 +190,62 @@ struct CursorEntranceTests {
         }
     }
 
-    @Test func novaGathersHoldsBurstsAndDissolvesAroundThePointer() throws {
+    @Test func novaGathersBurstsAndDissolvesAroundThePointer() throws {
         func frame(_ milliseconds: Double) -> [CALayer] {
-            layers(CursorEffectEntrance.make(effect: .aurora, intensity: 0.55, scale: 2,
+            CursorEffectEntrance.make(effect: .aurora, intensity: 0.55, scale: 2,
                 progress: milliseconds / 1200,
                 colour: { NSColor(calibratedHue: 0.47 + $0 * 0.28, saturation: 0.55, brightness: 1, alpha: 1) },
-                satellite: { _, _ in .zero })).filter { $0.name != "cursor-entrance" }
-        }
-        func subpaths(_ marks: [CALayer], named name: String) -> Int {
-            var count = 0
-            for mark in marks where mark.name == name {
-                (mark as? CAShapeLayer)?.path?.applyWithBlock { element in
-                    if element.pointee.type == .moveToPoint { count += 1 }
-                }
-            }
-            return count
+                satellite: { _, _ in .zero }).sublayers ?? []
         }
         let start = frame(0)
-        let gathered = frame(480)
         let charge = frame(520)
-        let release = frame(600)
         let explosion = frame(700)
         let decay = frame(980)
         let end = frame(1200)
         #expect(start.allSatisfy { $0.opacity == 0 })
-        #expect(end.allSatisfy { $0.opacity == 0 })
-        for (before, after) in zip(gathered, release) where before.name?.hasPrefix("entrance-charge") == true {
-            #expect(before.opacity == after.opacity)
-            #expect(before.bounds == after.bounds)
-            #expect((before as? CAShapeLayer)?.path == (after as? CAShapeLayer)?.path)
-        }
+        #expect(end.allSatisfy { $0.opacity < 0.001 })
         #expect(charge.contains { $0.name == "entrance-charge-core" && $0.opacity > 0 })
         #expect(charge.filter { $0.name?.hasPrefix("entrance-burst") == true }.allSatisfy { $0.opacity == 0 })
-        #expect(subpaths(explosion, named: "entrance-burst-streak") == 54)
-        #expect(subpaths(explosion, named: "entrance-burst-point") == 52)
+        #expect(explosion.filter { $0.name == "entrance-burst-streak" }.count == 54)
+        #expect(explosion.filter { $0.name == "entrance-burst-point" }.count == 52)
+        let streaks = explosion.filter { $0.name == "entrance-burst-streak" }
+        #expect(Set(streaks.map(\.opacity)).count > 20)
+        let widths = streaks.compactMap { ($0.mask?.sublayers?.last as? CAShapeLayer)?.lineWidth }
+        #expect(Set(widths).count > 20)
+        #expect(explosion.filter { $0.name == "entrance-burst-flare" && $0.opacity > 0 }.count == 1)
+        #expect(decay.filter { $0.name == "entrance-burst-flare" }.allSatisfy { $0.opacity == 0 })
         #expect(explosion.filter { $0.name == "entrance-burst-wave" && $0.opacity > 0 }.count == 1)
         #expect(decay.filter { $0.name == "entrance-burst-wave" }.allSatisfy { $0.opacity == 0 })
         for (before, after) in zip(explosion, decay) where before.name == "entrance-burst-streak" {
             #expect(before.opacity > after.opacity && after.opacity > 0)
-            let beforePath = try #require((before as? CAShapeLayer)?.path)
-            let afterPath = try #require((after as? CAShapeLayer)?.path)
-            #expect(afterPath.boundingBoxOfPath.width > beforePath.boundingBoxOfPath.width)
+            let gradient = try #require(before as? CAGradientLayer)
+            let colours = try #require(gradient.colors as? [CGColor])
+            #expect(colours.first?.alpha == 0)
+            #expect(colours.last!.alpha < 0.1)
+            #expect(colours[2].alpha == 1)
         }
         for marks in [start, charge, explosion, decay, end] {
             #expect(marks.allSatisfy { CATransform3DIsIdentity($0.transform) })
             #expect(marks.allSatisfy { ($0.animationKeys() ?? []).isEmpty })
         }
+    }
+
+    @Test func novaReplacesAFullTrailWithinTheLayerBudget() throws {
+        guard !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else { return }
+        let view = makeView(.aurora)
+        let turn = Date()
+        configure(view, .aurora, .running, turn)
+        view.finishEntrance()
+        let start = CACurrentMediaTime()
+        for index in 0..<500 {
+            view.movePointer(to: CGPoint(x: 30 + index * 13 % 400, y: 50 + index * 17 % 200),
+                             at: start + Double(index) / 60)
+        }
+        #expect(layers(view.layer).filter { $0.name == "aurora-ribbon" }.count == CursorEffectLayerView.particleLimit)
+        configure(view, .aurora, .running, turn.addingTimeInterval(1))
+        #expect(view.entrance != nil)
+        #expect(layers(view.layer).count < CursorEffectLayerView.particleLimit)
+        view.stop()
     }
 
     @Test func novaHandsOffToTheExistingGlowAndTrailWithoutChangingTheCursor() throws {
@@ -325,8 +335,10 @@ struct CursorEntranceTests {
                     let context = try #require(CGContext(data: nil, width: 500, height: 300, bitsPerComponent: 8,
                         bytesPerRow: 2000, space: CGColorSpaceCreateDeviceRGB(),
                         bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
-                    context.setFillColor((dark ? NSColor(white: 0.08, alpha: 1) : .white).cgColor)
+                    context.setFillColor((dark ? Theme.canvasDarkNSColor : Theme.canvasLightNSColor).cgColor)
                     context.fill(CGRect(x: 0, y: 0, width: 500, height: 300))
+                    context.translateBy(x: 0, y: 300)
+                    context.scaleBy(x: 1, y: -1)
                     view.layer?.render(in: context)
                     let bitmap = NSBitmapImageRep(cgImage: try #require(context.makeImage()))
                     try #require(bitmap.representation(using: .png, properties: [:])).write(to: destination
@@ -355,6 +367,6 @@ struct CursorEntranceTests {
 
     private func layers(_ root: CALayer?) -> [CALayer] {
         guard let root else { return [] }
-        return [root] + (root.sublayers ?? []).flatMap { layers($0) }
+        return [root] + (root.sublayers ?? []).flatMap { layers($0) } + layers(root.mask)
     }
 }
