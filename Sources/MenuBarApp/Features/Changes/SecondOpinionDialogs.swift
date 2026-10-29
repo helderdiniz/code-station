@@ -213,8 +213,8 @@ private struct SectionTitle: View {
 // Every seat says how independent it is of the agent that wrote the work, in a meter and
 // in words; that is advice, never a rule, so a seat on the author's own model is allowed
 // and only flagged. What differs between subjects is the wording and what a reviewer
-// looks for and reads, which the caller passes in.
-struct SecondOpinionAskView<Choices: View>: View {
+// looks for and reads, which the caller passes in, along with the choice of subject.
+struct SecondOpinionAskView<Subject: View, Choices: View>: View {
     let message: String
     let safety: String
     let author: SecondOpinion.Reviewer
@@ -225,6 +225,7 @@ struct SecondOpinionAskView<Choices: View>: View {
     @Binding var lineup: [SecondOpinion.Reviewer]
     // Nothing is ticked to look for, so there is nothing to ask for yet.
     var needsFocus = false
+    @ViewBuilder let subject: Subject
     @ViewBuilder let choices: Choices
     let ask: () -> Void
 
@@ -242,6 +243,7 @@ struct SecondOpinionAskView<Choices: View>: View {
             EmptyView()
         } content: {
             VStack(alignment: .leading, spacing: 18) {
+                subject
                 VStack(alignment: .leading, spacing: 8) {
                     HStack(alignment: .firstTextBaseline) {
                         SectionTitle(title: "Reviewers")
@@ -521,85 +523,56 @@ struct SecondOpinionSection<Content: View>: View {
     }
 }
 
-// The ask dialog as it opens on a session's changes. It keeps its own choices while it
-// is open and hands them over when the person asks.
-struct ChangesOpinionAsk: View {
-    let author: SecondOpinion.Reviewer
-    let installed: [AgentKind]
-    let running: Set<SecondOpinion.Reviewer>
+// What a reviewer of changes looks for, and which changes they read.
+struct ChangesOpinionChoices: View {
+    @Binding var focus: Set<SecondOpinion.Focus>
+    @Binding var scope: SecondOpinionScopeChoice
     let fileCount: Int
     let fileName: String?
     let canReadSince: Bool
-    let ask: ([SecondOpinion.Reviewer], Set<SecondOpinion.Focus>, SecondOpinionScopeChoice) -> Void
 
-    @State private var lineup: [SecondOpinion.Reviewer]
-    @State private var focus: Set<SecondOpinion.Focus>
-    @State private var scope: SecondOpinionScopeChoice
     @Namespace private var track
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    init(author: SecondOpinion.Reviewer, installed: [AgentKind], running: Set<SecondOpinion.Reviewer>,
-         lineup: [SecondOpinion.Reviewer], focus: Set<SecondOpinion.Focus>, scope: SecondOpinionScopeChoice,
-         fileCount: Int, fileName: String?, canReadSince: Bool,
-         ask: @escaping ([SecondOpinion.Reviewer], Set<SecondOpinion.Focus>, SecondOpinionScopeChoice) -> Void) {
-        self.author = author
-        self.installed = installed
-        self.running = running
-        self.fileCount = fileCount
-        self.fileName = fileName
-        self.canReadSince = canReadSince
-        self.ask = ask
-        _lineup = State(initialValue: lineup)
-        _focus = State(initialValue: focus)
-        _scope = State(initialValue: scope)
-    }
-
     var body: some View {
-        SecondOpinionAskView(
-            message: "Agents that did not write these changes read them on their own and leave findings. You decide which ones reach \(author.agent.title).",
-            safety: "Reviewers can read files but not change them, and run without your MCP servers. They see the diff, not this conversation.",
-            author: author, installed: installed, running: running, lineup: $lineup, needsFocus: focus.isEmpty,
-            choices: {
-                // Several can be ticked at once, so these are checkboxes; filled pills
-                // would read as a choice of one.
-                SecondOpinionSection(title: "What to look for") {
-                    Grid(alignment: .leading, horizontalSpacing: 22, verticalSpacing: 9) {
-                        ForEach(Array(stride(from: 0, to: SecondOpinion.Focus.allCases.count, by: 3)), id: \.self) { start in
-                            GridRow {
-                                ForEach(SecondOpinion.Focus.allCases.dropFirst(start).prefix(3), id: \.self) { item in
-                                    Toggle(isOn: Binding(get: { focus.contains(item) },
-                                                         set: { on in if on { focus.insert(item) } else { focus.remove(item) } })) {
-                                        Text(item.title).font(.system(size: 12.5))
-                                    }
-                                    .toggleStyle(.appCheckbox)
-                                }
+        // Several can be ticked at once, so these are checkboxes; filled pills would read
+        // as a choice of one.
+        SecondOpinionSection(title: "What to look for") {
+            Grid(alignment: .leading, horizontalSpacing: 22, verticalSpacing: 9) {
+                ForEach(Array(stride(from: 0, to: SecondOpinion.Focus.allCases.count, by: 3)), id: \.self) { start in
+                    GridRow {
+                        ForEach(SecondOpinion.Focus.allCases.dropFirst(start).prefix(3), id: \.self) { item in
+                            Toggle(isOn: Binding(get: { focus.contains(item) },
+                                                 set: { on in if on { focus.insert(item) } else { focus.remove(item) } })) {
+                                Text(item.title).font(.system(size: 12.5))
                             }
+                            .toggleStyle(.appCheckbox)
                         }
                     }
                 }
-                SecondOpinionSection(title: "Which changes") {
-                    VStack(alignment: .leading, spacing: 8) {
-                        HStack(spacing: 2) {
-                            scopePill("All \(counted(fileCount, "file"))", .all)
-                            if let fileName { scopePill(fileName, .file) }
-                            scopePill("Since your last review", .sinceReview, enabled: canReadSince)
-                                .appTooltip(canReadSince ? "Only what changed after the last review was sent"
-                                            : "Once you have sent a review, a reviewer can read only what changed after it")
-                        }
-                        .padding(2)
-                        .fieldSurface(cornerRadius: 10)
-                        .fixedSize()
-                        .accessibilityElement(children: .contain)
-                        .accessibilityLabel("Which changes")
-                        if !canReadSince {
-                            Text("Since your last review opens up once you send one.")
-                                .font(.system(size: 11)).foregroundStyle(.tertiary)
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
-                    }
+            }
+        }
+        SecondOpinionSection(title: "Which changes") {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 2) {
+                    scopePill("All \(counted(fileCount, "file"))", .all)
+                    if let fileName { scopePill(fileName, .file) }
+                    scopePill("Since your last review", .sinceReview, enabled: canReadSince)
+                        .appTooltip(canReadSince ? "Only what changed after the last review was sent"
+                                    : "Once you have sent a review, a reviewer can read only what changed after it")
                 }
-            },
-            ask: { ask(lineup, focus, scope) })
+                .padding(2)
+                .fieldSurface(cornerRadius: 10)
+                .fixedSize()
+                .accessibilityElement(children: .contain)
+                .accessibilityLabel("Which changes")
+                if !canReadSince {
+                    Text("Since your last review opens up once you send one.")
+                        .font(.system(size: 11)).foregroundStyle(.tertiary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
     }
 
     private func scopePill(_ title: String, _ choice: SecondOpinionScopeChoice, enabled: Bool = true) -> some View {

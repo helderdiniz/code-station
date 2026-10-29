@@ -56,8 +56,6 @@ struct ChangesView: View {
     // The second opinion dialog showing progress or findings, so a reviewer finishing
     // while it is open does not also raise a toast behind it.
     @State private var secondOpinionDialog: UUID?
-    @State private var pickerLineup: [SecondOpinion.Reviewer] = []
-    @State private var pickerScope = SecondOpinionScopeChoice.all
     // An unplaced comment waiting for a line number to be clicked to move onto.
     @State private var reattaching: UUID?
     // Bumped to scroll the diff to the focused comment again, even when it has not moved.
@@ -238,21 +236,15 @@ struct ChangesView: View {
             try? await Task.sleep(for: .seconds(toast.action == nil ? 3.2 : 6))
             if self.toast?.id == toast.id { self.toast = nil }
         }
-        .onAppear { reviewKeys.start { handleReviewKey($0) } }
+        .onAppear {
+            reviewKeys.start { handleReviewKey($0) }
+            takeSecondOpinionRequest()
+        }
         .onDisappear { reviewKeys.stop() }
         .onChange(of: review.map { $0.reviews.runs($0.sessionID) } ?? []) { old, new in
             reportFinishedRuns(old: old, new: new)
         }
-        .onChange(of: navigation.secondOpinionAsks) { _, _ in
-            guard let review else { return }
-            mode = .changes
-            openAsk(review)
-        }
-        .onChange(of: navigation.secondOpinionOpens) { _, _ in
-            guard let review else { return }
-            mode = .changes
-            openSecondOpinion(review)
-        }
+        .onChange(of: navigation.secondOpinionRequest) { _, _ in takeSecondOpinionRequest() }
         .task(id: root) {
             if model.snapshot == nil { model.snapshot = gitStats.snapshot(at: root) }
             await reload()
@@ -2406,41 +2398,22 @@ struct ChangesView: View {
     // The header's control opens whichever dialog its state is about.
     private func openSecondOpinion(_ review: ReviewTarget) {
         switch SecondOpinionStatus(reviews: review.reviews, sessionID: review.sessionID) {
-        case .ask: openAsk(review)
-        case .reviewing, .failed: openProgress(review)
+        case .ask, .reviewing, .failed: openProgress(review)
         case .ready: openFindings(review)
         case .settled(let kept, let dismissed):
             if kept + dismissed > 0 { openFindings(review) } else { openProgress(review) }
         }
     }
 
-    private func openAsk(_ review: ReviewTarget) {
-        let installed = AgentKind.allCases.filter { review.executable($0) != nil }
-        let running = Set(review.reviews.runs(review.sessionID).filter(\.isRunning).map(\.reviewer))
-        if pickerLineup.isEmpty {
-            // With no saved lineup the dialog seats a first reviewer itself.
-            pickerLineup = Preferences.secondOpinionLineup().filter { installed.contains($0.agent) }
+    private func takeSecondOpinionRequest() {
+        guard let request = navigation.secondOpinionRequest else { return }
+        navigation.secondOpinionRequest = nil
+        guard let review else { return }
+        mode = .changes
+        switch request {
+        case .ask(let lineup): askForSecondOpinion(review, lineup: lineup)
+        case .open: openSecondOpinion(review)
         }
-        let canReadSince = review.reviews.latestTrees(review.sessionID) != nil
-        if pickerScope == .sinceReview, !canReadSince { pickerScope = .all }
-        if pickerScope == .file, selected == nil { pickerScope = .all }
-        let changed = repositories.reduce(0) { total, repository in
-            total + ((repository.root == root ? snapshot : gitStats.snapshot(at: repository.root))?.files.count ?? 0)
-        }
-        secondOpinionDialog = nil
-        dialogs.show(Dialog(
-            title: "Ask for a second opinion",
-            content: AnyView(ChangesOpinionAsk(
-                author: review.author, installed: installed, running: running,
-                lineup: pickerLineup, focus: navigation.secondOpinionFocus, scope: pickerScope,
-                fileCount: changed, fileName: selected?.fileName, canReadSince: canReadSince,
-                ask: { lineup, focus, scope in
-                    pickerLineup = lineup
-                    navigation.secondOpinionFocus = focus
-                    pickerScope = scope
-                    askForSecondOpinion(review, lineup: lineup)
-                })),
-            actions: [], width: 620, framesItself: true))
     }
 
     private func openProgress(_ review: ReviewTarget) {
@@ -2479,7 +2452,7 @@ struct ChangesView: View {
 
     private func askForSecondOpinion(_ review: ReviewTarget, lineup: [SecondOpinion.Reviewer]) {
         let scope: SecondOpinionRequest.Scope
-        switch pickerScope {
+        switch navigation.secondOpinionScope {
         case .all: scope = .all
         case .file: scope = selected.map { .file(root: repoRoot, path: $0.path) } ?? .all
         case .sinceReview: scope = review.reviews.latestTrees(review.sessionID).map { .sinceReview(trees: $0) } ?? .all

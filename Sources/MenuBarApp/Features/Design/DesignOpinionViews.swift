@@ -3,7 +3,6 @@ import SwiftUI
 // What a reviewer of a design looks for and looks at. Pictures of every screen always go;
 // the files and the design conversation are the person's to choose.
 struct DesignOpinionChoices: View {
-    let screenCount: Int
     @Binding var focus: Set<DesignSecondOpinion.Focus>
     @Binding var reading: DesignSecondOpinion.Reading
 
@@ -20,9 +19,6 @@ struct DesignOpinionChoices: View {
         }
         SecondOpinionSection(title: "What they look at") {
             VStack(alignment: .leading, spacing: 6) {
-                row(title: screenCount == 1 ? "A picture of the screen" : "Pictures of all \(screenCount) screens",
-                    note: "Always, light and dark", on: .constant(true))
-                    .disabled(true)
                 row(title: "The HTML, handoff and theme", note: "To check contrast and tokens", on: $reading.source)
                 row(title: "The design conversation", note: "Makes them think like the author",
                     warns: true, on: $reading.conversation)
@@ -40,38 +36,6 @@ struct DesignOpinionChoices: View {
             }
         }
         .toggleStyle(.appCheckbox)
-    }
-}
-
-// The ask dialog as it opens from the canvas toolbar.
-struct DesignOpinionAsk: View {
-    let screenCount: Int
-    let author: SecondOpinion.Reviewer
-    let installed: [AgentKind]
-    let ask: ([SecondOpinion.Reviewer], [DesignSecondOpinion.Focus], DesignSecondOpinion.Reading) -> Void
-
-    @State private var lineup: [SecondOpinion.Reviewer]
-    @State private var focus = Set(DesignSecondOpinion.Focus.standard)
-    @State private var reading = DesignSecondOpinion.Reading()
-
-    init(screenCount: Int, author: SecondOpinion.Reviewer, installed: [AgentKind],
-         ask: @escaping ([SecondOpinion.Reviewer], [DesignSecondOpinion.Focus], DesignSecondOpinion.Reading) -> Void) {
-        self.screenCount = screenCount
-        self.author = author
-        self.installed = installed
-        self.ask = ask
-        _lineup = State(initialValue: Preferences.secondOpinionLineup().filter { installed.contains($0.agent) })
-    }
-
-    var body: some View {
-        SecondOpinionAskView(
-            message: "Agents that did not draw this design look at every screen and pin notes where they see a problem. You pick which notes go back.",
-            safety: "They look and read. They cannot change the design or use your MCP servers.",
-            author: author, authorDid: "drew this design", installed: installed, lineup: $lineup,
-            choices: {
-                DesignOpinionChoices(screenCount: screenCount, focus: $focus, reading: $reading)
-            },
-            ask: { ask(lineup, DesignSecondOpinion.Focus.allCases.filter(focus.contains), reading) })
     }
 }
 

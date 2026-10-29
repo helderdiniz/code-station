@@ -56,9 +56,6 @@ struct DesignView: View {
                 conversationMinimized = false
                 conversationExpanded = empty
             }
-            .onChange(of: runner.designOpinions.asks[sessionID]) { _, _ in
-                askForSecondOpinion(session, directory: directory)
-            }
             .onDisappear {
                 store.release(sessionID, for: .open)
                 runner.forgetCanvasWidth(sessionID)
@@ -294,35 +291,6 @@ struct DesignView: View {
                              severity: note.severity.rawValue, number: index + 1,
                              label: "Note \(index + 1), \(note.category): \(note.text)")
         }
-    }
-
-    private func askForSecondOpinion(_ session: ChatSession, directory: URL) {
-        let installed = AgentKind.allCases.filter { runner.executable(for: $0) != nil }
-        let author = runner.author(of: session)
-        let screens = canvas.manifest.screens
-        dialogs.show(Dialog(
-            title: "Ask for a second opinion",
-            content: AnyView(DesignOpinionAsk(
-                screenCount: screens.count, author: author, installed: installed,
-                ask: { lineup, focus, reading in
-                    dialogs.dismiss()
-                    let executables = Dictionary(uniqueKeysWithValues: installed.compactMap { agent in
-                        runner.executable(for: agent).map { (agent, $0) }
-                    })
-                    let shots = FileManager.default.temporaryDirectory
-                        .appendingPathComponent("code-station-design-review-\(UUID().uuidString)", isDirectory: true)
-                    let asked = session.messages.filter { $0.role == .user }.suffix(3).reversed()
-                        .map(\.text).joined(separator: "\n\n")
-                    runner.designOpinions.ask(
-                        DesignSecondOpinion.Request(focus: focus, reading: reading,
-                                                    designDirectory: directory.path, shotsDirectory: shots.path,
-                                                    shots: [], asked: asked,
-                                                    conversation: reading.conversation
-                                                        ? SideQuestion.recentChat(session.messages) : "",
-                                                    executable: ""),
-                        screens: screens, reviewers: lineup, executables: executables, in: sessionID)
-                })),
-            actions: [], width: 620, framesItself: true))
     }
 
     private func opinionPanel(_ opinion: DesignOpinion) -> some View {

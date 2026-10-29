@@ -337,6 +337,8 @@ struct SymbolMove: ViewModifier {
 struct SecondOpinionLineupButton: View {
     let author: AgentKind
     let installed: [AgentKind]
+    // Whether there is an answer, a change or a design to look at yet.
+    var canReview = true
     let runs: [SecondOpinionRun]
     let status: SecondOpinionStatus
     let ask: () -> Void
@@ -366,7 +368,13 @@ struct SecondOpinionLineupButton: View {
 
     private var shown: Phase { phase == .settled && !showsTally ? .rest : phase }
     private var lineup: [AgentKind] { SecondOpinionLineup.reviewers(installed: installed, author: author) }
-    private var canAsk: Bool { !lineup.isEmpty }
+    private var canAsk: Bool { !lineup.isEmpty && canReview }
+
+    private var restWords: String {
+        if lineup.isEmpty { return SecondOpinionLineup.installHint(author: author) }
+        if !canReview { return "Nothing to review yet" }
+        return "\(SecondOpinionLineup.names(lineup)) check an answer, the changes or the design"
+    }
 
     private var change: Animation {
         reduceMotion ? Motion.reveal : HeaderMotion.grow
@@ -383,7 +391,7 @@ struct SecondOpinionLineupButton: View {
         .onPointerHover { hovering = $0 }
         .appTooltip {
             Tooltip(title: "Ask for a second opinion",
-                    subtitle: canAsk ? "\(SecondOpinionLineup.names(lineup)) review these changes" : SecondOpinionLineup.installHint(author: author))
+                    subtitle: restWords)
         }
         .accessibilityElement(children: .ignore)
         .accessibilityAddTraits(.isButton)
@@ -508,7 +516,7 @@ struct SecondOpinionLineupButton: View {
         switch status {
         case .ask,
              _ where shown == .rest:
-            canAsk ? SecondOpinionLineup.names(lineup) : SecondOpinionLineup.installHint(author: author)
+            restWords
         case .reviewing(_, _, let pending):
             SecondOpinionLineup.readingWords(runs: runs) + (pending > 0 ? ", \(counted(pending, "finding")) so far" : "")
         case .failed(let agent):
