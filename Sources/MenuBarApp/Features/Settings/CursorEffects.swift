@@ -80,18 +80,6 @@ enum CursorEffect: String, CaseIterable, Identifiable {
         case .prism: "The last facet catches the light, then fades completely."
         }
     }
-
-    static func shortcut(_ key: String) -> Self? {
-        switch key {
-        case "0": Self.none
-        case "1": .ember
-        case "2": .aurora
-        case "3": .orbit
-        case "4": .ripple
-        case "5": .prism
-        default: nil
-        }
-    }
 }
 
 struct CursorEffectsSettings: Equatable {

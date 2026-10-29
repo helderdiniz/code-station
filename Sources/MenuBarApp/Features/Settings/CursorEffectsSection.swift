@@ -3,8 +3,6 @@ import SwiftUI
 
 struct CursorEffectsSection: View {
     @Environment(AppSettings.self) private var settings
-    @State private var keys = WindowKeyHandler()
-    @State private var beforeReset: CursorEffectsSettings?
     @Environment(\.accessibilityReduceMotion) private var reduced
 
     var body: some View {
@@ -18,79 +16,26 @@ struct CursorEffectsSection: View {
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
-                gallery
-                Text("Effects settle when a session finishes. Your macOS Reduce Motion preference is always respected.")
-                    .font(.system(size: 10.5)).foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                ViewThatFits(in: .horizontal) {
-                    HStack { shortcuts; Spacer(); resetActions }
-                    VStack(alignment: .leading, spacing: 10) { shortcuts; resetActions }
+                LazyVGrid(columns: [GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8)], spacing: 8) {
+                    ForEach(CursorEffect.allCases) { choice($0) }
                 }
             }
             .padding(14)
         }
         .transaction { if reduced { $0.animation = nil; $0.disablesAnimations = true } }
-        .background(WindowKeyAnchor(handler: keys))
-        .onAppear {
-            keys.start { event in
-                guard event.modifierFlags.intersection([.command, .control, .option]).isEmpty else { return false }
-                guard let key = event.characters, let effect = CursorEffect.shortcut(key) else { return false }
-                choose(effect)
-                return true
-            }
-        }
-        .onDisappear { keys.stop() }
         .onChange(of: settings.cursorEffects.effect) { _, effect in
             announce("\(effect.title) selected. Changes saved.")
         }
     }
 
-    private var gallery: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            LazyVGrid(columns: [GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8)], spacing: 8) {
-                ForEach(CursorEffect.allCases) { choice($0) }
-            }
-            Label("Only in Code Station. Your pointer stays familiar everywhere else.", systemImage: "checkmark")
-                .font(.system(size: 10.5)).foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-    }
-
     private func choice(_ effect: CursorEffect) -> some View {
         CursorEffectChoice(effect: effect, selected: settings.cursorEffects.effect == effect) {
-            choose(effect)
+            settings.cursorEffects.effect = effect
         }
-    }
-
-    private func choose(_ effect: CursorEffect) {
-        settings.cursorEffects.effect = effect
-    }
-
-    private var shortcuts: some View {
-        Text("0 to 5 to switch effects").font(.system(size: 10)).foregroundStyle(.secondary)
-    }
-
-    private var resetActions: some View {
-        HStack(spacing: 14) {
-            InlineLink(title: "Reset cursor effects") {
-                beforeReset = settings.cursorEffects
-                settings.cursorEffects = CursorEffectsSettings()
-                announce("Cursor effects reset to None. Changes saved.")
-            }
-            if let previous = beforeReset {
-                InlineLink(title: "Undo reset") {
-                    settings.cursorEffects = previous
-                    beforeReset = nil
-                    announce("Your cursor effect has been restored. Changes saved.")
-                }
-                .transition(.fadeIn)
-            }
-        }
-        .motion(Motion.reveal, value: beforeReset != nil)
     }
 
     private func announce(_ text: String) {
-        guard let window = keys.anchor?.window else { return }
+        guard let window = NSApp.keyWindow else { return }
         NSAccessibility.post(element: window, notification: .announcementRequested,
                              userInfo: [.announcement: text, .priority: NSAccessibilityPriorityLevel.medium.rawValue])
     }

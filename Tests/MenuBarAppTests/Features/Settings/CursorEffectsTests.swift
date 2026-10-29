@@ -47,15 +47,11 @@ struct CursorEffectsTests {
         })
     }
 
-    @Test func shortcutsKeepTheirOriginalAssignmentsAndAddTheTwoEffects() {
+    @Test func effectsKeepTheirOrderAndSavedNames() {
         let effects: [CursorEffect] = [.none, .ember, .aurora, .orbit, .ripple, .prism]
         #expect(CursorEffect.allCases == effects)
         #expect(effects.map(\.rawValue) == ["none", "ember", "aurora", "orbit", "ripple", "prism"])
-        for (index, effect) in effects.enumerated() {
-            #expect(CursorEffect.shortcut(String(index)) == effect)
-            #expect(CursorEffect(rawValue: effect.rawValue) == effect)
-        }
-        for key in ["6", "-1", "01", "x", ""] { #expect(CursorEffect.shortcut(key) == nil) }
+        for effect in effects { #expect(CursorEffect(rawValue: effect.rawValue) == effect) }
     }
 
     @Test func textSearchGoesToTextBelowTheCursorEffects() {
