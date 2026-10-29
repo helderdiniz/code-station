@@ -94,14 +94,14 @@ struct CursorEffectLayerTests {
     }
 
     @Test(arguments: [CursorEffect.ember, .aurora, .orbit], [false, true])
-    func reducedMotionHasStillHalosAndNoCompletionBurst(effect: CursorEffect, userPreference: Bool) {
+    func reducedMotionHasAStillHaloOnlyWhileRunning(effect: CursorEffect, userPreference: Bool) {
         let view = makeView()
         for state: CursorEffectActivity in [.running, .waiting, .finished] {
             configure(view, effect: effect, activity: state, reduced: !userPreference, userReduced: userPreference)
             view.movePointer(to: CGPoint(x: 100, y: 100))
             #expect(animations(view).isEmpty)
             let marks = layers(view).compactMap { $0 as? CAShapeLayer }
-            #expect(state == .finished ? marks.isEmpty : !marks.isEmpty)
+            #expect(state == .running ? !marks.isEmpty : marks.isEmpty)
         }
     }
 
@@ -219,10 +219,10 @@ struct CursorEffectLayerTests {
 
         configure(view, effect: effect, activity: CursorEffectActivity(session: .streaming, needsInput: true))
         #expect(trails.allSatisfy { $0.animation(forKey: "decay") != nil })
-        let halo = layers(view).compactMap { $0 as? CAShapeLayer }.filter { mark in
+        let marks = layers(view).compactMap { $0 as? CAShapeLayer }.filter { mark in
             !trails.contains { $0 === mark }
         }
-        #expect(halo.count == 2)
+        #expect(marks.isEmpty)
         for layer in layers(view) {
             for key in layer.animationKeys() ?? [] {
                 #expect(layer.animation(forKey: key)?.repeatCount == 0)

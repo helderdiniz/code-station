@@ -237,14 +237,12 @@ final class CursorEffectLayerView: LoopLayerView {
     }
 
     private func rebuild() {
-        guard foreground, settings.effect != .none,
-              activity == .running || activity == .waiting,
-              pointerInside else { return }
+        guard foreground, settings.effect != .none, activity == .running, pointerInside else { return }
         guard ornament.sublayers?.isEmpty != false else { return }
         LayerLoop.still {
             ornament.position = point
-            if activity == .waiting || reduced {
-                let tint = activity == .waiting ? NSColor(Theme.attentionText) : NSColor(Theme.dotOnText)
+            if reduced {
+                let tint = NSColor(Theme.dotOnText)
                 let halo = shape(path: CGPath(ellipseIn: CGRect(x: -8, y: -5, width: 30, height: 30), transform: nil),
                                  colour: tint.withAlphaComponent(0.6), width: 1.2)
                 ornament.addSublayer(halo)
