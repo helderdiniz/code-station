@@ -617,43 +617,30 @@ struct SessionView: View {
     }
 
     // What the pane can open beside where you already are, then what the session itself
-    // offers. The panels share a dock and the actions use words, so the two groups read
-    // as different kinds of thing without a hover to tell them apart.
+    // offers. The dock holds what is reached for most and never folds; the actions use
+    // words, so the two groups read as different kinds of thing without a hover.
     private func rail(session: ChatSession, project: Project, recap: SessionRecap?,
                       fit: RailFit) -> some View {
         HStack(spacing: 10) {
-            // Most panels open beside the chat, so only the chat has the whole dock. The
-            // terminal opens under any tab, so it stays where files are being looked at.
             switch tab {
-            case .conversation:
-                panelDock(session: session, project: project, showsWords: fit == .wide)
-                    .transition(.opacity)
-            case .design, .troubleshoot, .evidence:
-                terminalDock(session: session, project: project, showsWord: fit == .wide)
-                    .transition(.opacity)
-            case .changes:
-                if workingTreeChanges(session) != nil {
-                    askWholeChangeButton
-                        .transition(.opacity)
-                }
-                terminalDock(session: session, project: project, showsWord: fit == .wide)
+            case .changes where workingTreeChanges(session) != nil:
+                askWholeChangeButton
                     .transition(.opacity)
             case .explorer:
                 explorerActions
                     .transition(.opacity)
-                terminalDock(session: session, project: project, showsWord: fit == .wide)
-                    .transition(.opacity)
-            case .reviews:
+            default:
                 EmptyView()
             }
-            if hasDock {
+            dock(session: session, project: project, showsWords: fit == .wide)
+            if hasUtilities(session) {
                 HeaderRailDivider()
-            }
-            if fit == .narrow {
-                utilitiesOverflow(session: session, project: project)
-            } else {
-                utilities(session: session, project: project, recap: recap,
-                          showsWords: fit == .wide)
+                if fit == .narrow {
+                    utilitiesOverflow(session: session, project: project)
+                } else {
+                    utilities(session: session, project: project, recap: recap,
+                              showsWords: fit == .wide)
+                }
             }
         }
         .fixedSize(horizontal: true, vertical: false)
@@ -670,32 +657,33 @@ struct SessionView: View {
         .motion(Motion.reveal, value: railNote)
     }
 
-    // None of these sends you anywhere: they open a panel beside the pane and leave what
-    // you were reading where it was. Keeping them off the tab deck is what gives the gap
-    // between the two its meaning - inside the deck you choose where to be, outside it
-    // you open something next to where you already are. Preview is the exception, as it
-    // puts the running app in the conversation's place.
-    private func panelDock(session: ChatSession, project: Project,
-                           showsWords: Bool) -> some View {
+    // None of these sends you anywhere: they open something beside the pane and leave
+    // what you were reading where it was. Keeping them off the tab deck is what gives the
+    // gap between the two its meaning - inside the deck you choose where to be, outside
+    // it you open something next to where you already are. Preview is the exception, as
+    // it puts the running app in the conversation's place.
+    //
+    // The second opinion leads on every tab. It is the one seat that grows while it
+    // works, and the rail keeps to the trailing edge, so the seats after it stay still.
+    // Most panels open beside the chat, so only the chat has the whole dock. The terminal
+    // opens under any tab, so it stays where files are being looked at.
+    private func dock(session: ChatSession, project: Project, showsWords: Bool) -> some View {
         HeaderRailDock {
-            previewSeat(session, showsWord: showsWords)
-            terminalSeat(session: session, project: project, showsWord: showsWords)
-            workingSetSeat(session, showsWord: showsWords)
-            findSeat(session, showsWord: showsWords)
-        }
-    }
-
-    private var hasDock: Bool {
-        switch tab {
-        case .conversation, .design, .troubleshoot, .evidence, .changes, .explorer: true
-        case .reviews: false
-        }
-    }
-
-    private func terminalDock(session: ChatSession, project: Project,
-                              showsWord: Bool) -> some View {
-        HeaderRailDock {
-            terminalSeat(session: session, project: project, showsWord: showsWord)
+            secondOpinionButton(session)
+            switch tab {
+            case .conversation:
+                previewSeat(session, showsWord: showsWords)
+                    .transition(.opacity)
+                terminalSeat(session: session, project: project, showsWord: showsWords)
+                workingSetSeat(session, showsWord: showsWords)
+                    .transition(.opacity)
+                findSeat(session, showsWord: showsWords)
+                    .transition(.opacity)
+            case .design, .troubleshoot, .evidence, .changes, .explorer:
+                terminalSeat(session: session, project: project, showsWord: showsWords)
+            case .reviews:
+                EmptyView()
+            }
         }
     }
 
@@ -862,7 +850,6 @@ struct SessionView: View {
     private func utilities(session: ChatSession, project: Project,
                            recap: SessionRecap?, showsWords: Bool) -> some View {
         HStack(spacing: 6) {
-            secondOpinionButton(session)
             if let worktreePath = session.worktreePath, let app = WorktreeOpener.current {
                 openInButton(path: worktreePath, app: app, showsWord: showsWords)
             }
@@ -933,9 +920,6 @@ struct SessionView: View {
 
     private func utilityEntries(session: ChatSession, project: Project) -> [MenuEntry] {
         var entries: [MenuEntry] = []
-        if hasOpinionSubject(session) {
-            entries.append(.item("Ask for a second opinion", icon: "eyes") { askForSecondOpinion(session) })
-        }
         if let worktreePath = session.worktreePath, let current = WorktreeOpener.current {
             // Finder stays one click away whichever app was picked.
             var apps = [current]
@@ -966,6 +950,11 @@ struct SessionView: View {
     // typed one, and the pane already says so above the composer.
     private func promptsBlocked(session: ChatSession, project: Project) -> Bool {
         !FileManager.default.fileExists(atPath: session.worktreePath ?? project.path)
+    }
+
+    private func hasUtilities(_ session: ChatSession) -> Bool {
+        (session.worktreePath != nil && WorktreeOpener.current != nil)
+            || showsDesignMaterialExport(session) || showsRecap
     }
 
     // A design session is recapped through the conversation it belongs to, so what the

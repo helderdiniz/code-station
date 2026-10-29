@@ -140,8 +140,14 @@ struct LineupTiles: View {
     }
 
     private var spacing: CGFloat {
-        if gathered && !reduceMotion { return -size * 0.8 }
-        return fanned && !reduceMotion ? -size * 0.1 : -size * 0.36
+        gathered && !reduceMotion ? -size * 0.8 : -size * 0.36
+    }
+
+    // The fan spreads the tiles out from the middle by an offset rather than by spacing,
+    // so the control keeps its width and the rail beside it stays still under the pointer.
+    private func fanOffset(at index: Int) -> CGFloat {
+        guard fanned, !gathered, !reduceMotion else { return 0 }
+        return (CGFloat(index) - CGFloat(shown.count - 1) / 2) * size * 0.26
     }
 
     private func tile(_ tile: Tile, at index: Int) -> some View {
@@ -156,6 +162,7 @@ struct LineupTiles: View {
                        depth: size * 0.14) {
             tileFace(tile, at: index, isFront: isFront, mark: mark)
         }
+        .offset(x: fanOffset(at: index))
         .zIndex(Double(index))
     }
 
@@ -331,7 +338,8 @@ struct SymbolMove: ViewModifier {
 // MARK: - The header control
 
 // The session header's way into a second opinion, and once asked, the run's status.
-// At rest it is the lineup and nothing else. Pointed at, the tiles fan and the button
+// It sits first in the dock, at a seat's height, so when it grows into a chip only what
+// lies before the dock moves. At rest it is the lineup and nothing else. Pointed at, the tiles fan and the button
 // names them. Once a run starts, it grows into a chip whose words carry the state, so
 // it reads the same without its colours.
 struct SecondOpinionLineupButton: View {
@@ -430,7 +438,6 @@ struct SecondOpinionLineupButton: View {
         .background { chipBackground }
         .overlay(alignment: .bottom) { progressBar }
         .contentShape(RoundedRectangle(cornerRadius: 9))
-        .frame(height: 34)
         .opacity(shown == .rest && !canAsk ? 0.5 : 1)
         .motion(HeaderMotion.grow, value: shown)
         .motion(Motion.hover, value: hovering)
