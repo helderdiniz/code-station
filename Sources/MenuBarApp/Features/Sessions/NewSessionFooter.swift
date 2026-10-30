@@ -131,3 +131,17 @@ extension Dialog {
                       actions: actions)
     }
 }
+
+extension Dialog {
+    // Moving the default branch was a side errand: the worktree forks from the remote
+    // tip either way, so the session can still start. It waits for a click, since the
+    // folder was not left the way the user asked for.
+    static func fastForwardFailure(_ error: String, branch: String,
+                                   startAnyway: @escaping () -> Void) -> Dialog {
+        Dialog(title: "Could not update \(branch)",
+               message: error,
+               actions: [Action(label: "Start without updating", kind: .primary,
+                                handler: startAnyway),
+                         Action(label: "Cancel", kind: .cancel)])
+    }
+}

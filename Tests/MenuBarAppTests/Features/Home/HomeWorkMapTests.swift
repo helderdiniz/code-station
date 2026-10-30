@@ -44,7 +44,18 @@ struct HomeWorkMapTests {
                                         live(tone: .needsYou), live(tone: .idle)])
         #expect(map.runningCount == 1)
         #expect(map.waiting.count == 1)
+        #expect(map.inProgressCount == 2)
         #expect(map.active.count == 3)
+    }
+
+    // A session waiting on CI is still in progress, so the summary must not read as
+    // nothing happening.
+    @Test func summaryCountsSessionsWaitingOnATask() {
+        #expect(HomeWorkMap(sessions: [live(tone: .waiting)]).progressSummary
+                == "1 session waiting on a task")
+        #expect(HomeWorkMap(sessions: [live(), live(), live(tone: .waiting)]).progressSummary
+                == "2 sessions working, 1 waiting on a task")
+        #expect(HomeWorkMap(sessions: [live(tone: .idle)]).progressSummary == "0 sessions working")
     }
 
     @Test func routesReviewToChangesOnlyWhenThereAreChanges() {

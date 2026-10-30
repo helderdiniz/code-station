@@ -784,7 +784,7 @@ struct WorkspaceDetailView: View {
                               in workspace: ProjectWorkspace) {
         Task {
             switch await SessionLifecycle.createWorkspaceSession(
-                choice, in: workspace, store: store) {
+                choice, in: workspace, store: store, composer: runner.composer) {
             case .success:
                 break
             case .failure(let failure):

@@ -195,6 +195,34 @@ struct SessionLifecycleTests {
         #expect(await recorder.recordedPaths() == ["/worktrees/project"])
     }
 
+    // Work that did not land cleanly is handed to the agent as a ready request, so the
+    // user sees it the moment the session opens and can send it as it is.
+    @Test func leavesTheCarryOverNoteInTheNewSessionsComposer() async throws {
+        let project = try TestStore.project(in: store, named: "project")
+        let composer = SessionComposerStore()
+        let sessionID = UUID()
+        var worktrees = WorktreeOperations(
+            addProject: { _, _, _, _ in
+                .success(GitWorktree.Created(path: "/worktrees/project",
+                                             branch: "code-station/test"))
+            },
+            addWorkspaceProject: { _, _, _, _, _ in
+                .failure(GitWorktree.Failure(message: "Unexpected workspace operation"))
+            },
+            remove: { _, _, _ in .success(()) })
+        worktrees.carry = { folder, worktree in
+            #expect(worktree == "/worktrees/project")
+            return GitCarryOver.Outcome(conflicts: ["shared.txt"])
+        }
+
+        _ = try await SessionLifecycle.createWorktreeSession(
+            in: project, id: sessionID, base: "origin/main", carryChanges: true,
+            store: store, composer: composer, worktrees: worktrees).get()
+
+        #expect(composer.draft(sessionID).text.contains("- shared.txt"))
+        #expect(composer.draft(sessionID).text.contains("origin/main"))
+    }
+
     @Test func keepsDeletionPendingWhenWorktreeRemovalFails() async throws {
         let runner = SessionRunner(preferences: testPreferences.store)
         let project = try TestStore.project(in: store, named: "project")

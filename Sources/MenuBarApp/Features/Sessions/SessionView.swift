@@ -46,6 +46,8 @@ struct SessionView: View {
     @State private var selectedProjectID: UUID?
     @State private var collapsedExplorerProjects: Set<String> = []
     @State private var changesNavigation = ChangesNavigationMemory()
+    // The reviewers last asked from this session, whatever they were asked about.
+    @State private var opinionLineup: [SecondOpinion.Reviewer]?
     @State private var explorerShowsDesignFiles = false
     @State private var shortcutEditor: ShortcutEditorRequest?
     @State private var exportingDesignMaterials = false
@@ -615,39 +617,24 @@ struct SessionView: View {
     }
 
     // What the pane can open beside where you already are, then what the session itself
-    // offers. The panels share a dock and the actions use words, so the two groups read
-    // as different kinds of thing without a hover to tell them apart.
+    // offers. The dock holds what is reached for most and never folds; the actions use
+    // words, so the two groups read as different kinds of thing without a hover.
     private func rail(session: ChatSession, project: Project, recap: SessionRecap?,
                       fit: RailFit) -> some View {
         HStack(spacing: 10) {
-            // Most panels open beside the chat, so only the chat has the whole dock. The
-            // terminal opens under any tab, so it stays where files are being looked at.
             switch tab {
-            case .conversation:
-                panelDock(session: session, project: project, showsWords: fit == .wide)
-                    .transition(.opacity)
-            case .design, .troubleshoot, .evidence:
-                terminalDock(session: session, project: project, showsWord: fit == .wide)
-                    .transition(.opacity)
-            case .changes:
-                if workingTreeChanges(session) != nil {
-                    askWholeChangeButton
-                        .transition(.opacity)
-                }
-                terminalDock(session: session, project: project, showsWord: fit == .wide)
+            case .changes where workingTreeChanges(session) != nil:
+                askWholeChangeButton
                     .transition(.opacity)
             case .explorer:
                 explorerActions
                     .transition(.opacity)
-                terminalDock(session: session, project: project, showsWord: fit == .wide)
-                    .transition(.opacity)
-            case .reviews:
+            default:
                 EmptyView()
             }
-            if hasUtilities(session: session) {
-                if hasDock {
-                    HeaderRailDivider()
-                }
+            dock(session: session, project: project, showsWords: fit == .wide)
+            if hasUtilities(session) {
+                HeaderRailDivider()
                 if fit == .narrow {
                     utilitiesOverflow(session: session, project: project)
                 } else {
@@ -670,32 +657,33 @@ struct SessionView: View {
         .motion(Motion.reveal, value: railNote)
     }
 
-    // None of these sends you anywhere: they open a panel beside the pane and leave what
-    // you were reading where it was. Keeping them off the tab deck is what gives the gap
-    // between the two its meaning - inside the deck you choose where to be, outside it
-    // you open something next to where you already are. Preview is the exception, as it
-    // puts the running app in the conversation's place.
-    private func panelDock(session: ChatSession, project: Project,
-                           showsWords: Bool) -> some View {
+    // None of these sends you anywhere: they open something beside the pane and leave
+    // what you were reading where it was. Keeping them off the tab deck is what gives the
+    // gap between the two its meaning - inside the deck you choose where to be, outside
+    // it you open something next to where you already are. Preview is the exception, as
+    // it puts the running app in the conversation's place.
+    //
+    // The second opinion leads on every tab. It is the one seat that grows while it
+    // works, and the rail keeps to the trailing edge, so the seats after it stay still.
+    // Most panels open beside the chat, so only the chat has the whole dock. The terminal
+    // opens under any tab, so it stays where files are being looked at.
+    private func dock(session: ChatSession, project: Project, showsWords: Bool) -> some View {
         HeaderRailDock {
-            previewSeat(session, showsWord: showsWords)
-            terminalSeat(session: session, project: project, showsWord: showsWords)
-            workingSetSeat(session, showsWord: showsWords)
-            findSeat(session, showsWord: showsWords)
-        }
-    }
-
-    private var hasDock: Bool {
-        switch tab {
-        case .conversation, .design, .troubleshoot, .evidence, .changes, .explorer: true
-        case .reviews: false
-        }
-    }
-
-    private func terminalDock(session: ChatSession, project: Project,
-                              showsWord: Bool) -> some View {
-        HeaderRailDock {
-            terminalSeat(session: session, project: project, showsWord: showsWord)
+            secondOpinionButton(session)
+            switch tab {
+            case .conversation:
+                previewSeat(session, showsWord: showsWords)
+                    .transition(.opacity)
+                terminalSeat(session: session, project: project, showsWord: showsWords)
+                workingSetSeat(session, showsWord: showsWords)
+                    .transition(.opacity)
+                findSeat(session, showsWord: showsWords)
+                    .transition(.opacity)
+            case .design, .troubleshoot, .evidence, .changes, .explorer:
+                terminalSeat(session: session, project: project, showsWord: showsWords)
+            case .reviews:
+                EmptyView()
+            }
         }
     }
 
@@ -862,24 +850,6 @@ struct SessionView: View {
     private func utilities(session: ChatSession, project: Project,
                            recap: SessionRecap?, showsWords: Bool) -> some View {
         HStack(spacing: 6) {
-            if showsSecondOpinion(session) {
-                SecondOpinionLineupButton(author: session.agent,
-                                          installed: AgentKind.allCases.filter { runner.executable(for: $0) != nil },
-                                          runs: runner.reviews.runs(session.id),
-                                          status: SecondOpinionStatus(reviews: runner.reviews, sessionID: session.id),
-                                          ask: askForChangesOpinion,
-                                          open: { changesNavigation.secondOpinionOpens += 1 })
-            }
-            if let design = designOpinionSession(session) {
-                let opinion = runner.designOpinions.opinion(design.id)
-                SecondOpinionLineupButton(author: design.agent,
-                                          installed: AgentKind.allCases.filter { runner.executable(for: $0) != nil },
-                                          runs: opinion?.runs ?? [],
-                                          status: opinion?.status ?? .ask,
-                                          ask: { runner.designOpinions.requestAsk(in: design.id) },
-                                          // The notes already sit in their panel beside the canvas.
-                                          open: {})
-            }
             if let worktreePath = session.worktreePath, let app = WorktreeOpener.current {
                 openInButton(path: worktreePath, app: app, showsWord: showsWords)
             }
@@ -950,14 +920,6 @@ struct SessionView: View {
 
     private func utilityEntries(session: ChatSession, project: Project) -> [MenuEntry] {
         var entries: [MenuEntry] = []
-        if showsSecondOpinion(session) {
-            entries.append(.item("Ask for a second opinion", icon: "eyes", action: askForChangesOpinion))
-        }
-        if let design = designOpinionSession(session) {
-            entries.append(.item("Ask for a second opinion", icon: "eyes") {
-                runner.designOpinions.requestAsk(in: design.id)
-            })
-        }
         if let worktreePath = session.worktreePath, let current = WorktreeOpener.current {
             // Finder stays one click away whichever app was picked.
             var apps = [current]
@@ -990,31 +952,9 @@ struct SessionView: View {
         !FileManager.default.fileExists(atPath: session.worktreePath ?? project.path)
     }
 
-    private func hasUtilities(session: ChatSession) -> Bool {
-        session.worktreePath != nil || showsDesignMaterialExport(session)
-            || showsRecap || showsSecondOpinion(session)
-    }
-
-    // Asking for one is about the diff, so it is offered only beside it, and only while
-    // there is a diff to read.
-    private func showsSecondOpinion(_ session: ChatSession) -> Bool {
-        tab == .changes && workingTreeChanges(session) != nil
-    }
-
-    // The Design session on screen, once it has something to look at.
-    private func designOpinionSession(_ session: ChatSession) -> ChatSession? {
-        let design = switch tab {
-        case .design: store.designSession(for: session.id)
-        case .conversation where session.isActivelyDesigning: session
-        default: nil as ChatSession?
-        }
-        guard let design, store.hasDesignArtifacts(for: design) else { return nil }
-        return design
-    }
-
-    // The Changes screen owns the dialog, the lineup and the scope it was last asked with.
-    private func askForChangesOpinion() {
-        changesNavigation.secondOpinionAsks += 1
+    private func hasUtilities(_ session: ChatSession) -> Bool {
+        (session.worktreePath != nil && WorktreeOpener.current != nil)
+            || showsDesignMaterialExport(session) || showsRecap
     }
 
     // A design session is recapped through the conversation it belongs to, so what the
@@ -1911,8 +1851,8 @@ struct SessionView: View {
                             arriving: message.isArriving(sentAt: promptSentAt),
                             bubble: bubble,
                             secondOpinion: canJudge(message, in: session, state: state) ? { @MainActor in
-                                askForSecondOpinion(on: answerSubject(message, in: session),
-                                                    anchor: message.id, session: session)
+                                askForSecondOpinion(session, on: answerSubject(message, in: session),
+                                                    anchor: message.id)
                             } : nil)
                     // Every message is on screen now, and a streaming turn rewrites
                     // the last one many times a second. Without this, each of those
@@ -2310,8 +2250,8 @@ struct SessionView: View {
                            workingDirectories: session.map(store.workingDirectories(for:)) ?? [],
                            projectPath: projectPath,
                            secondOpinion: session.map { session in
-                               { askForSecondOpinion(on: planSubject(request, in: session),
-                                                     anchor: session.messages.last(where: { !$0.isEmpty })?.id, session: session) }
+                               { askForSecondOpinion(session, on: planSubject(request, in: session),
+                                                     anchor: session.messages.last(where: { !$0.isEmpty })?.id) }
                            }) { answer in
                 runner.answer(request, with: answer, sessionID: sessionID, store: store)
             }
@@ -2352,27 +2292,162 @@ struct SessionView: View {
         return runner.opinions.opinions(sessionID).filter { $0.anchor == messageID && $0.subject.id != pending }
     }
 
-    private func askForSecondOpinion(on subject: ChatSecondOpinion.Subject, anchor: UUID?, session: ChatSession) {
+    // The header's one control for a second opinion, on every tab. It shows the review
+    // that belongs to the page in view: the design's on the canvas, the changes' anywhere
+    // else, since a card under an answer already shows its own.
+    @ViewBuilder
+    private func secondOpinionButton(_ session: ChatSession) -> some View {
+        let installed = AgentKind.allCases.filter { runner.executable(for: $0) != nil }
+        if let design = shownDesign(session) {
+            let opinion = runner.designOpinions.opinion(design.id)
+            SecondOpinionLineupButton(author: design.agent, installed: installed,
+                                      canReview: hasOpinionSubject(session),
+                                      runs: opinion?.runs ?? [], status: opinion?.status ?? .ask,
+                                      ask: { askForSecondOpinion(session) },
+                                      // The notes already sit in their panel beside the canvas.
+                                      open: {})
+        } else {
+            SecondOpinionLineupButton(author: session.agent, installed: installed,
+                                      canReview: hasOpinionSubject(session),
+                                      runs: runner.reviews.runs(session.id),
+                                      status: SecondOpinionStatus(reviews: runner.reviews, sessionID: session.id),
+                                      ask: { askForSecondOpinion(session) },
+                                      open: {
+                                          tab = .changes
+                                          changesNavigation.secondOpinionRequest = .open
+                                      })
+        }
+    }
+
+    // The design on screen right now, whose notes the canvas shows.
+    private func shownDesign(_ session: ChatSession) -> ChatSession? {
+        let design = switch tab {
+        case .design: store.designSession(for: session.id)
+        case .conversation where session.isActivelyDesigning: session
+        default: nil as ChatSession?
+        }
+        guard let design, store.hasDesignArtifacts(for: design) else { return nil }
+        return design
+    }
+
+    private func reviewableDesign(_ session: ChatSession) -> ChatSession? {
+        store.designConversation(for: session.id).flatMap { store.hasDesignArtifacts(for: $0) ? $0 : nil }
+    }
+
+    private func latestAnswer(in session: ChatSession) -> ChatMessage? {
+        let state = runner.state(session.id)
+        return session.messages.last { canJudge($0, in: session, state: state) }
+    }
+
+    private func hasOpinionSubject(_ session: ChatSession) -> Bool {
+        latestAnswer(in: session) != nil || workingTreeChanges(session) != nil || reviewableDesign(session) != nil
+    }
+
+    // One dialog for whatever the session can be judged on. A plan or answer the person
+    // pointed at comes in already picked; from the header, the pick follows the page in
+    // view. Each kind is then asked where its results land.
+    private func askForSecondOpinion(_ session: ChatSession, on picked: ChatSecondOpinion.Subject? = nil,
+                                     anchor: UUID? = nil) {
         let installed = AgentKind.allCases.filter { runner.executable(for: $0) != nil }
         let author = runner.author(of: session)
+        let latest = picked == nil ? latestAnswer(in: session) : nil
+        let chatSubject = picked ?? latest.map { answerSubject($0, in: session) }
+        let chatAnchor = picked == nil ? latest?.id : anchor
+        let answer = chatSubject.map { SessionOpinionAsk.Answer(subject: $0, author: author, picked: picked != nil) }
+
+        let changes = workingTreeChanges(session).map { facts in
+            SessionOpinionAsk.Changes(
+                author: author,
+                running: Set(runner.reviews.runs(session.id).filter(\.isRunning).map(\.reviewer)),
+                fileCount: facts.files,
+                fileName: selectedChangeName(session),
+                canReadSince: runner.reviews.latestTrees(session.id) != nil)
+        }
+
+        let designSession = reviewableDesign(session)
+        let designDirectory = designSession.flatMap { store.designArtifactURL(for: $0) }?.deletingLastPathComponent()
+        let screens = designDirectory.map { DesignManifest.read(from: $0).screens } ?? []
+        let design = designSession.flatMap { design in
+            designDirectory.map { _ in SessionOpinionAsk.Design(author: runner.author(of: design), screenCount: screens.count) }
+        }
+
+        let initial: SessionOpinionKind = {
+            if picked != nil { return .chat }
+            let preferred: SessionOpinionKind? = switch tab {
+            case .changes: .changes
+            case .design: .design
+            case .conversation where session.isActivelyDesigning: .design
+            default: nil
+            }
+            let available = [answer != nil ? SessionOpinionKind.chat : nil,
+                             changes != nil ? .changes : nil,
+                             design != nil ? .design : nil].compactMap { $0 }
+            if let preferred, available.contains(preferred) { return preferred }
+            return available.first ?? .chat
+        }()
+
+        let executables = Dictionary(uniqueKeysWithValues: installed.compactMap { agent in
+            runner.executable(for: agent).map { (agent, $0) }
+        })
         dialogs.show(Dialog(
             title: "Ask for a second opinion",
-            content: AnyView(ChatOpinionAsk(
-                subject: subject, author: author, installed: installed,
-                ask: { lineup, focus, reading in
-                    dialogs.dismiss()
-                    let executables = Dictionary(uniqueKeysWithValues: installed.compactMap { agent in
-                        runner.executable(for: agent).map { (agent, $0) }
-                    })
-                    runner.opinions.ask(
-                        ChatSecondOpinion.Request(subject: subject, focus: focus, reading: reading,
-                                                  conversation: reading.conversation
-                                                    ? SideQuestion.recentChat(session.messages) : "",
-                                                  directories: store.workingDirectories(for: session),
-                                                  executable: ""),
-                        reviewers: lineup, executables: executables, anchor: anchor, in: sessionID)
+            content: AnyView(SessionOpinionAsk(
+                answer: answer, changes: changes, design: design, initial: initial, installed: installed,
+                lineup: opinionLineup ?? Preferences.secondOpinionLineup().filter { installed.contains($0.agent) },
+                changesFocus: changesNavigation.secondOpinionFocus, scope: changesNavigation.secondOpinionScope,
+                ask: { choice in
+                    switch choice {
+                    case .chat(let lineup, let focus, let reading):
+                        guard let chatSubject else { return }
+                        opinionLineup = lineup
+                        dialogs.dismiss()
+                        if tab != .conversation { tab = .conversation }
+                        runner.opinions.ask(
+                            ChatSecondOpinion.Request(subject: chatSubject, focus: focus, reading: reading,
+                                                      conversation: reading.conversation
+                                                        ? SideQuestion.recentChat(session.messages) : "",
+                                                      directories: store.workingDirectories(for: session),
+                                                      executable: ""),
+                            reviewers: lineup, executables: executables, anchor: chatAnchor, in: sessionID)
+                    case .changes(let lineup, let focus, let scope):
+                        opinionLineup = lineup
+                        changesNavigation.secondOpinionFocus = focus
+                        changesNavigation.secondOpinionScope = scope
+                        // The Changes screen starts the run and puts its progress up in
+                        // place of this dialog.
+                        tab = .changes
+                        changesNavigation.secondOpinionRequest = .ask(lineup)
+                    case .design(let lineup, let focus, let reading):
+                        guard let designSession, let designDirectory else { return }
+                        opinionLineup = lineup
+                        dialogs.dismiss()
+                        if shownDesign(session) == nil {
+                            tab = session.isActivelyDesigning ? .conversation : .design
+                        }
+                        let shots = FileManager.default.temporaryDirectory
+                            .appendingPathComponent("code-station-design-review-\(UUID().uuidString)", isDirectory: true)
+                        let asked = designSession.messages.filter { $0.role == .user }.suffix(3).reversed()
+                            .map(\.text).joined(separator: "\n\n")
+                        runner.designOpinions.ask(
+                            DesignSecondOpinion.Request(focus: focus, reading: reading,
+                                                        designDirectory: designDirectory.path, shotsDirectory: shots.path,
+                                                        shots: [], asked: asked,
+                                                        conversation: reading.conversation
+                                                            ? SideQuestion.recentChat(designSession.messages) : "",
+                                                        executable: ""),
+                            screens: screens, reviewers: lineup, executables: executables, in: designSession.id)
+                    }
                 })),
             actions: [], width: 620, framesItself: true))
+    }
+
+    // The file picked on the Changes screen, which a reviewer can be held to.
+    private func selectedChangeName(_ session: ChatSession) -> String? {
+        let root = directory(for: selectedProjectID ?? session.projectID, in: session)
+            ?? store.workingDirectories(for: session).first
+        guard let root, let id = changesNavigation.selections[root]?.activeID,
+              let file = gitStats.snapshot(at: root)?.files.first(where: { $0.id == id }) else { return nil }
+        return file.fileName
     }
 
     private func opinionCard(_ opinion: ChatOpinion, session: ChatSession) -> some View {
@@ -2399,7 +2474,7 @@ struct SessionView: View {
                 runner.answer(pending, with: .allowOnce, sessionID: sessionID, store: store)
             },
             askAgain: {
-                askForSecondOpinion(on: opinion.subject, anchor: opinion.anchor, session: session)
+                askForSecondOpinion(session, on: opinion.subject, anchor: opinion.anchor)
             },
             retry: { seat in
                 guard let executable = runner.executable(for: seat.agent) else { return }

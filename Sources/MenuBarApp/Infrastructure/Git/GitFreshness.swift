@@ -45,6 +45,12 @@ enum GitFreshness {
         // A remote ref is what makes "the latest revision" mean anything, so without one
         // there is nothing to offer.
         var canUpdateCheckout: Bool { isStale && !dirty && remoteRef != nil }
+        // A dirty folder cannot be updated as a whole, but its default branch can still
+        // be moved up when it only trails the remote: that move needs no stash.
+        var canFastForwardDefaultBranch: Bool {
+            dirty && defaultBranch != nil && remoteRef != nil
+                && defaultBranchBehind > 0 && defaultBranchAhead == 0
+        }
 
         var divergenceExplanation: String? {
             guard defaultBranchHasDiverged, let branch = defaultBranch, let remote = remoteRef else {

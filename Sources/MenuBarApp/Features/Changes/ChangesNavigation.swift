@@ -117,10 +117,16 @@ final class ChangesNavigationMemory {
     // and stepping through a review moves between them.
     var focusedComment: UUID?
     var secondOpinionFocus = Set(SecondOpinion.Focus.standard)
-    // Count asks, and clicks on a run under way, from the session header, which sits
-    // outside the screen that opens the dialogs.
-    var secondOpinionAsks = 0
-    var secondOpinionOpens = 0
+    var secondOpinionScope = SecondOpinionScopeChoice.all
+    // An ask settled in the session's dialog, or a click on a run under way, from the
+    // session header, which sits outside the screen that starts runs and shows them. It
+    // waits here until that screen takes it, since a click from another tab opens the
+    // screen in the same moment.
+    enum SecondOpinionRequest: Equatable {
+        case ask([SecondOpinion.Reviewer])
+        case open
+    }
+    var secondOpinionRequest: SecondOpinionRequest?
     // The card for questions about the whole change is opened from the session header and
     // drawn by the screen under it, so both read its state from here. It does not hang on
     // the list's mode, so the card and its button cannot drift apart.

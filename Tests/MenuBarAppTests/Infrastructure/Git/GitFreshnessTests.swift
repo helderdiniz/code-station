@@ -90,6 +90,22 @@ struct GitFreshnessTests {
         #expect(!dirty.canUpdateCheckout)
     }
 
+    // A dirty folder only gets the default branch moved, and only when that move is a
+    // fast-forward.
+    @Test func offersToFastForwardTheDefaultBranchOfADirtyFolder() async throws {
+        let pair = try ClonedRepo()
+        try pair.origin.commitChange("more.txt", "more")
+        try pair.clone.write("README.md", "changed")
+
+        let dirty = try #require(await GitFreshness.check(at: pair.clone.path, fetch: true))
+        #expect(dirty.canFastForwardDefaultBranch)
+
+        try pair.clone.git("commit", "-qam", "local work")
+        try pair.clone.write("README.md", "changed again")
+        let diverged = try #require(await GitFreshness.check(at: pair.clone.path, fetch: false))
+        #expect(!diverged.canFastForwardDefaultBranch)
+    }
+
     @Test func offersToUpdateACheckoutSittingOnAnotherBranch() async throws {
         let pair = try ClonedRepo()
         try pair.origin.commitChange("more.txt", "more")

@@ -2,7 +2,7 @@ import SwiftUI
 
 // The middle of the orbit. The inner ring has one arc for every session, in the colour of
 // its state, and the thin outer ring one segment for every project, in its tint. Arcs of
-// running sessions carry moving dashes, and the count of working sessions sits inside.
+// running sessions carry moving dashes, and the count of sessions in progress sits inside.
 struct OrbitRing: View {
     let layout: OrbitLayout
     let map: HomeWorkMap
@@ -63,9 +63,9 @@ struct OrbitRing: View {
             }
 
             VStack(spacing: 4) {
-                RollingCount(value: built ? Double(map.runningCount) : 0)
+                RollingCount(value: built ? Double(map.inProgressCount) : 0)
                     .animation(reduceMotion ? nil : .easeInOut(duration: opening.ringDone), value: built)
-                Text(map.runningCount == 1 ? "session working" : "working")
+                Text(map.inProgressCount == 1 ? "session in progress" : "in progress")
                     .font(.system(size: 11.5))
                     .foregroundStyle(.secondary)
             }
@@ -123,7 +123,7 @@ struct OrbitRing: View {
     }
 
     private var summary: String {
-        var parts = ["\(counted(map.runningCount, "session")) working"]
+        var parts = ["\(counted(map.inProgressCount, "session")) in progress"]
         let needs = map.waiting.count
         if needs > 0 { parts.append("\(needs) need\(needs == 1 ? "s" : "") you") }
         let waits = map.backgroundWaitCount

@@ -417,15 +417,7 @@ final class DesignOpinionStore {
             await DesignSecondOpinion.ask(request, reviewer: reviewer, searchPath: path, activity: activity)
         }
 
-    // Each time the header asks for a second opinion on a session. The Design screen
-    // answers it, since it has the screens to show the reviewers.
-    private(set) var asks: [UUID: Int] = [:]
-
     func opinion(_ sessionID: UUID) -> DesignOpinion? { opinions[sessionID] }
-
-    func requestAsk(in sessionID: UUID) {
-        asks[sessionID, default: 0] += 1
-    }
 
     // Pictures every screen once, then asks every seat alongside the others. Asking
     // again replaces the opinion before it.

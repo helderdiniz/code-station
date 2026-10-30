@@ -11,10 +11,12 @@ struct SecondOpinionAskLayoutTests {
 
     @Test func theAskDialogKeepsToItsContentInATallWindow() {
         var height: CGFloat = 0
-        let ask = ChangesOpinionAsk(
-            author: SecondOpinion.Reviewer(agent: .claudeCode), installed: [.codex, .copilot, .claudeCode],
-            running: [], lineup: [SecondOpinion.Reviewer(agent: .codex)], focus: [], scope: .all,
-            fileCount: 19, fileName: "App.swift", canReadSince: false, ask: { _, _, _ in })
+        let ask = SessionOpinionAsk(
+            answer: nil,
+            changes: .init(author: SecondOpinion.Reviewer(agent: .claudeCode), running: [], fileCount: 19,
+                           fileName: "App.swift", canReadSince: false),
+            design: nil, initial: .changes, installed: [.codex, .copilot, .claudeCode],
+            lineup: [SecondOpinion.Reviewer(agent: .codex)], changesFocus: [], scope: .all, ask: { _ in })
         let root = ZStack {
             ask.frame(width: 620)
                 .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height = $0 }
@@ -31,6 +33,6 @@ struct SecondOpinionAskLayoutTests {
         RunLoop.main.run(until: Date().addingTimeInterval(0.2))
 
         #expect(height > 200)
-        #expect(height < 600)
+        #expect(height < 720)
     }
 }

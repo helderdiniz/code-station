@@ -102,6 +102,15 @@ struct BackgroundTaskTests {
         #expect(BackgroundTaskPhrase.of([task("a", "yarn dev")]) == "yarn dev")
     }
 
+    // The rows already say "waiting for", so a task the agent described as a wait would
+    // otherwise say it twice.
+    @Test func dropsTheWaitTheRowAlreadySays() {
+        #expect(BackgroundTaskPhrase.of([task("a", "Wait for Tekton CI on the latest commit")])
+                == "Tekton CI on the latest commit")
+        #expect(BackgroundTaskPhrase.of([task("a", "waiting for the deploy")]) == "the deploy")
+        #expect(BackgroundTaskPhrase.of([task("a", "Waiter for tests")]) == "Waiter for tests")
+    }
+
     // Past one there is no room to name them all on a row, and the count is what a reader
     // can act on. The list itself is on the card.
     @Test func countsTasksPastTheFirst() {

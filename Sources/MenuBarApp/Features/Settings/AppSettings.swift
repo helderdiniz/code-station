@@ -99,6 +99,10 @@ final class AppSettings {
         }
     }
 
+    var cursorEffects: CursorEffectsSettings {
+        didSet { Preferences.setCursorEffects(cursorEffects, in: preferences) }
+    }
+
     var opensWorkingSetByDefault: Bool {
         didSet {
             Preferences.setOpensWorkingSetByDefault(opensWorkingSetByDefault,
@@ -199,6 +203,7 @@ final class AppSettings {
         sunlightEnabled = Preferences.sunlightEnabled(in: preferences)
         sunlightMode = Preferences.sunlightMode(in: preferences)
         sunlightNightKelvin = Preferences.sunlightNightKelvin(in: preferences)
+        cursorEffects = Preferences.cursorEffects(in: preferences)
         sidebarIconSet = Preferences.sidebarIconSet(in: preferences)
         opensWorkingSetByDefault = Preferences.opensWorkingSetByDefault(in: preferences)
         hiddenHeaderButtons = Preferences.hiddenHeaderButtons(in: preferences)
@@ -232,6 +237,7 @@ final class AppSettings {
         sunlightEnabled = false
         sunlightMode = .followsSun
         sunlightNightKelvin = Sunlight.nightKelvin
+        cursorEffects = CursorEffectsSettings()
         textSize = .standard
         messageColour = .projectIcon
         diceBearAvatarStyle = .waves

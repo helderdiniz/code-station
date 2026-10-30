@@ -60,6 +60,18 @@ struct RootView: View {
                 Divider().overlay(Theme.hairline)
                 detail
             }
+            .overlay {
+                if case .session(let id) = store.selection {
+                    CursorEffectOverlay(settings: settings.cursorEffects,
+                                        activity: CursorEffectActivity(session: runner.state(id),
+                                                                       needsInput: runner.question(id) != nil),
+                                        turnStarted: runner.turnStarted(id),
+                                        enabled: sheet == nil && !commandPalette.isPresented)
+                        .allowsHitTesting(false)
+                        .accessibilityHidden(true)
+                        .id(id)
+                }
+            }
             .onPreferenceChange(PaneFindShortcutKey.self) { paneOwnsFindShortcut = $0 }
             ScheduledTaskConfirmation()
             SnoozeReminder()

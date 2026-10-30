@@ -24,7 +24,8 @@ struct SettingsView: View {
     @State private var appearanceBeforeReset: (
         appearance: Appearance, textSize: TextSize, messageColour: MessageColour,
         iconStyle: DiceBearAvatarStyle, iconSet: SidebarIconSet, workingSet: Bool,
-        sunlight: Bool, sunlightMode: SunlightMode, warmth: Double)?
+        sunlight: Bool, sunlightMode: SunlightMode, warmth: Double,
+        cursorEffects: CursorEffectsSettings)?
     @FocusState private var searchFocused: Bool
     // Ties the seat under the chosen pane to whichever row holds it, so picking another
     // pane slides the same shape down the list instead of redrawing it there.
@@ -175,7 +176,7 @@ struct SettingsView: View {
                     }
                 }
             } else if searchResults.isEmpty {
-                Text("No settings found")
+                Text("No settings found. Try ‘cursor’, ‘theme’, or ‘text’.")
                     .font(.system(size: 11.5))
                     .foregroundStyle(.secondary)
                     .padding(.horizontal, 10)
@@ -249,7 +250,8 @@ struct SettingsView: View {
     private func resetAppearance() {
         appearanceBeforeReset = (settings.appearance, settings.textSize, settings.messageColour,
                                  settings.diceBearAvatarStyle, settings.sidebarIconSet, settings.opensWorkingSetByDefault,
-                                 settings.sunlightEnabled, settings.sunlightMode, settings.sunlightNightKelvin)
+                                 settings.sunlightEnabled, settings.sunlightMode, settings.sunlightNightKelvin,
+                                 settings.cursorEffects)
         settings.resetAppearance()
     }
 
@@ -264,6 +266,7 @@ struct SettingsView: View {
         settings.sunlightEnabled = previous.sunlight
         settings.sunlightMode = previous.sunlightMode
         settings.sunlightNightKelvin = previous.warmth
+        settings.cursorEffects = previous.cursorEffects
         appearanceBeforeReset = nil
     }
 
@@ -618,8 +621,12 @@ struct SettingsView: View {
 
                 SettingsRowDivider()
                 sunlight.id(SettingsSearchTarget.appearanceSunlight.id)
-                SettingsRowDivider()
+            }
 
+            CursorEffectsSection()
+                .id(SettingsSearchTarget.appearanceCursorEffects.id)
+
+            SettingsCard {
                 HStack(alignment: .center, spacing: 20) {
                     settingCopy(
                         title: "Session text",
@@ -643,6 +650,7 @@ struct SettingsView: View {
                     }
                 }
                 .padding(14)
+                .id(SettingsSearchTarget.appearanceText.id)
 
                 SettingsRowDivider()
 
@@ -661,6 +669,7 @@ struct SettingsView: View {
                     }
                 }
                 .padding(14)
+                .id(SettingsSearchTarget.appearanceMessages.id)
 
                 SettingsRowDivider()
                 sidebarIcons.id(SettingsSearchTarget.appearanceSidebarIcons.id)

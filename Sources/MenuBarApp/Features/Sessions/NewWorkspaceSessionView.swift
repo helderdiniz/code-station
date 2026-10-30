@@ -30,6 +30,11 @@ struct NewWorkspaceSessionView: View {
     // repositories with nothing to reconcile.
     @State private var startPoints: [UUID: SessionStartPoint] = [:]
     @State private var chosenStartPoints: Set<UUID> = []
+    // Repositories whose uncommitted work is copied into their new worktree.
+    @State private var carried: Set<UUID> = []
+    // Repositories whose default branch is moved up to the remote tip their worktree
+    // forks from.
+    @State private var fastForwarded: Set<UUID> = []
     // Fetch passes still running, which hold the footer's button.
     @State private var activeFetches = 0
     // A requested pull is running. The sheet stays up and quiet until it finishes, since
@@ -138,6 +143,12 @@ struct NewWorkspaceSessionView: View {
         return SessionProjectCard(
             project: project, lead: lead, usesWorktree: usesWorktree,
             report: freshness[project.id], startPoint: startPoint(project.id),
+            carryChanges: Binding(get: { carried.contains(project.id) }, set: { carry in
+                if carry { carried.insert(project.id) } else { carried.remove(project.id) }
+            }),
+            updateDefaultBranch: Binding(get: { fastForwarded.contains(project.id) }, set: { update in
+                if update { fastForwarded.insert(project.id) } else { fastForwarded.remove(project.id) }
+            }),
             selectWorktree: {
                 worktrees.insert(project.id)
                 selectRecommendedStartPoint(for: project.id)
@@ -166,6 +177,7 @@ struct NewWorkspaceSessionView: View {
     private var footerNote: String {
         let updates = projectIDs.filter {
             startPoints[$0] == .updateCheckout && freshness[$0]?.canUpdateCheckout == true
+                || fastForwardsDefaultBranch($0)
         }.count
         let trees = gitProjects.filter { worktrees.contains($0.id) }.count
         let impact = SessionCreationImpact(updates: updates, worktrees: trees).text
@@ -210,6 +222,13 @@ struct NewWorkspaceSessionView: View {
         worktrees.remove(id)
         startPoints.removeValue(forKey: id)
         chosenStartPoints.remove(id)
+        carried.remove(id)
+        fastForwarded.remove(id)
+    }
+
+    private func fastForwardsDefaultBranch(_ id: UUID) -> Bool {
+        worktrees.contains(id) && startPoints[id] == .remote && fastForwarded.contains(id)
+            && freshness[id]?.canFastForwardDefaultBranch == true
     }
 
     private var chosenAgent: AgentKind? {
@@ -227,7 +246,14 @@ struct NewWorkspaceSessionView: View {
                   let project = store.project(id) else { return nil }
             return (project, branch, report)
         }
-        guard !updates.isEmpty else {
+        let fastForwards = projectIDs.compactMap { id -> (project: Project, branch: String,
+                                                          remote: String)? in
+            guard fastForwardsDefaultBranch(id), let report = freshness[id],
+                  let branch = report.defaultBranch, let remote = report.remoteRef,
+                  let project = store.project(id) else { return nil }
+            return (project, branch, remote)
+        }
+        guard !updates.isEmpty || !fastForwards.isEmpty else {
             finish()
             return
         }
@@ -239,6 +265,16 @@ struct NewWorkspaceSessionView: View {
                     dialogs.show(.updateFailure(error, project: project.name, report: report,
                                                 forWorktree: worktrees.contains(project.id)) {
                         startPoints[project.id] = .remote
+                        create()
+                    })
+                    return
+                }
+            }
+            for (project, branch, remote) in fastForwards {
+                if let error = await GitActions.fastForwardBranch(branch, to: remote, at: project.path) {
+                    pulling = false
+                    dialogs.show(.fastForwardFailure(error, branch: "\(branch) in \(project.name)") {
+                        fastForwarded.remove(project.id)
                         create()
                     })
                     return
@@ -256,7 +292,9 @@ struct NewWorkspaceSessionView: View {
             } ?? false
             let base = useWorktree && startPoints[id] == .remote
                 ? freshness[id]?.remoteRef : nil
-            return WorkspaceProjectChoice(projectID: id, useWorktree: useWorktree, base: base)
+            return WorkspaceProjectChoice(
+                projectID: id, useWorktree: useWorktree, base: base,
+                carryChanges: useWorktree && carried.contains(id) && freshness[id]?.dirty == true)
         }
         onCreate(WorkspaceSessionChoice(sessionID: sessionID, projects: choices,
                                         agent: agent,
@@ -282,4 +320,6 @@ struct WorkspaceProjectChoice: Equatable {
     // The ref this project's worktree forks from; without one it forks from whatever
     // the project folder has checked out.
     var base: String? = nil
+    // The project folder's uncommitted work is copied into the new worktree.
+    var carryChanges = false
 }

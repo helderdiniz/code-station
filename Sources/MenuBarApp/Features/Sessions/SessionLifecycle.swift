@@ -31,6 +31,10 @@ struct WorktreeOperations: Sendable {
         await GitWorktree.restore(worktreePath: $0.checkout.path, branch: $0.checkout.branch,
                                   projectPath: $0.checkout.projectPath, from: $0.source)
     }
+    // Copies a project folder's uncommitted work (the first path) into a new worktree (the second).
+    var carry: @Sendable (String, String) async -> GitCarryOver.Outcome = {
+        await GitCarryOver.apply(from: $0, to: $1)
+    }
 
     static let live = WorktreeOperations(
         addProject: { path, name, sessionID, base in
@@ -58,7 +62,9 @@ enum SessionLifecycle {
                                       base: String?, agent: AgentKind = .claudeCode,
                                       model: String? = nil, agentAvatarName: String? = nil,
                                       mode: SessionMode = .chat,
+                                      carryChanges: Bool = false,
                                       store: ProjectStore,
+                                      composer: SessionComposerStore? = nil,
                                       worktrees: WorktreeOperations = .live) async
         -> Result<ChatSession, Failure> {
         guard store.project(project.id) != nil else {
@@ -87,6 +93,10 @@ enum SessionLifecycle {
             }
             let worktree = CreatedWorktree(path: created.path, projectPath: project.path,
                                            branch: created.branch)
+            let note = carryChanges
+                ? await worktrees.carry(project.path, created.path)
+                    .agentNote(projectPath: project.path, base: base)
+                : nil
             guard store.project(project.id) != nil else {
                 return await creationFailure("The project is no longer in the app.",
                                              created: [worktree], worktrees: worktrees)
@@ -98,6 +108,7 @@ enum SessionLifecycle {
                                                    agentAvatarName: agentAvatarName,
                                                    mode: mode)) {
             case .success(let session):
+                if let note { composer?.editDraft(session.id) { $0.text = note } }
                 return .success(session)
             case .failure(let failure):
                 return await creationFailure(failure.message,
@@ -110,9 +121,11 @@ enum SessionLifecycle {
     static func createWorkspaceSession(_ choice: WorkspaceSessionChoice,
                                        in workspace: ProjectWorkspace,
                                        store: ProjectStore,
+                                       composer: SessionComposerStore? = nil,
                                        worktrees: WorktreeOperations = .live) async
         -> Result<ChatSession, Failure> {
         var checkouts: [SessionProject] = []
+        var notes: [String] = []
         var created: [CreatedWorktree] = []
         var reservations: [(projectID: UUID, path: String)] = []
         defer {
@@ -153,6 +166,11 @@ enum SessionLifecycle {
                 created.append(CreatedWorktree(path: worktree.path,
                                                projectPath: project.path,
                                                branch: worktree.branch))
+                if selected.carryChanges,
+                   let note = await worktrees.carry(project.path, worktree.path)
+                       .agentNote(projectPath: project.path, base: selected.base) {
+                    notes.append(note)
+                }
             case .failure(let failure):
                 return await creationFailure(
                     failure.message,
@@ -173,6 +191,9 @@ enum SessionLifecycle {
                                                agentAvatarName: choice.agentAvatarName,
                                                mode: choice.mode)) {
         case .success(let session):
+            if !notes.isEmpty {
+                composer?.editDraft(session.id) { $0.text = notes.joined(separator: "\n\n") }
+            }
             return .success(session)
         case .failure(let failure):
             return await creationFailure(

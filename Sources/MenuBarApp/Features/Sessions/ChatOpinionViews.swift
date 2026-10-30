@@ -1,12 +1,12 @@
 import SwiftUI
 
-// What a reviewer of a plan or an answer looks for and reads. The subject itself and the
-// request always go; the files and the whole conversation are the person's to choose.
+// What a reviewer of a plan or an answer looks for and reads. The plan or answer and the
+// request it answers always go; the files and the whole conversation are the person's
+// to choose.
 struct ChatOpinionChoices: View {
     let authorTitle: String
     @Binding var focus: Set<ChatSecondOpinion.Focus>
     @Binding var reading: ChatSecondOpinion.Reading
-    let noun: String
 
     var body: some View {
         SecondOpinionSection(title: "What to look for") {
@@ -21,8 +21,6 @@ struct ChatOpinionChoices: View {
         }
         SecondOpinionSection(title: "What they read") {
             VStack(alignment: .leading, spacing: 6) {
-                row(title: "This \(noun) and your request", note: "Always", on: .constant(true))
-                    .disabled(true)
                 row(title: "The project's files", note: "Read-only", on: $reading.files)
                 row(title: "The whole conversation", note: "Makes them think like \(authorTitle)",
                     warns: true, on: $reading.conversation)
@@ -40,42 +38,6 @@ struct ChatOpinionChoices: View {
             }
         }
         .toggleStyle(.appCheckbox)
-    }
-}
-
-// The ask dialog as it opens from Chat. It keeps its own choices while it is open and
-// hands them over when the person asks.
-struct ChatOpinionAsk: View {
-    let subject: ChatSecondOpinion.Subject
-    let author: SecondOpinion.Reviewer
-    let installed: [AgentKind]
-    let ask: ([SecondOpinion.Reviewer], [ChatSecondOpinion.Focus], ChatSecondOpinion.Reading) -> Void
-
-    @State private var lineup: [SecondOpinion.Reviewer]
-    @State private var focus = Set(ChatSecondOpinion.Focus.standard)
-    @State private var reading = ChatSecondOpinion.Reading()
-
-    init(subject: ChatSecondOpinion.Subject, author: SecondOpinion.Reviewer, installed: [AgentKind],
-         ask: @escaping ([SecondOpinion.Reviewer], [ChatSecondOpinion.Focus], ChatSecondOpinion.Reading) -> Void) {
-        self.subject = subject
-        self.author = author
-        self.installed = installed
-        self.ask = ask
-        _lineup = State(initialValue: Preferences.secondOpinionLineup().filter { installed.contains($0.agent) })
-    }
-
-    var body: some View {
-        SecondOpinionAskView(
-            message: subject.kind == .plan
-                ? "Agents that did not write this plan check it before anything changes. You pick which points reach \(author.agent.title)."
-                : "Agents that did not write this answer check it on their own. You pick which points reach \(author.agent.title).",
-            safety: "Read-only, and without your MCP servers. \(author.agent.title) sees nothing they say until you send it.",
-            author: author, authorDid: "wrote this \(subject.noun)", installed: installed, lineup: $lineup,
-            choices: {
-                ChatOpinionChoices(authorTitle: author.agent.title, focus: $focus, reading: $reading,
-                                   noun: subject.noun)
-            },
-            ask: { ask(lineup, ChatSecondOpinion.Focus.allCases.filter(focus.contains), reading) })
     }
 }
 

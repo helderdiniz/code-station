@@ -79,6 +79,16 @@ struct HomeWorkMap {
     var waiting: [HomeLive] { active.filter(\.needsAttention) }
     var runningCount: Int { active.count { $0.tone == .running } }
     var backgroundWaitCount: Int { active.count { $0.tone == .waiting } }
+    // What the ring counts. A session waiting on a task has not finished, so leaving it
+    // out would show nothing in progress while a build or CI run is going.
+    var inProgressCount: Int { runningCount + backgroundWaitCount }
+
+    var progressSummary: String {
+        let waits = backgroundWaitCount
+        if waits == 0 { return "\(counted(runningCount, "session")) working" }
+        if runningCount == 0 { return "\(counted(waits, "session")) waiting on a task" }
+        return "\(counted(runningCount, "session")) working, \(waits) waiting on a task"
+    }
 
     // Which cards and rows are on the map, so the home page can animate when that changes.
     var shape: [[UUID]] { groups.map { [$0.id] + $0.sessions.map(\.id) } }
@@ -321,7 +331,7 @@ private struct HomeBoard: View {
         HStack(spacing: 16) {
             OrbitHub(map: map, side: 64, ringWidth: 5, numberSize: 22)
             VStack(alignment: .leading, spacing: 4) {
-                Text("\(counted(map.runningCount, "session")) working")
+                Text("\(counted(map.inProgressCount, "session")) in progress")
                     .font(.serif(18, .semibold))
                 HStack(spacing: 14) {
                     let needs = map.waiting.count

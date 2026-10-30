@@ -634,10 +634,11 @@ struct ProjectDetailView: View {
 
     private func startSession(_ choice: NewSessionChoice, in project: Project) {
         switch choice {
-        case .worktree(let sessionID, let base, let agent, let model, let agentAvatarName,
-                       let mode):
-            createWorktreeSession(in: project, id: sessionID, base: base, agent: agent,
-                                  model: model, agentAvatarName: agentAvatarName, mode: mode)
+        case .worktree(let sessionID, let base, let carryChanges, let agent, let model,
+                       let agentAvatarName, let mode):
+            createWorktreeSession(in: project, id: sessionID, base: base,
+                                  carryChanges: carryChanges, agent: agent, model: model,
+                                  agentAvatarName: agentAvatarName, mode: mode)
         case .folder(let sessionID, let agent, let model, let agentAvatarName, let mode):
             switch store.insertSession(
                 in: project.id,
@@ -652,13 +653,14 @@ struct ProjectDetailView: View {
     }
 
     private func createWorktreeSession(in project: Project, id sessionID: UUID, base: String?,
-                                       agent: AgentKind, model: String?, agentAvatarName: String?,
-                                       mode: SessionMode) {
+                                       carryChanges: Bool, agent: AgentKind, model: String?,
+                                       agentAvatarName: String?, mode: SessionMode) {
         Task {
             switch await SessionLifecycle.createWorktreeSession(
                 in: project, id: sessionID, base: base,
                 agent: agent, model: model,
-                agentAvatarName: agentAvatarName, mode: mode, store: store) {
+                agentAvatarName: agentAvatarName, mode: mode, carryChanges: carryChanges,
+                store: store, composer: runner.composer) {
             case .success:
                 break
             case .failure(let failure):
